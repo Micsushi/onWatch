@@ -267,11 +267,6 @@
     return `
       <footer class="menubar-footer" id="footer">
         <div class="menubar-subtitle">Status is computed from the highest-pressure quota in each provider card.</div>
-        <div class="footer-links">
-          <a href="https://github.com/onllm-dev/onwatch" data-external="true" data-url="https://github.com/onllm-dev/onwatch" aria-label="View on GitHub">${icons.github}</a>
-          <a href="https://github.com/onllm-dev/onwatch/issues" data-external="true" data-url="https://github.com/onllm-dev/onwatch/issues" aria-label="Get Support">${icons.support}</a>
-          <a href="https://onllm.dev" data-external="true" data-url="https://onllm.dev" aria-label="Visit onllm.dev">${icons.globe}</a>
-        </div>
       </footer>
     `;
   }

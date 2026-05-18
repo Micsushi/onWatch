@@ -1064,6 +1064,7 @@ func run() error {
 	notifier.Reload()
 	notifier.ConfigureSMTP()
 	notifier.ConfigurePush()
+	notifier.ConfigureDiscord()
 
 	// Wire notifier to agents
 	if ag != nil {

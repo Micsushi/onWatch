@@ -17,6 +17,7 @@ type NotificationEngine struct {
 	logger              *slog.Logger
 	mailer              *SMTPMailer
 	pushSender          *PushSender
+	discord             *DiscordSender
 	vapidPublicKey      string
 	mu                  sync.RWMutex
 	cfg                 NotificationConfig
@@ -36,8 +37,45 @@ type NotificationConfig struct {
 
 // NotificationChannels controls which delivery channels are active.
 type NotificationChannels struct {
-	Email bool `json:"email"`
-	Push  bool `json:"push"`
+	Email   bool `json:"email"`
+	Push    bool `json:"push"`
+	Discord bool `json:"discord"`
+}
+
+// UnmarshalJSON accepts both the current object format and the legacy array format.
+func (c *NotificationChannels) UnmarshalJSON(data []byte) error {
+	var obj struct {
+		Email   *bool `json:"email"`
+		Push    *bool `json:"push"`
+		Discord *bool `json:"discord"`
+	}
+	if err := json.Unmarshal(data, &obj); err == nil && (obj.Email != nil || obj.Push != nil || obj.Discord != nil) {
+		if obj.Email != nil {
+			c.Email = *obj.Email
+		}
+		if obj.Push != nil {
+			c.Push = *obj.Push
+		}
+		if obj.Discord != nil {
+			c.Discord = *obj.Discord
+		}
+		return nil
+	}
+	var names []string
+	if err := json.Unmarshal(data, &names); err != nil {
+		return err
+	}
+	for _, name := range names {
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "email", "smtp":
+			c.Email = true
+		case "push", "browser":
+			c.Push = true
+		case "discord":
+			c.Discord = true
+		}
+	}
+	return nil
 }
 
 // ThresholdOverride allows per-quota threshold customization.
@@ -79,7 +117,7 @@ func New(s *store.Store, logger *slog.Logger) *NotificationEngine {
 			Overrides: make(map[string]ThresholdOverride),
 			Cooldown:  30 * time.Minute,
 			Types:     NotificationTypes{Warning: true, Critical: true, Reset: false},
-			Channels:  NotificationChannels{Email: true, Push: true},
+			Channels:  NotificationChannels{Email: true, Push: true, Discord: false},
 		},
 	}
 }
@@ -191,8 +229,7 @@ func (e *NotificationEngine) Reload() error {
 	if notif.Channels != nil {
 		e.cfg.Channels = *notif.Channels
 	} else {
-		// Default: both channels enabled
-		e.cfg.Channels = NotificationChannels{Email: true, Push: true}
+		e.cfg.Channels = NotificationChannels{Email: true, Push: true, Discord: false}
 	}
 
 	return nil
@@ -310,6 +347,71 @@ func (e *NotificationEngine) ConfigureSMTP() error {
 	return nil
 }
 
+// discordSettingsJSON matches the JSON shape saved by the handler's UpdateSettings.
+type discordSettingsJSON struct {
+	Enabled    bool   `json:"enabled"`
+	WebhookURL string `json:"webhook_url"`
+}
+
+// ConfigureDiscord initializes or updates the Discord webhook sender from DB settings.
+func (e *NotificationEngine) ConfigureDiscord() error {
+	discordJSON, err := e.store.GetSetting("discord")
+	if err != nil {
+		return fmt.Errorf("notify.ConfigureDiscord: %w", err)
+	}
+	if discordJSON == "" {
+		e.mu.Lock()
+		e.discord = nil
+		e.mu.Unlock()
+		return nil
+	}
+
+	var d discordSettingsJSON
+	if err := json.Unmarshal([]byte(discordJSON), &d); err != nil {
+		return fmt.Errorf("notify.ConfigureDiscord: invalid discord JSON: %w", err)
+	}
+	if !d.Enabled || d.WebhookURL == "" {
+		e.mu.Lock()
+		e.discord = nil
+		e.mu.Unlock()
+		return nil
+	}
+
+	webhookURL := d.WebhookURL
+	e.mu.RLock()
+	key := e.encryptionKey
+	legacyKey := e.legacyEncryptionKey
+	e.mu.RUnlock()
+	if key != "" && len(webhookURL) > 24 {
+		if decrypted, err := Decrypt(webhookURL, key); err == nil {
+			webhookURL = decrypted
+		} else if legacyKey != "" && legacyKey != key {
+			if legacyPlaintext, legacyErr := Decrypt(webhookURL, legacyKey); legacyErr == nil {
+				webhookURL = legacyPlaintext
+				if reEncrypted, reEncErr := Encrypt(legacyPlaintext, key); reEncErr == nil {
+					d.WebhookURL = reEncrypted
+					if updated, marshalErr := json.Marshal(d); marshalErr == nil {
+						_ = e.store.SetSetting("discord", string(updated))
+					}
+				}
+			}
+		}
+	}
+
+	sender, err := NewDiscordSender(webhookURL)
+	if err != nil {
+		e.mu.Lock()
+		e.discord = nil
+		e.mu.Unlock()
+		return fmt.Errorf("notify.ConfigureDiscord: %w", err)
+	}
+
+	e.mu.Lock()
+	e.discord = sender
+	e.mu.Unlock()
+	return nil
+}
+
 // ConfigurePush initializes the push notification sender.
 // Loads or generates VAPID keys, stored in the settings table as "vapid_keys".
 func (e *NotificationEngine) ConfigurePush() error {
@@ -411,10 +513,11 @@ func (e *NotificationEngine) Check(status QuotaStatus) {
 	cfg := e.cfg
 	mailer := e.mailer
 	pushSender := e.pushSender
+	discord := e.discord
 	e.mu.RUnlock()
 
 	// Need at least one channel configured
-	if mailer == nil && pushSender == nil {
+	if mailer == nil && pushSender == nil && discord == nil {
 		return
 	}
 
@@ -486,6 +589,19 @@ func (e *NotificationEngine) SendTestEmail() error {
 	return mailer.Send(subject, body)
 }
 
+// SendTestDiscord sends a test message to the configured Discord webhook.
+func (e *NotificationEngine) SendTestDiscord() error {
+	e.mu.RLock()
+	discord := e.discord
+	e.mu.RUnlock()
+
+	if discord == nil {
+		return fmt.Errorf("Discord not configured")
+	}
+
+	return discord.Send("[onWatch] Test Discord", "This is a test Discord notification from onWatch.")
+}
+
 // TestSMTPDiag sends a test email and returns diagnostics from the connection.
 // Uses a single SMTP connection for both diagnostics and delivery.
 func (e *NotificationEngine) TestSMTPDiag() (string, error) {
@@ -525,6 +641,9 @@ func (e *NotificationEngine) sendNotification(mailer *SMTPMailer, pushSender *Pu
 	subject := e.buildSubject(status, notifType)
 	body := e.buildBody(status, notifType)
 	sent := false
+	e.mu.RLock()
+	discord := e.discord
+	e.mu.RUnlock()
 
 	// Send via email if enabled and configured
 	if channels.Email && mailer != nil {
@@ -557,6 +676,15 @@ func (e *NotificationEngine) sendNotification(mailer *SMTPMailer, pushSender *Pu
 					sent = true
 				}
 			}
+		}
+	}
+
+	if channels.Discord && discord != nil {
+		if err := discord.Send(subject, body); err != nil {
+			e.logger.Error("failed to send Discord notification", "error", err,
+				"quota", quotaKey, "type", notifType)
+		} else {
+			sent = true
 		}
 	}
 
@@ -649,6 +777,7 @@ func (e *NotificationEngine) SendAuthErrorNotification(alert AuthErrorAlert) boo
 	cfg := e.cfg
 	mailer := e.mailer
 	pushSender := e.pushSender
+	discord := e.discord
 	e.mu.RUnlock()
 
 	// Check if auth error notifications are enabled
@@ -691,6 +820,14 @@ func (e *NotificationEngine) SendAuthErrorNotification(alert AuthErrorAlert) boo
 					sent = true
 				}
 			}
+		}
+	}
+
+	if cfg.Channels.Discord && discord != nil {
+		if err := discord.Send(subject, body); err != nil {
+			e.logger.Error("failed to send auth error Discord notification", "error", err, "provider", alert.Provider)
+		} else {
+			sent = true
 		}
 	}
 

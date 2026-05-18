@@ -611,9 +611,9 @@ async function unhideInsight(key) {
 
 function loadDefaultProvider() {
   try {
-    return localStorage.getItem('onwatch-default-provider') || '';
+    return localStorage.getItem('onwatch-default-provider') || 'both';
   } catch (e) {
-    return '';
+    return 'both';
   }
 }
 
@@ -5580,14 +5580,6 @@ function renderAllProvidersView() {
     const collapsed = Boolean(collapsedState[entry.cardKey]);
     const badge = entry.badge ? `<span class="provider-card-badge">${escapeHTML(entry.badge)}</span>` : '';
     const promo = entry.promoHtml || '';
-    const hasChartData = Array.isArray(entry.historyRows) && entry.historyRows.length > 0;
-    const chartSection = hasChartData
-      ? `<div class="provider-chart">
-          <canvas id="provider-chart-${entry.cardKey}"></canvas>
-        </div>`
-      : `<div class="provider-chart provider-chart-empty">
-          <p class="insight-text">Collecting data...</p>
-        </div>`;
     if (entry.summaryOnly) {
       return renderAPIIntegrationsSummaryCard(entry, collapsed);
     }
@@ -5605,11 +5597,6 @@ function renderAllProvidersView() {
       </header>
       <div class="provider-card-body">
         <div class="provider-kpis">${renderProviderKPIHTML(entry.quotas)}</div>
-        ${(() => {
-          const insightsHTML = renderProviderInsightsHTML(entry.provider, entry.insights);
-          return insightsHTML ? `<div class="provider-insights">${insightsHTML}</div>` : '';
-        })()}
-        ${chartSection}
       </div>
     </section>`;
   }).join('');
@@ -5619,8 +5606,39 @@ function renderAllProvidersView() {
       const cardKey = btn.dataset.cardKey;
       const card = container.querySelector(`.provider-card[data-card-key="${cardKey}"]`);
       if (!card) return;
-      card.classList.toggle('collapsed');
-      const collapsed = card.classList.contains('collapsed');
+      const body = card.querySelector('.provider-card-body');
+      const willCollapse = !card.classList.contains('collapsed');
+      if (body) {
+        if (willCollapse) {
+          body.style.maxHeight = `${body.scrollHeight}px`;
+          body.getBoundingClientRect();
+          card.classList.add('is-collapsing');
+          requestAnimationFrame(() => {
+            card.classList.add('collapsed');
+            body.style.maxHeight = '0px';
+          });
+        } else {
+          card.classList.remove('collapsed');
+          card.classList.add('is-expanding');
+          body.style.maxHeight = '0px';
+          body.getBoundingClientRect();
+          requestAnimationFrame(() => {
+            body.style.maxHeight = `${body.scrollHeight}px`;
+          });
+        }
+        const cleanup = () => {
+          card.classList.remove('is-collapsing', 'is-expanding');
+          if (!card.classList.contains('collapsed')) {
+            body.style.maxHeight = '';
+          }
+          body.removeEventListener('transitionend', cleanup);
+        };
+        body.addEventListener('transitionend', cleanup);
+        setTimeout(cleanup, 380);
+      } else {
+        card.classList.toggle('collapsed');
+      }
+      const collapsed = willCollapse;
       btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
       const title = card.querySelector('.provider-card-title span')?.textContent || 'provider card';
       btn.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${title}`);
@@ -5637,30 +5655,6 @@ function renderAllProvidersView() {
     });
   });
 
-  const chartRange = State.currentRange || '6h';
-  const colors = getThemeColors();
-  entries.forEach((entry) => {
-    const chartHost = container.querySelector(`.provider-card[data-card-key="${entry.cardKey}"] .provider-chart`);
-    const canvas = container.querySelector(`#provider-chart-${entry.cardKey}`);
-    const rows = Array.isArray(entry.historyRows) ? entry.historyRows : [];
-    if (!chartHost || !canvas) return;
-
-    const datasets = buildProviderCardDatasets(entry.provider, rows, chartRange);
-    if (!datasets.length) {
-      chartHost.classList.add('provider-chart-empty');
-      chartHost.innerHTML = '<p class="insight-text">Collecting data...</p>';
-      return;
-    }
-
-    chartHost.classList.remove('provider-chart-empty');
-
-    const chart = new Chart(canvas, {
-      type: 'line',
-      data: { datasets },
-      options: buildChartOptions(colors, computeYMax(datasets), chartRange)
-    });
-    State.providerCharts[entry.cardKey] = chart;
-  });
 }
 
 // ── "Both" Mode: Dual Charts (legacy fallback) ──
@@ -7826,76 +7820,6 @@ function renderPagination(table, page, totalPages) {
 
 // ── Self-Update ──
 
-async function checkForUpdate() {
-  try {
-    const res = await authFetch('/api/update/check');
-    const data = await res.json();
-    const badge = document.getElementById('update-badge');
-    if (data.available) {
-      const versionSpan = document.getElementById('update-version');
-      if (badge && versionSpan) {
-        versionSpan.textContent = data.latest_version;
-        badge.hidden = false;
-      }
-    } else if (badge) {
-      badge.hidden = true;
-    }
-  } catch (e) {
-    // Silent fail - update check is best-effort
-  }
-}
-
-async function applyUpdate() {
-  const btn = document.getElementById('update-btn');
-  if (!btn) return;
-
-  const origText = btn.textContent;
-  btn.textContent = 'Updating...';
-  btn.disabled = true;
-
-  try {
-    const res = await authFetch('/api/update/apply', { method: 'POST' });
-    if (!res.ok) {
-      const data = await res.json();
-      btn.textContent = 'Update failed';
-      btn.disabled = false;
-      // update failed - error shown in UI
-      setTimeout(() => { btn.textContent = origText; }, 3000);
-      return;
-    }
-    btn.textContent = 'Restarting...';
-    // Poll until server comes back with new version
-    setTimeout(() => pollForRestart(), 3000);
-  } catch (e) {
-    btn.textContent = 'Update failed';
-    btn.disabled = false;
-    setTimeout(() => { btn.textContent = origText; }, 3000);
-  }
-}
-
-function pollForRestart() {
-  let serverWentDown = false;
-  const interval = setInterval(async () => {
-    try {
-      await fetch('/api/update/check');
-      if (serverWentDown) {
-        // Server is back up after going down - force fresh page load (no cache)
-        clearInterval(interval);
-        window.location.href = window.location.pathname + '?_=' + Date.now();
-      }
-      // Server still responding (hasn't died yet) - keep waiting
-    } catch (e) {
-      // Network error = server went down
-      serverWentDown = true;
-    }
-  }, 1000);
-  // Force reload after 30s even if we didn't detect restart
-  setTimeout(() => {
-    clearInterval(interval);
-    window.location.href = window.location.pathname + '?_=' + Date.now();
-  }, 30000);
-}
-
 // ═══════════════════════════════════════════
 // SETTINGS PAGE
 // ═══════════════════════════════════════════
@@ -7912,6 +7836,7 @@ async function initSettingsPage() {
   setupProviderReload();
   setupProviderSettingsModal();
   setupSMTPTest();
+  setupDiscordTest();
   setupPushNotifications();
   setupSettingsPassword();
   setupThresholdSliders();
@@ -8042,12 +7967,24 @@ async function loadSettings() {
       if (n.channels) {
         const emailToggle = document.getElementById('channel-email');
         const pushToggle = document.getElementById('channel-push');
+        const discordToggle = document.getElementById('channel-discord');
         if (emailToggle) emailToggle.checked = n.channels.email !== false;
         if (pushToggle) pushToggle.checked = n.channels.push !== false;
+        if (discordToggle) discordToggle.checked = !!n.channels.discord;
       }
       // Load overrides
       if (n.overrides && n.overrides.length > 0) {
         n.overrides.forEach(o => addOverrideRow(o.quota_key, o.provider, o.warning, o.critical, o.is_absolute, o.disable_reset, o.disable_warning, o.disable_critical));
+      }
+    }
+
+    if (data.discord) {
+      const d = data.discord;
+      const discordToggle = document.getElementById('channel-discord');
+      if (discordToggle) discordToggle.checked = !!d.enabled;
+      if (d.webhook_set) {
+        const input = document.getElementById('discord-webhook-url');
+        if (input) input.placeholder = '********** (saved)';
       }
     }
 
@@ -9354,8 +9291,17 @@ function gatherSettings() {
       channels: {
         email: document.getElementById('channel-email')?.checked ?? true,
         push: document.getElementById('channel-push')?.checked ?? true,
+        discord: document.getElementById('channel-discord')?.checked ?? false,
       },
       overrides: overrides,
+    };
+  }
+
+  const discordWebhookInput = document.getElementById('discord-webhook-url');
+  if (discordWebhookInput) {
+    settings.discord = {
+      enabled: document.getElementById('channel-discord')?.checked ?? false,
+      webhook_url: discordWebhookInput.value.trim(),
     };
   }
 
@@ -9508,6 +9454,35 @@ function setupSMTPTest() {
     } finally {
       testBtn.disabled = false;
       testBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg> Send Test Email';
+    }
+  });
+}
+
+function setupDiscordTest() {
+  const testBtn = document.getElementById('discord-test-btn');
+  const result = document.getElementById('discord-test-result');
+  if (!testBtn) return;
+
+  testBtn.addEventListener('click', async () => {
+    testBtn.disabled = true;
+    testBtn.textContent = 'Sending...';
+    if (result) { result.textContent = ''; result.className = 'settings-test-result'; }
+
+    try {
+      const resp = await authFetch('/api/discord/test', { method: 'POST' });
+      const data = await resp.json();
+      if (result) {
+        result.textContent = data.message || (data.success ? 'Test Discord sent.' : 'Test failed.');
+        result.className = 'settings-test-result ' + (data.success ? 'success' : 'error');
+      }
+    } catch (e) {
+      if (result) {
+        result.textContent = 'Network error.';
+        result.className = 'settings-test-result error';
+      }
+    } finally {
+      testBtn.disabled = false;
+      testBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg> Send Test Discord';
     }
   });
 }
@@ -10226,16 +10201,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     startCountdowns();
     startAutoRefresh();
-
-    // Check for updates on load and every 60 minutes
-    checkForUpdate();
-    setInterval(checkForUpdate, 3600000);
-
-    // Update button click handler
-    const updateBtn = document.getElementById('update-btn');
-    if (updateBtn) {
-      updateBtn.addEventListener('click', applyUpdate);
-    }
 
     // Update sessions table header for "both" mode
     const provider = getCurrentProvider();

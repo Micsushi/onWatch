@@ -45,6 +45,8 @@ Thumbs.db
 !internal/menubar/icon_template@2x.png
 tmp/
 temp/
+.tmp-*/
+.tmp-*.zip
 test-screenshots/
 test-evidence/
 

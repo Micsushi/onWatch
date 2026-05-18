@@ -3859,8 +3859,10 @@ type mockNotifier struct {
 func (m *mockNotifier) Reload() error                 { m.reloadCalled = true; return nil }
 func (m *mockNotifier) ConfigureSMTP() error          { return nil }
 func (m *mockNotifier) ConfigurePush() error          { return nil }
+func (m *mockNotifier) ConfigureDiscord() error       { return nil }
 func (m *mockNotifier) SendTestEmail() error          { return m.sendTestErr }
 func (m *mockNotifier) SendTestPush() error           { return nil }
+func (m *mockNotifier) SendTestDiscord() error        { return nil }
 func (m *mockNotifier) TestSMTPDiag() (string, error) { return "", m.sendTestErr }
 func (m *mockNotifier) SetEncryptionKey(_ string)     {}
 func (m *mockNotifier) GetVAPIDPublicKey() string     { return "" }
@@ -6224,17 +6226,20 @@ func TestBuildZaiTrackerSummaryResponse_WithoutRenewsAt(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════
 
 type mockNotifierWithVAPID struct {
-	sendTestErr  error
-	sendPushErr  error
-	reloadCalled bool
-	vapidKey     string
+	sendTestErr    error
+	sendPushErr    error
+	sendDiscordErr error
+	reloadCalled   bool
+	vapidKey       string
 }
 
 func (m *mockNotifierWithVAPID) Reload() error                 { m.reloadCalled = true; return nil }
 func (m *mockNotifierWithVAPID) ConfigureSMTP() error          { return nil }
 func (m *mockNotifierWithVAPID) ConfigurePush() error          { return nil }
+func (m *mockNotifierWithVAPID) ConfigureDiscord() error       { return nil }
 func (m *mockNotifierWithVAPID) SendTestEmail() error          { return m.sendTestErr }
 func (m *mockNotifierWithVAPID) SendTestPush() error           { return m.sendPushErr }
+func (m *mockNotifierWithVAPID) SendTestDiscord() error        { return m.sendDiscordErr }
 func (m *mockNotifierWithVAPID) TestSMTPDiag() (string, error) { return "", m.sendTestErr }
 func (m *mockNotifierWithVAPID) SetEncryptionKey(_ string)     {}
 func (m *mockNotifierWithVAPID) GetVAPIDPublicKey() string     { return m.vapidKey }
@@ -6531,6 +6536,97 @@ func TestHandler_PushTest_SendFailure(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════
 // ── "Both" handler tests (cyclesBoth, summaryBoth, insightsBoth) ──
 // ═══════════════════════════════════════════════════════════════════
+
+func TestHandler_DiscordTest_Success(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, createTestConfigWithSynthetic())
+	h.SetNotifier(&mockNotifierWithVAPID{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/discord/test", nil)
+	rr := httptest.NewRecorder()
+	h.DiscordTest(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rr.Code)
+	}
+
+	var response map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &response)
+	if response["success"] != true {
+		t.Errorf("expected success true, got %v", response["success"])
+	}
+}
+
+func TestHandler_DiscordTest_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, createTestConfigWithSynthetic())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/discord/test", nil)
+	rr := httptest.NewRecorder()
+	h.DiscordTest(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected status 405, got %d", rr.Code)
+	}
+}
+
+func TestHandler_DiscordTest_NoNotifier(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, createTestConfigWithSynthetic())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/discord/test", nil)
+	rr := httptest.NewRecorder()
+	h.DiscordTest(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected status 503, got %d", rr.Code)
+	}
+}
+
+func TestHandler_DiscordTest_RateLimit(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, createTestConfigWithSynthetic())
+	h.SetNotifier(&mockNotifierWithVAPID{})
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/discord/test", nil)
+	rr1 := httptest.NewRecorder()
+	h.DiscordTest(rr1, req1)
+
+	if rr1.Code != http.StatusOK {
+		t.Fatalf("first request: expected status 200, got %d", rr1.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/discord/test", nil)
+	rr2 := httptest.NewRecorder()
+	h.DiscordTest(rr2, req2)
+
+	if rr2.Code != http.StatusTooManyRequests {
+		t.Errorf("second request: expected status 429, got %d", rr2.Code)
+	}
+}
+
+func TestHandler_DiscordTest_SendFailure(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, createTestConfigWithSynthetic())
+	h.SetNotifier(&mockNotifierWithVAPID{sendDiscordErr: fmt.Errorf("Discord not configured")})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/discord/test", nil)
+	rr := httptest.NewRecorder()
+	h.DiscordTest(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rr.Code)
+	}
+
+	var response map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &response)
+	if response["success"] != false {
+		t.Errorf("expected success false, got %v", response["success"])
+	}
+	if response["message"] != "Discord is not configured. Save a webhook URL first." {
+		t.Errorf("unexpected message: %v", response["message"])
+	}
+}
 
 func TestHandler_CyclesBoth_EmptyStore(t *testing.T) {
 	t.Parallel()

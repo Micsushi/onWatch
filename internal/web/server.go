@@ -85,6 +85,7 @@ func NewServer(port int, handler *Handler, logger *slog.Logger, username, passwo
 	mux.HandleFunc(p("/api/push/vapid"), handler.PushVAPIDKey)
 	mux.HandleFunc(p("/api/push/subscribe"), handler.PushSubscribe)
 	mux.HandleFunc(p("/api/push/test"), handler.PushTest)
+	mux.HandleFunc(p("/api/discord/test"), handler.DiscordTest)
 	mux.HandleFunc(p("/api/codex/profiles"), handler.CodexProfiles)
 	mux.HandleFunc(p("/api/codex/usage"), handler.CodexUsage)
 	mux.HandleFunc(p("/api/codex/accounts/usage"), handler.CodexAccountsUsage)
@@ -154,7 +155,14 @@ func NewServer(port int, handler *Handler, logger *slog.Logger, username, passwo
 	if username != "" && passwordHash != "" {
 		sessions := NewSessionStore(username, passwordHash, handler.store)
 		handler.sessions = sessions
-		finalHandler = sessionAuthMiddlewareWithBasePath(sessions, bp, logger)(mux)
+		trustProxyAuth := handler.config != nil && handler.config.TrustProxyAuth
+		if trustProxyAuth {
+			if logger != nil {
+				logger.Warn("built-in auth disabled because ONWATCH_TRUST_PROXY_AUTH=true; only use behind trusted proxy auth")
+			}
+		} else {
+			finalHandler = sessionAuthMiddlewareWithBasePath(sessions, bp, logger)(mux)
+		}
 	}
 	// Apply security headers and gzip compression (outermost)
 	finalHandler = securityHeadersMiddleware(gzipHandler(finalHandler))

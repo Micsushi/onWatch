@@ -76,6 +76,7 @@ type Config struct {
 	Port               int           // ONWATCH_PORT
 	Host               string        // ONWATCH_HOST (bind address, default: 0.0.0.0)
 	SecureCookies      bool          // ONWATCH_SECURE_COOKIES (set Secure flag on cookies)
+	TrustProxyAuth     bool          // ONWATCH_TRUST_PROXY_AUTH (skip built-in auth behind trusted SSO)
 	AdminUser          string        // ONWATCH_ADMIN_USER
 	AdminPass          string        // ONWATCH_ADMIN_PASS
 	AdminPassHash      string        // SHA-256 hash of password (set after DB check)
@@ -83,7 +84,7 @@ type Config struct {
 	DBPathExplicit     bool          // true if user explicitly set --db or ONWATCH_DB_PATH
 	LogLevel           string        // ONWATCH_LOG_LEVEL
 	LogFormat          string        // ONWATCH_LOG_FORMAT: text (default), txt, fmt, or json
-	MetricsToken      string        // ONWATCH_METRICS_TOKEN (bearer token for /metrics endpoint)
+	MetricsToken       string        // ONWATCH_METRICS_TOKEN (bearer token for /metrics endpoint)
 	SessionIdleTimeout time.Duration // ONWATCH_SESSION_IDLE_TIMEOUT (seconds → Duration)
 	BasePath           string        // ONWATCH_BASE_PATH (subdirectory hosting, e.g. "/onwatch")
 	DebugMode          bool          // --debug flag (foreground mode)
@@ -392,6 +393,11 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 	// Secure Cookies
 	if env := envWithFallback("ONWATCH_SECURE_COOKIES", "SYNTRACK_SECURE_COOKIES"); env != "" {
 		cfg.SecureCookies = strings.ToLower(env) == "true" || env == "1"
+	}
+
+	// Trust proxy authentication only when explicitly enabled.
+	if env := strings.ToLower(strings.TrimSpace(os.Getenv("ONWATCH_TRUST_PROXY_AUTH"))); env != "" {
+		cfg.TrustProxyAuth = env == "true" || env == "1" || env == "yes" || env == "on"
 	}
 
 	// Base Path (subdirectory hosting, e.g. "/onwatch")

@@ -48,8 +48,10 @@ type Notifier interface {
 	Reload() error
 	ConfigureSMTP() error
 	ConfigurePush() error
+	ConfigureDiscord() error
 	SendTestEmail() error
 	SendTestPush() error
+	SendTestDiscord() error
 	TestSMTPDiag() (string, error)
 	SetEncryptionKey(key string)
 	GetVAPIDPublicKey() string
@@ -81,34 +83,36 @@ type MiniMaxAccountReloader interface {
 
 // Handler handles HTTP requests for the web dashboard
 type Handler struct {
-	store              *store.Store
-	tracker            *tracker.Tracker
-	zaiTracker         *tracker.ZaiTracker
-	anthropicTracker   *tracker.AnthropicTracker
-	copilotTracker     *tracker.CopilotTracker
-	codexTracker       *tracker.CodexTracker
-	antigravityTracker *tracker.AntigravityTracker
-	minimaxTracker     *tracker.MiniMaxTracker
-	geminiTracker      *tracker.GeminiTracker
-	openrouterTracker  *tracker.OpenRouterTracker
-	cursorTracker      *tracker.CursorTracker
-	updater            *update.Updater
-	notifier           Notifier
-	agentManager       ProviderAgentController
-	minimaxAgentMgr    MiniMaxAccountReloader
-	logger             *slog.Logger
-	dashboardTmpl      *template.Template
-	loginTmpl          *template.Template
-	settingsTmpl       *template.Template
-	sessions           *SessionStore
-	config             *config.Config
-	metrics            *metrics.Metrics
-	version            string
-	smtpTestMu         sync.Mutex
-	smtpTestLastSent   time.Time
-	pushTestMu         sync.Mutex
-	pushTestLastSent   time.Time
-	rateLimiter        *LoginRateLimiter // Per-IP rate limiting for login attempts
+	store               *store.Store
+	tracker             *tracker.Tracker
+	zaiTracker          *tracker.ZaiTracker
+	anthropicTracker    *tracker.AnthropicTracker
+	copilotTracker      *tracker.CopilotTracker
+	codexTracker        *tracker.CodexTracker
+	antigravityTracker  *tracker.AntigravityTracker
+	minimaxTracker      *tracker.MiniMaxTracker
+	geminiTracker       *tracker.GeminiTracker
+	openrouterTracker   *tracker.OpenRouterTracker
+	cursorTracker       *tracker.CursorTracker
+	updater             *update.Updater
+	notifier            Notifier
+	agentManager        ProviderAgentController
+	minimaxAgentMgr     MiniMaxAccountReloader
+	logger              *slog.Logger
+	dashboardTmpl       *template.Template
+	loginTmpl           *template.Template
+	settingsTmpl        *template.Template
+	sessions            *SessionStore
+	config              *config.Config
+	metrics             *metrics.Metrics
+	version             string
+	smtpTestMu          sync.Mutex
+	smtpTestLastSent    time.Time
+	pushTestMu          sync.Mutex
+	pushTestLastSent    time.Time
+	discordTestMu       sync.Mutex
+	discordTestLastSent time.Time
+	rateLimiter         *LoginRateLimiter // Per-IP rate limiting for login attempts
 }
 
 // DefaultCodexAccountID is the default account ID for single-account setups.
@@ -942,6 +946,27 @@ func sanitizeSMTPError(err error) string {
 	}
 }
 
+func sanitizeNotificationTestError(err error) string {
+	if err == nil {
+		return "Notification test failed"
+	}
+	errStr := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(errStr, "not configured"):
+		return "Discord is not configured. Save a webhook URL first."
+	case strings.Contains(errStr, "webhook url"):
+		return "Discord webhook URL is invalid."
+	case strings.Contains(errStr, "401") || strings.Contains(errStr, "403") || strings.Contains(errStr, "404"):
+		return "Discord rejected the webhook. Check that the URL is still valid."
+	case strings.Contains(errStr, "429"):
+		return "Discord rate limited the webhook. Try again later."
+	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "no such host") || strings.Contains(errStr, "connection"):
+		return "Could not reach Discord. Check the network connection."
+	default:
+		return "Discord test failed. Check the webhook URL and try again."
+	}
+}
+
 // parseTimeRange parses a time range string (1h, 6h, 24h, 1d, 7d, 30d)
 func parseTimeRange(rangeStr string) (time.Duration, error) {
 	if rangeStr == "" {
@@ -1027,7 +1052,9 @@ func (h *Handler) getProviderFromRequest(r *http.Request) (string, error) {
 
 	provider := r.URL.Query().Get("provider")
 	if provider == "" {
-		// Default to first available provider
+		if h.config.HasMultipleProviders() {
+			return "both", nil
+		}
 		return providers[0], nil
 	}
 
@@ -1680,6 +1707,9 @@ func (h *Handler) Providers(w http.ResponseWriter, r *http.Request) {
 	if len(providers) > 0 {
 		current = providers[0]
 	}
+	if h.config.HasMultipleProviders() {
+		current = "both"
+	}
 
 	// Check if a specific provider was requested
 	if reqProvider := r.URL.Query().Get("provider"); reqProvider != "" {
@@ -1741,6 +1771,9 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(providers) > 0 {
 			currentProvider = providers[0]
+		}
+		if h.config.HasMultipleProviders() {
+			currentProvider = "both"
 		}
 		// Allow overriding via query param
 		if reqProvider := r.URL.Query().Get("provider"); reqProvider != "" {
@@ -5892,6 +5925,18 @@ func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		discordJSON, _ := h.store.GetSetting("discord")
+		if discordJSON != "" {
+			var discord map[string]interface{}
+			if json.Unmarshal([]byte(discordJSON), &discord) == nil {
+				if url, ok := discord["webhook_url"].(string); ok {
+					discord["webhook_url"] = ""
+					discord["webhook_set"] = url != ""
+				}
+				result["discord"] = discord
+			}
+		}
+
 		// Provider visibility settings
 		visJSON, _ := h.store.GetSetting("provider_visibility")
 		if visJSON != "" {
@@ -6076,16 +6121,72 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Handle Discord webhook settings
+	if raw, ok := body["discord"]; ok {
+		var discord struct {
+			Enabled    bool   `json:"enabled"`
+			WebhookURL string `json:"webhook_url"`
+		}
+		if err := json.Unmarshal(raw, &discord); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid discord value")
+			return
+		}
+		discord.WebhookURL = strings.TrimSpace(discord.WebhookURL)
+		if discord.WebhookURL == "" {
+			existingJSON, _ := h.store.GetSetting("discord")
+			if existingJSON != "" {
+				var existing map[string]interface{}
+				if json.Unmarshal([]byte(existingJSON), &existing) == nil {
+					if url, ok := existing["webhook_url"].(string); ok {
+						discord.WebhookURL = url
+					}
+				}
+			}
+		}
+		if discord.WebhookURL != "" && !notify.IsEncryptedValue(discord.WebhookURL) {
+			if !strings.HasPrefix(discord.WebhookURL, "https://discord.com/api/webhooks/") &&
+				!strings.HasPrefix(discord.WebhookURL, "https://discordapp.com/api/webhooks/") {
+				respondError(w, http.StatusBadRequest, "Discord webhook URL must be a Discord webhook URL")
+				return
+			}
+			if h.sessions == nil {
+				respondError(w, http.StatusInternalServerError, "session store not available")
+				return
+			}
+			encryptionKey := DeriveEncryptionKey(h.sessions.passwordHash, nil)
+			encryptedURL, err := notify.Encrypt(discord.WebhookURL, encryptionKey)
+			if err != nil {
+				h.logger.Error("failed to encrypt Discord webhook URL", "error", err)
+				respondError(w, http.StatusInternalServerError, "failed to encrypt Discord webhook URL")
+				return
+			}
+			discord.WebhookURL = encryptedURL
+		}
+		discordJSON, _ := json.Marshal(discord)
+		if err := h.store.SetSetting("discord", string(discordJSON)); err != nil {
+			h.logger.Error("failed to save Discord settings", "error", err)
+			respondError(w, http.StatusInternalServerError, "failed to save Discord settings")
+			return
+		}
+		result["discord"] = "saved"
+		if h.notifier != nil {
+			if err := h.notifier.ConfigureDiscord(); err != nil {
+				h.logger.Error("failed to reconfigure Discord after settings update", "error", err)
+			}
+		}
+	}
+
 	// Handle notification settings
 	if raw, ok := body["notifications"]; ok {
 		var notif struct {
-			WarningThreshold  float64 `json:"warning_threshold"`
-			CriticalThreshold float64 `json:"critical_threshold"`
-			NotifyWarning     bool    `json:"notify_warning"`
-			NotifyCritical    bool    `json:"notify_critical"`
-			NotifyReset       bool    `json:"notify_reset"`
-			NotifyAuthError   bool    `json:"notify_auth_error"`
-			CooldownMinutes   int     `json:"cooldown_minutes"`
+			WarningThreshold  float64                      `json:"warning_threshold"`
+			CriticalThreshold float64                      `json:"critical_threshold"`
+			NotifyWarning     bool                         `json:"notify_warning"`
+			NotifyCritical    bool                         `json:"notify_critical"`
+			NotifyReset       bool                         `json:"notify_reset"`
+			NotifyAuthError   bool                         `json:"notify_auth_error"`
+			CooldownMinutes   int                          `json:"cooldown_minutes"`
+			Channels          *notify.NotificationChannels `json:"channels,omitempty"`
 			Overrides         []struct {
 				QuotaKey       string  `json:"quota_key"`
 				Provider       string  `json:"provider"`
@@ -6423,6 +6524,44 @@ func (h *Handler) PushTest(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"message": "Test push notification sent",
+	})
+}
+
+// DiscordTest sends a test notification via the configured Discord webhook.
+func (h *Handler) DiscordTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	h.discordTestMu.Lock()
+	elapsed := time.Since(h.discordTestLastSent)
+	if elapsed < 30*time.Second {
+		h.discordTestMu.Unlock()
+		remaining := int((30*time.Second - elapsed).Seconds())
+		respondError(w, http.StatusTooManyRequests, fmt.Sprintf("please wait %d seconds before sending another test", remaining))
+		return
+	}
+	h.discordTestLastSent = time.Now()
+	h.discordTestMu.Unlock()
+
+	if h.notifier == nil {
+		respondError(w, http.StatusServiceUnavailable, "notification engine not configured")
+		return
+	}
+
+	if err := h.notifier.SendTestDiscord(); err != nil {
+		h.logger.Error("Discord test failed", "error", err)
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"success": false,
+			"message": sanitizeNotificationTestError(err),
+		})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "Test Discord notification sent",
 	})
 }
 

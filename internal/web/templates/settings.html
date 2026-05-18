@@ -126,6 +126,28 @@
                             </button>
                         </div>
                     </div>
+                    <div class="settings-toggle-row">
+                        <div class="settings-toggle-info">
+                            <div class="settings-toggle-label">Discord</div>
+                            <div class="settings-toggle-sublabel">Send quota alerts to a Discord webhook</div>
+                        </div>
+                        <label class="settings-toggle">
+                            <input type="checkbox" id="channel-discord">
+                            <span class="settings-toggle-track"></span>
+                        </label>
+                    </div>
+                    <div class="settings-field">
+                        <label for="discord-webhook-url">Discord Webhook URL</label>
+                        <input type="password" id="discord-webhook-url" class="settings-input" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
+                        <span class="settings-field-hint">Leave blank to keep the saved webhook.</span>
+                    </div>
+                    <div class="settings-actions">
+                        <button class="settings-test-btn" id="discord-test-btn" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                            Send Test Discord
+                        </button>
+                        <span class="settings-test-result" id="discord-test-result"></span>
+                    </div>
                 </div>
                 <div class="settings-actions" id="push-test-actions" hidden>
                     <button class="settings-test-btn" id="push-test-btn" type="button">
@@ -376,18 +398,5 @@
         </div>
     </main>
 
-    <footer class="app-footer">
-        <div class="footer-content">
-            <span class="footer-brand"><a href="https://onwatch.onllm.dev" class="footer-link" target="_blank" rel="noopener">onWatch v{{.Version}}</a></span>
-            <span class="footer-heart">Built with &#10084;&#65039; by <a href="https://onllm.dev" class="footer-link" target="_blank" rel="noopener">onllm.dev</a></span>
-            <div class="footer-links">
-                <a href="https://onllm.dev" class="footer-link" target="_blank" rel="noopener">onllm.dev</a>
-                <span class="footer-sep">&#183;</span>
-                <a href="https://github.com/onllm-dev/onwatch" class="footer-link" target="_blank" rel="noopener">GitHub</a>
-                <span class="footer-sep">&#183;</span>
-                <a href="https://buymeacoffee.com/prakersh" class="footer-link footer-support" target="_blank" rel="noopener" title="Support onWatch">Support onWatch</a>
-            </div>
-        </div>
-    </footer>
 </div>
 {{end}}
