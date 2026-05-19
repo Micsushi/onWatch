@@ -5,23 +5,7 @@
 Track usage across [Synthetic](https://synthetic.new), [Z.ai](https://z.ai), [Anthropic](https://anthropic.com), [Codex](https://openai.com/codex), [GitHub Copilot](https://github.com/features/copilot), [MiniMax](https://platform.minimax.io), [Gemini CLI](docs/GEMINI_SETUP.md), [Cursor](docs/CURSOR_SETUP.md), and Antigravity in one place.
 See history, get alerts, and open a local web dashboard before you hit throttling or run over budget. Additionally, you can ingest local telemetry from your own API-driven workflows with API Integrations, keeping track of token use and spending across multiple providers.
 
-**Links:** [Website](https://onwatch.onllm.dev) | [Buy Me a Coffee](https://buymeacoffee.com/prakersh)
-
-**Trust & Quality**
-
-[![Stars](https://img.shields.io/github/stars/onllm-dev/onwatch?style=for-the-badge&logo=github&logoColor=white&label=Stars&color=181717)](https://github.com/onllm-dev/onwatch/stargazers)
-[![Awesome Go](https://img.shields.io/badge/Awesome_Go-Mentioned-22C55E?style=for-the-badge)](https://github.com/avelino/awesome-go)
-[![Downloads](https://img.shields.io/github/downloads/onllm-dev/onwatch/total?style=for-the-badge&logo=github&logoColor=white&label=Downloads&color=181717)](https://github.com/onllm-dev/onwatch/releases)  
-[![Coverage](https://img.shields.io/codecov/c/github/onllm-dev/onwatch?style=for-the-badge&logo=codecov&logoColor=white&label=Coverage)](https://codecov.io/gh/onllm-dev/onwatch)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-brightgreen?style=for-the-badge&logo=gnu&logoColor=white)](LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/onllm-dev/onwatch/v2?style=for-the-badge)](https://goreportcard.com/report/github.com/onllm-dev/onwatch/v2)
-
-**Compatibility & Docs**
-
-[![Version](https://img.shields.io/badge/Version-v2.11.46-0EA5E9?style=for-the-badge)](https://github.com/onllm-dev/onwatch/releases/tag/v2.11.46)
-[![Go 1.25+](https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev)
-[![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-orange?style=for-the-badge&logo=apple&logoColor=white)](#quick-start)
-[![pkg.go.dev](https://img.shields.io/badge/pkg.go.dev-reference-007D9C?style=for-the-badge&logo=go&logoColor=white)](https://pkg.go.dev/github.com/onllm-dev/onwatch/v2)
+This fork is tuned for my local Windows setup and server1 homelab deployment. See [Personal Fork Changes](docs/PERSONAL_FORK_CHANGES.md) for the current fork-specific behavior, UI changes, deployment notes, and remaining TODOs.
 
 onWatch fills the gap between "current usage snapshot" and the historical, per-cycle, cross-session view that developers actually need. It runs as a lightweight background agent (<50 MB RAM with all nine providers polling in parallel), stores historical data in SQLite, and serves a Material Design 3 web dashboard with dark/light mode.
 
@@ -29,17 +13,9 @@ It works with any tool that uses Synthetic, Z.ai, Anthropic, Codex, GitHub Copil
 
 **Zero telemetry. Single binary. All data stays on your machine.**
 
-**Beta:** onWatch is currently in active development. Features and APIs may change as we refine the product.
-
-[![Star History Chart](https://api.star-history.com/svg?repos=onllm-dev/onwatch&type=Timeline)](https://star-history.com/#onllm-dev/onwatch&Timeline)
+**Beta:** onWatch is currently in active development. Features and APIs may change.
 
 ![Anthropic Dashboard - Light Mode](./docs/screenshots/anthropic-light.png)
-
-If onWatch helps you track your AI spending, consider giving it a star. It helps others discover the project.
-
-> Powered by [onllm.dev](https://onllm.dev) | [Landing Page](https://onwatch.onllm.dev)
-
----
 
 ## Quick Start
 
@@ -196,7 +172,7 @@ Each quota card shows: usage vs. limit with progress bar, live countdown to rese
 
 Configure it in **Settings > Menubar**. You can enable or disable the companion, pick the default view, change refresh and threshold settings, and drag providers into the order you want.
 
-Menubar is currently in beta. Feedback is highly appreciated at [github.com/onllm-dev/onwatch/issues](https://github.com/onllm-dev/onwatch/issues).
+Menubar is currently in beta.
 
 **Email notifications (Beta)** -- Configure SMTP to receive alerts when quotas cross warning or critical thresholds, or when quotas reset. Per-quota threshold overrides for fine-grained control. SMTP passwords are encrypted at rest with AES-GCM.
 
@@ -583,17 +559,8 @@ GNU General Public License v3.0. See [LICENSE](LICENSE).
 
 ---
 
-## Support
-
-If onWatch saves you time, consider buying me a coffee:
-
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/prakersh)
-
----
-
 ## Acknowledgments
 
-- Powered by [onllm.dev](https://onllm.dev)
 - [Anthropic](https://anthropic.com) for the Claude Code API
 - [Synthetic](https://synthetic.new) for the API
 - [Z.ai](https://z.ai) for the API

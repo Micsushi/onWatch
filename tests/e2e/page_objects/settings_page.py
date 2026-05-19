@@ -104,9 +104,9 @@ class SettingsPage:
         """Return the current timezone select value."""
         return self.page.input_value("#settings-timezone")
 
-    def save_settings(self) -> None:
-        """Click the global Save Settings button."""
-        self.page.click("#settings-save-btn")
+    def wait_for_autosave(self) -> None:
+        """Wait for autosave feedback after a settings change."""
+        self.page.locator("#settings-feedback").wait_for(state="visible", timeout=5000)
 
     def get_feedback(self) -> str:
         """Return the settings feedback message text."""

@@ -3038,17 +3038,6 @@ select.settings-input {
   word-break: break-word;
 }
 
-/* Save bar */
-.settings-save-bar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 16px;
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border-default);
-}
-
 .settings-save-btn {
   display: inline-flex;
   align-items: center;
@@ -3091,10 +3080,18 @@ select.settings-input {
   border-radius: var(--radius-sm);
   margin-top: 12px;
 }
+.settings-autosave-feedback {
+  margin-bottom: 16px;
+}
 .settings-feedback.success {
   background: var(--status-healthy-bg);
   color: var(--status-healthy-text);
   border: 1px solid var(--status-healthy);
+}
+.settings-feedback.pending {
+  background: var(--status-info-bg);
+  color: var(--status-info-text);
+  border: 1px solid var(--status-info);
 }
 .settings-feedback.error {
   background: var(--status-danger-bg);

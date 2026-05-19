@@ -171,6 +171,7 @@ const State = {
   menubarProviders: [],
   menubarVisibleProviders: [],
   menubarStatusDisplay: { mode: 'multi_provider', selected_quotas: [] },
+  settingsAutosaveActive: false,
   currentRequestSeq: 0,
   insightsRequestSeq: 0,
   historyRequestSeq: 0,
@@ -7832,7 +7833,7 @@ async function initSettingsPage() {
   setupSettingsTabs();
   await setupMenubarSettings();
   await loadSettings();
-  setupSettingsSave();
+  setupSettingsAutosave();
   setupProviderReload();
   setupProviderSettingsModal();
   setupSMTPTest();
@@ -8559,6 +8560,7 @@ function syncMenubarProviderOrder() {
   } else {
     State.menubarVisibleProviders = State.menubarProviderOrder.filter((provider) => visibleSet.has(provider));
   }
+  scheduleSettingsAutosave(350);
 }
 
 function providerStatusBadge(configured, autoDetectable, isPolling) {
@@ -9362,65 +9364,95 @@ function gatherSettings() {
   return settings;
 }
 
-function setupSettingsSave() {
-  const saveBtn = document.getElementById('settings-save-btn');
-  const feedback = document.getElementById('settings-feedback');
-  if (!saveBtn) return;
+let settingsAutosaveTimer = null;
+let settingsAutosaveRequest = 0;
+const settingsFeedbackTimers = new WeakMap();
 
-  saveBtn.addEventListener('click', async () => {
-    saveBtn.disabled = true;
-    saveBtn.textContent = 'Saving...';
-    if (feedback) { feedback.hidden = true; }
-
-    const settings = gatherSettings();
-
-    // Client-side validation
-    if (settings.notifications) {
-      if (settings.notifications.warning_threshold >= settings.notifications.critical_threshold) {
-        showSettingsFeedback(feedback, 'Warning threshold must be less than critical threshold.', 'error');
-        saveBtn.disabled = false;
-        saveBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save Settings';
-        return;
-      }
-    }
-    if (settings.menubar) {
-      if (settings.menubar.warning_percent >= settings.menubar.critical_percent) {
-        showSettingsFeedback(feedback, 'Menubar warning threshold must be less than critical threshold.', 'error');
-        saveBtn.disabled = false;
-        saveBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save Settings';
-        return;
-      }
-    }
-
-    try {
-      const resp = await authFetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        showSettingsFeedback(feedback, data.error || 'Failed to save settings.', 'error');
-      } else {
-        if (data.provider_visibility) State.providerVisibility = data.provider_visibility;
-        if (data.api_integrations_visibility) State.apiIntegrationsVisibility = data.api_integrations_visibility;
-        showSettingsFeedback(feedback, 'Settings saved successfully.', 'success');
-      }
-    } catch (e) {
-      showSettingsFeedback(feedback, 'Network error. Please try again.', 'error');
-    } finally {
-      saveBtn.disabled = false;
-      saveBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save Settings';
-    }
-  });
+function validateSettingsForSave(settings) {
+  if (settings.notifications && settings.notifications.warning_threshold >= settings.notifications.critical_threshold) {
+    return 'Warning threshold must be less than critical threshold.';
+  }
+  if (settings.menubar && settings.menubar.warning_percent >= settings.menubar.critical_percent) {
+    return 'Menubar warning threshold must be less than critical threshold.';
+  }
+  return '';
 }
 
-function showSettingsFeedback(el, msg, type) {
+function shouldAutosaveSettingsTarget(target) {
+  if (!(target instanceof Element)) return false;
+  if (!target.matches('input, select, textarea')) return false;
+  if (['settings-current-password', 'settings-new-password', 'settings-confirm-password'].includes(target.id)) return false;
+  if (target.closest('#provider-settings-modal')) return false;
+  if (target.closest('#provider-toggles')) return false;
+  if (target.closest('.settings-test-btn')) return false;
+  return true;
+}
+
+function setupSettingsAutosave() {
+  const root = document.querySelector('.settings-main');
+  if (!root) return;
+
+  const scheduleFromEvent = (event) => {
+    if (!shouldAutosaveSettingsTarget(event.target)) return;
+    scheduleSettingsAutosave(event.type === 'input' ? 900 : 250);
+  };
+
+  root.addEventListener('input', scheduleFromEvent);
+  root.addEventListener('change', scheduleFromEvent);
+  State.settingsAutosaveActive = true;
+}
+
+function scheduleSettingsAutosave(delay = 600) {
+  if (!State.settingsAutosaveActive) return;
+  clearTimeout(settingsAutosaveTimer);
+  settingsAutosaveTimer = setTimeout(() => {
+    saveSettingsNow();
+  }, delay);
+}
+
+async function saveSettingsNow() {
+  const feedback = document.getElementById('settings-feedback');
+  const settings = gatherSettings();
+  const validationError = validateSettingsForSave(settings);
+  if (validationError) {
+    showSettingsFeedback(feedback, validationError, 'error');
+    return;
+  }
+
+  const requestID = ++settingsAutosaveRequest;
+  showSettingsFeedback(feedback, 'Saving...', 'pending', 0);
+
+  try {
+    const resp = await authFetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+    const data = await resp.json();
+    if (requestID !== settingsAutosaveRequest) return;
+    if (!resp.ok) {
+      showSettingsFeedback(feedback, data.error || 'Failed to save settings.', 'error');
+      return;
+    }
+    if (data.provider_visibility) State.providerVisibility = data.provider_visibility;
+    if (data.api_integrations_visibility) State.apiIntegrationsVisibility = data.api_integrations_visibility;
+    showSettingsFeedback(feedback, 'Saved.', 'success');
+  } catch (e) {
+    if (requestID === settingsAutosaveRequest) {
+      showSettingsFeedback(feedback, 'Network error. Settings were not saved.', 'error');
+    }
+  }
+}
+
+function showSettingsFeedback(el, msg, type, duration = 5000) {
   if (!el) return;
+  clearTimeout(settingsFeedbackTimers.get(el));
   el.textContent = msg;
   el.className = 'settings-feedback ' + type;
   el.hidden = false;
-  setTimeout(() => { el.hidden = true; }, 5000);
+  if (duration > 0) {
+    settingsFeedbackTimers.set(el, setTimeout(() => { el.hidden = true; }, duration));
+  }
 }
 
 function setupSMTPTest() {

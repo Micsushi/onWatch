@@ -136,8 +136,8 @@ class TestSettings:
             """
         )
 
-        sp.save_settings()
-        expect(settings_page.locator("#settings-feedback")).to_contain_text("Settings saved successfully")
+        sp.wait_for_autosave()
+        expect(settings_page.locator("#settings-feedback")).to_contain_text("Saved.")
 
         prefs_after_save = settings_page.evaluate(
             """
@@ -177,14 +177,14 @@ class TestSettings:
         # Default should be empty string (browser default)
         assert tz is not None
 
-    def test_save_settings_button(self, settings_page: Page) -> None:
-        """The Save Settings button should be present and clickable."""
+    def test_settings_autosave(self, settings_page: Page) -> None:
+        """Settings should autosave after changes without a global save button."""
         sp = SettingsPage(settings_page)
-        expect(settings_page.locator("#settings-save-btn")).to_be_visible()
+        sp.select_tab("general")
+        expect(settings_page.locator("#settings-save-btn")).to_have_count(0)
 
-        # Click save -- may show success or error depending on config state
-        sp.save_settings()
-        settings_page.wait_for_timeout(1000)
-        # Feedback area should become visible after save
-        feedback_el = settings_page.query_selector("#settings-feedback")
-        assert feedback_el is not None
+        display_mode = settings_page.locator("#settings-display-mode")
+        current = display_mode.input_value()
+        display_mode.select_option("compact" if current != "compact" else "normal")
+        sp.wait_for_autosave()
+        expect(settings_page.locator("#settings-feedback")).to_contain_text("Saved.")

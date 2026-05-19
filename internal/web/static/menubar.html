@@ -808,55 +808,12 @@
             height: 13px;
         }
 
-        .footer-links {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            flex-wrap: wrap;
-            gap: 0;
-            min-width: 0;
-            color: var(--text-muted);
-        }
-
         .footer-version {
             color: var(--text-muted);
             font-size: inherit;
             letter-spacing: 0.01em;
             white-space: nowrap;
             margin-right: 6px;
-        }
-
-        .footer-link {
-            display: inline;
-            min-height: 0;
-            padding: 0;
-            border-radius: 0;
-            border: 0;
-            background: transparent;
-            color: var(--text-muted);
-            text-decoration: none;
-            font-size: var(--font-md);
-            font-weight: 600;
-            line-height: 1.1;
-            letter-spacing: 0.01em;
-            white-space: nowrap;
-            transition: color 180ms ease;
-        }
-
-        .footer-link + .footer-link {
-            margin-left: 8px;
-            padding-left: 8px;
-            border-left: 1px solid var(--footer-divider);
-        }
-
-        .footer-link:hover {
-            color: var(--text-primary);
-            background: transparent;
-            border-color: transparent;
-        }
-
-        .footer-divider {
-            color: var(--footer-divider);
         }
 
         .state-card {
@@ -1360,9 +1317,7 @@
             <button class="footer-refresh" id="refresh-button" type="button" aria-label="Refresh menubar data" title="Refresh">
                 <span id="refresh-icon"></span>
             </button>
-            <div class="footer-links">
-                <span class="footer-version" id="footer-version">v-</span>
-            </div>
+            <span class="footer-version" id="footer-version">v-</span>
         </footer>
 
         <section class="settings-panel hidden" id="settings-panel" aria-hidden="true">
