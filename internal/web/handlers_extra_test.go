@@ -7558,7 +7558,6 @@ func TestGenerateEncryptionSalt_Uniqueness(t *testing.T) {
 // TestDeriveEncryptionKey_DifferentPasswords verifies different passwords produce
 // different keys.
 func TestDeriveEncryptionKey_DifferentPasswords(t *testing.T) {
-	t.Parallel()
 	setTestEncryptionSalt(t, []byte("testsalt12345678"))
 
 	key1 := DeriveEncryptionKey("password1", nil)
