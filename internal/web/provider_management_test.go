@@ -45,6 +45,8 @@ func (m *mockProviderAgentController) IsRunning(key string) bool {
 	return m.running != nil && m.running[key]
 }
 
+func (m *mockProviderAgentController) TriggerPollAll() {}
+
 func insertCodexWebSnapshot(t *testing.T, s *store.Store, accountID int64, plan string) {
 	t.Helper()
 	reset := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)

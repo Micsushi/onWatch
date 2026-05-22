@@ -2,7 +2,7 @@
 
 const BASE_PATH = (document.querySelector('meta[name="base-path"]') || {}).content || '';
 const API_BASE = BASE_PATH;
-const REFRESH_INTERVAL = 120000;
+const REFRESH_INTERVAL = 60000;
 
 // ── Lazy Loading via IntersectionObserver ──
 const _lazyLoaded = new Set();
@@ -623,6 +623,40 @@ function saveDefaultProvider(provider) {
     localStorage.setItem('onwatch-default-provider', provider);
   } catch (e) {
     // silent
+  }
+}
+
+function loadAllDashboardDensity() {
+  try {
+    return localStorage.getItem('onwatch-all-density') || 'compact';
+  } catch (e) {
+    return 'compact';
+  }
+}
+
+function applyForkPreferences(prefs = {}) {
+  const defaultProvider = (prefs.default_provider || loadDefaultProvider() || 'both').toString().trim().toLowerCase();
+  const density = (prefs.all_dashboard_density || loadAllDashboardDensity() || 'compact').toString().trim().toLowerCase();
+  const normalizedDensity = density === 'comfortable' ? 'comfortable' : 'compact';
+
+  if (defaultProvider) {
+    saveDefaultProvider(defaultProvider);
+    const select = document.getElementById('settings-default-provider');
+    if (select && select.value !== defaultProvider) select.value = defaultProvider;
+  }
+
+  try {
+    localStorage.setItem('onwatch-all-density', normalizedDensity);
+  } catch (e) {
+    // silent
+  }
+
+  const densitySelect = document.getElementById('settings-all-density');
+  if (densitySelect && densitySelect.value !== normalizedDensity) {
+    densitySelect.value = normalizedDensity;
+  }
+  if (document.body) {
+    document.body.classList.toggle('all-density-comfortable', normalizedDensity === 'comfortable');
   }
 }
 
@@ -2133,7 +2167,7 @@ function renderCursorQuotaCards(quotas, containerId) {
     return;
   }
 
-  container.innerHTML = renderProviderKPIHTML(normalizeBothQuotas('cursor', { quotas }));
+  container.innerHTML = renderProviderKPIHTML(normalizeBothQuotas('cursor', { quotas }), 'cursor');
 }
 
 function updateGeminiCard(q) {
@@ -5011,7 +5045,7 @@ function buildAllProviderEntries() {
   return entries;
 }
 
-function renderProviderKPIHTML(quotas) {
+function renderProviderKPIHTML(quotas, cardKey) {
   if (!Array.isArray(quotas) || quotas.length === 0) {
     return '<p class="insight-text">No KPI data available yet.</p>';
   }
@@ -5029,7 +5063,25 @@ function renderProviderKPIHTML(quotas) {
       || quotaIcons[quota.name]
       || '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>';
     const resetText = quota.resetsAt ? `Resets: ${formatDateTime(quota.resetsAt)}` : '';
-    const countdown = quota.timeUntilResetSeconds > 0 ? formatDuration(quota.timeUntilResetSeconds) : '--:--';
+    const timeUntil = quota.timeUntilResetSeconds || 0;
+    const countdown = timeUntil > 0 ? formatDuration(timeUntil) : '--:--';
+
+    // Register in State.currentQuotas so startCountdowns can tick this down.
+    // Key format: kpiv-<cardKey>-<quotaName> → countdown element id: countdown-kpiv-<cardKey>-<quotaName>
+    const safeQuotaName = sanitizeProviderCardKey(quota.name || '');
+    const stateKey = cardKey ? `kpiv-${cardKey}-${safeQuotaName}` : null;
+    if (stateKey) {
+      State.currentQuotas[stateKey] = {
+        timeUntilResetSeconds: timeUntil,
+        status,
+        percent,
+      };
+    }
+    const countdownId  = stateKey ? ` id="countdown-${stateKey}"` : '';
+    const percentId    = stateKey ? ` id="percent-${stateKey}"` : '';
+    const progressId   = stateKey ? ` id="progress-${stateKey}"` : '';
+    const statusId     = stateKey ? ` id="status-${stateKey}"` : '';
+    const resetId      = stateKey ? ` id="reset-${stateKey}"` : '';
 
     return `<article class="quota-card provider-kpi-card" data-quota="${escapeHTML(quota.name || '')}">
       <header class="card-header">
@@ -5040,26 +5092,82 @@ function renderProviderKPIHTML(quotas) {
           </h2>
           ${subtitle ? `<div class="quota-subtitle">${escapeHTML(subtitle)}</div>` : ''}
         </div>
-        <span class="countdown">${escapeHTML(countdown)}</span>
+        <span class="countdown"${countdownId}>${escapeHTML(countdown)}</span>
       </header>
       <div class="progress-stats">
-        <span class="usage-percent">${percent.toFixed(1)}%</span>
+        <span class="usage-percent"${percentId}>${percent.toFixed(1)}%</span>
         <span class="usage-fraction">${escapeHTML(usageFraction)}</span>
       </div>
       <div class="progress-wrapper">
         <div class="progress-bar" role="progressbar" aria-valuenow="${Math.round(percent)}" aria-valuemin="0" aria-valuemax="100">
-          <div class="progress-fill" style="width: ${Math.max(0, Math.min(percent, 100)).toFixed(1)}%" data-status="${status}"></div>
+          <div class="progress-fill"${progressId} style="width: ${Math.max(0, Math.min(percent, 100)).toFixed(1)}%" data-status="${status}"></div>
         </div>
       </div>
       <footer class="card-footer">
-        <span class="status-badge" data-status="${status}">
+        <span class="status-badge"${statusId} data-status="${status}">
           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
           ${statusCfg.label}
         </span>
-        <span class="reset-time">${escapeHTML(resetText)}</span>
+        <span class="reset-time"${resetId}>${escapeHTML(resetText)}</span>
       </footer>
     </article>`;
   }).join('');
+}
+
+// In-place update for a single KPI card in the All view. Uses the same stateKey
+// scheme as renderProviderKPIHTML so the countdown ticker keeps working too.
+function updateProviderKPICard(quota, cardKey) {
+  const safeQuotaName = sanitizeProviderCardKey(quota.name || '');
+  const stateKey = `kpiv-${cardKey}-${safeQuotaName}`;
+
+  const prev = State.currentQuotas[stateKey];
+  const percent = Number(quota.cardPercent ?? 0);
+  const status = quota.status || 'healthy';
+  const timeUntil = quota.timeUntilResetSeconds || 0;
+
+  State.currentQuotas[stateKey] = {
+    timeUntilResetSeconds: timeUntil,
+    status,
+    percent,
+  };
+
+  const progressEl = document.getElementById(`progress-${stateKey}`);
+  const percentEl  = document.getElementById(`percent-${stateKey}`);
+  const statusEl   = document.getElementById(`status-${stateKey}`);
+  const resetEl    = document.getElementById(`reset-${stateKey}`);
+  const countdownEl = document.getElementById(`countdown-${stateKey}`);
+
+  if (progressEl) {
+    progressEl.style.width = `${Math.max(0, Math.min(percent, 100)).toFixed(1)}%`;
+    progressEl.setAttribute('data-status', status);
+    const bar = progressEl.parentElement;
+    if (bar) bar.setAttribute('aria-valuenow', Math.round(percent));
+  }
+  if (percentEl) {
+    const oldVal = prev ? prev.percent : 0;
+    if (Math.abs(oldVal - percent) > 0.2) {
+      animateValue(percentEl, oldVal, percent, 400, v => `${v.toFixed(1)}%`);
+    } else {
+      percentEl.textContent = `${percent.toFixed(1)}%`;
+    }
+  }
+  if (statusEl) {
+    const cfg = statusConfig[status] || statusConfig.healthy;
+    statusEl.setAttribute('data-status', status);
+    statusEl.innerHTML = `<svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${cfg.icon}"/></svg>${cfg.label}`;
+  }
+  if (resetEl) {
+    resetEl.textContent = quota.resetsAt ? `Resets: ${formatDateTime(quota.resetsAt)}` : '';
+  }
+  if (countdownEl) {
+    if (timeUntil > 0) {
+      countdownEl.textContent = formatDuration(timeUntil);
+      countdownEl.classList.toggle('imminent', timeUntil < 1800);
+      countdownEl.style.display = '';
+    } else {
+      countdownEl.style.display = 'none';
+    }
+  }
 }
 
 function sortItemsByPreference(items, preferredKeys, valueSelector) {
@@ -5569,13 +5677,37 @@ function renderAllProvidersView() {
   if (!container) return;
 
   const entries = buildAllProviderEntries();
-  const collapsedState = loadProviderCardCollapseState();
-  destroyProviderCardCharts();
 
   if (entries.length === 0) {
     container.innerHTML = '<p class="insight-text">No provider data available yet.</p>';
     return;
   }
+
+  // Try in-place update: if every expected card already exists in the DOM,
+  // just update the KPI values without rebuilding any HTML.
+  const canUpdateInPlace = entries.length > 0 && entries.every(entry => {
+    if (entry.summaryOnly) return false; // API integrations card: always rebuild
+    return container.querySelector(`.provider-card[data-card-key="${entry.cardKey}"]`) !== null;
+  });
+
+  if (canUpdateInPlace) {
+    entries.forEach(entry => {
+      if (Array.isArray(entry.quotas)) {
+        entry.quotas.forEach(quota => updateProviderKPICard(quota, entry.cardKey));
+      }
+      // Keep promo tag fresh (Anthropic off-peak/peak label)
+      if (entry.promoHtml !== undefined) {
+        const card = container.querySelector(`.provider-card[data-card-key="${entry.cardKey}"]`);
+        const promoEl = card && card.querySelector('.promo-tag-inline');
+        if (promoEl && entry.promoHtml) promoEl.outerHTML = entry.promoHtml;
+      }
+    });
+    return;
+  }
+
+  // Full (re)build: structure changed or first render.
+  destroyProviderCardCharts();
+  const collapsedState = loadProviderCardCollapseState();
 
   container.innerHTML = entries.map((entry) => {
     const collapsed = Boolean(collapsedState[entry.cardKey]);
@@ -5597,7 +5729,7 @@ function renderAllProvidersView() {
         </button>
       </header>
       <div class="provider-card-body">
-        <div class="provider-kpis">${renderProviderKPIHTML(entry.quotas)}</div>
+        <div class="provider-kpis">${renderProviderKPIHTML(entry.quotas, entry.cardKey)}</div>
       </div>
     </section>`;
   }).join('');
@@ -7723,11 +7855,17 @@ function setupHeaderActions() {
     });
   }
 
-  // Manual refresh
+  // Manual refresh: trigger a force-poll on the backend then re-fetch after agents settle
   const refreshBtn = document.getElementById('refresh-btn');
   if (refreshBtn) {
-    refreshBtn.addEventListener('click', () => {
+    refreshBtn.addEventListener('click', async () => {
       refreshBtn.classList.add('spinning');
+      // Ask the server to restart all agents now (immediate poll cycle).
+      // Then wait briefly for the agents to complete their polls before fetching.
+      try {
+        await authFetch(`${API_BASE}/api/poll/force`, { method: 'POST' });
+      } catch (_) { /* non-fatal: fall through to stale-data fetch */ }
+      await new Promise(resolve => setTimeout(resolve, 3000));
       const tasks = [fetchCurrent(), fetchDeepInsights(), fetchHistory()];
       if (shouldShowCyclesTable()) tasks.push(fetchCycles());
       if (shouldShowSessionsTable()) tasks.push(fetchSessions());
@@ -7958,9 +8096,11 @@ async function loadSettings() {
       const warnCheck = document.getElementById('notify-warning');
       const critCheck = document.getElementById('notify-critical');
       const resetCheck = document.getElementById('notify-reset');
+      const resetFiveHourCheck = document.getElementById('notify-reset-five-hour');
       if (warnCheck) warnCheck.checked = n.notify_warning !== false;
       if (critCheck) critCheck.checked = n.notify_critical !== false;
       if (resetCheck) resetCheck.checked = n.notify_reset !== false;
+      if (resetFiveHourCheck) resetFiveHourCheck.checked = n.notify_reset_five_hour === true;
       const authErrorCheck = document.getElementById('notify-auth-error');
       if (authErrorCheck) authErrorCheck.checked = !!n.notify_auth_error;
       setVal('notify-cooldown', n.cooldown_minutes || 30);
@@ -7992,6 +8132,7 @@ async function loadSettings() {
     // Provider settings - store in State for modal use
     State.providerSettings = data.provider_settings || {};
     State.apiIntegrationsVisibility = data.api_integrations_visibility || { dashboard: true };
+    applyForkPreferences(data.fork_preferences || {});
 
     // Global display mode (persisted under provider_settings.global.display_mode)
     const displayModeSelect = document.getElementById('settings-display-mode');
@@ -9288,6 +9429,7 @@ function gatherSettings() {
       notify_warning: document.getElementById('notify-warning')?.checked ?? true,
       notify_critical: document.getElementById('notify-critical')?.checked ?? true,
       notify_reset: document.getElementById('notify-reset')?.checked ?? true,
+      notify_reset_five_hour: document.getElementById('notify-reset-five-hour')?.checked ?? false,
       notify_auth_error: document.getElementById('notify-auth-error')?.checked ?? false,
       cooldown_minutes: parseInt(document.getElementById('notify-cooldown')?.value) || 30,
       channels: {
@@ -9329,6 +9471,15 @@ function gatherSettings() {
   const tzSelect = document.getElementById('settings-timezone');
   if (tzSelect) {
     settings.timezone = tzSelect.value;
+  }
+
+  const defaultProviderSelect = document.getElementById('settings-default-provider');
+  const allDensitySelect = document.getElementById('settings-all-density');
+  if (defaultProviderSelect || allDensitySelect) {
+    settings.fork_preferences = {
+      default_provider: defaultProviderSelect?.value || 'both',
+      all_dashboard_density: allDensitySelect?.value || 'compact',
+    };
   }
 
   // Global display mode goes under provider_settings.global. Other provider
@@ -9436,6 +9587,7 @@ async function saveSettingsNow() {
     }
     if (data.provider_visibility) State.providerVisibility = data.provider_visibility;
     if (data.api_integrations_visibility) State.apiIntegrationsVisibility = data.api_integrations_visibility;
+    if (data.fork_preferences) applyForkPreferences(data.fork_preferences);
     showSettingsFeedback(feedback, 'Saved.', 'success');
   } catch (e) {
     if (requestID === settingsAutosaveRequest) {
@@ -10122,6 +10274,11 @@ function initNotificationCenter() {
 // ── Init ──
 
 document.addEventListener('DOMContentLoaded', async () => {
+  applyForkPreferences({
+    default_provider: loadDefaultProvider(),
+    all_dashboard_density: loadAllDashboardDensity(),
+  });
+
   // Register service worker for PWA + push (all pages)
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register(BASE_PATH + '/sw.js').catch(function() {});

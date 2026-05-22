@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════
 # onWatch Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/onllm-dev/onwatch/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Micsushi/onWatch/main/install.sh | bash
 # ═══════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
 INSTALL_DIR="${ONWATCH_INSTALL_DIR:-$HOME/.onwatch}"
 BIN_DIR="${INSTALL_DIR}/bin"
-REPO="onllm-dev/onwatch"
+REPO="Micsushi/onWatch"
 SERVICE_NAME="onwatch"
 SYSTEMD_MODE="user"  # "user" or "system" — auto-detected at runtime
 INSTALL_VERSION="latest"
@@ -217,7 +217,7 @@ detect_platform() {
         Linux)   OS="linux" ;;
         Darwin)  OS="darwin" ;;
         MINGW*|MSYS*|CYGWIN*)
-            fail "Windows detected. Use PowerShell installer instead:\n       irm https://raw.githubusercontent.com/onllm-dev/onwatch/main/install.ps1 | iex" ;;
+            fail "Windows detected. Use PowerShell installer instead:\n       irm https://raw.githubusercontent.com/Micsushi/onWatch/main/install.ps1 | iex" ;;
         *) fail "Unsupported OS: $os (supported: Linux, macOS)" ;;
     esac
 

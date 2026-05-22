@@ -472,7 +472,7 @@ func TestNotificationEngine_Check_ResetNotification(t *testing.T) {
 
 	engine.Check(QuotaStatus{
 		Provider:      "anthropic",
-		QuotaKey:      "five_hour",
+		QuotaKey:      "weekly_all_model",
 		Utilization:   10.0,
 		Limit:         100,
 		ResetOccurred: true,
@@ -482,9 +482,86 @@ func TestNotificationEngine_Check_ResetNotification(t *testing.T) {
 		t.Errorf("Expected 1 email for reset notification, got %d", mailCount.Load())
 	}
 
-	sentAt, _, _ := s.GetLastNotification("anthropic", "five_hour", "reset")
+	sentAt, _, _ := s.GetLastNotification("anthropic", "weekly_all_model", "reset")
 	if sentAt.IsZero() {
 		t.Error("Expected reset notification to be logged")
+	}
+}
+
+func TestNotificationEngine_Check_FiveHourResetNotificationOffByDefault(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	defer s.Close()
+
+	storeNotificationConfig(t, s, notificationSettingsJSON{
+		WarningThreshold:  80,
+		CriticalThreshold: 95,
+		NotifyWarning:     true,
+		NotifyCritical:    true,
+		NotifyReset:       true,
+		CooldownMinutes:   30,
+	})
+
+	engine := newTestEngine(t, s)
+	engine.Reload()
+
+	mailCount, cleanup := setupSMTPAndMailer(t, s, engine)
+	defer cleanup()
+
+	engine.Check(QuotaStatus{
+		Provider:      "anthropic",
+		QuotaKey:      "five_hour",
+		Utilization:   10.0,
+		Limit:         100,
+		ResetOccurred: true,
+	})
+
+	if mailCount.Load() != 0 {
+		t.Errorf("Expected no email for default 5-hour reset notification, got %d", mailCount.Load())
+	}
+
+	sentAt, _, _ := s.GetLastNotification("anthropic", "five_hour", "reset")
+	if !sentAt.IsZero() {
+		t.Error("Expected no 5-hour reset notification to be logged by default")
+	}
+}
+
+func TestNotificationEngine_Check_FiveHourResetNotificationOptIn(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	defer s.Close()
+
+	storeNotificationConfig(t, s, notificationSettingsJSON{
+		WarningThreshold:  80,
+		CriticalThreshold: 95,
+		NotifyWarning:     true,
+		NotifyCritical:    true,
+		NotifyReset:       true,
+		NotifyReset5Hour:  true,
+		CooldownMinutes:   30,
+	})
+
+	engine := newTestEngine(t, s)
+	engine.Reload()
+
+	mailCount, cleanup := setupSMTPAndMailer(t, s, engine)
+	defer cleanup()
+
+	engine.Check(QuotaStatus{
+		Provider:      "anthropic",
+		QuotaKey:      "five_hour",
+		Utilization:   10.0,
+		Limit:         100,
+		ResetOccurred: true,
+	})
+
+	if mailCount.Load() != 1 {
+		t.Errorf("Expected 1 email for opted-in 5-hour reset notification, got %d", mailCount.Load())
+	}
+
+	sentAt, _, _ := s.GetLastNotification("anthropic", "five_hour", "reset")
+	if sentAt.IsZero() {
+		t.Error("Expected opted-in 5-hour reset notification to be logged")
 	}
 }
 

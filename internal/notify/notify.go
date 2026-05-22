@@ -90,10 +90,11 @@ type ThresholdOverride struct {
 
 // NotificationTypes controls which notification types are enabled.
 type NotificationTypes struct {
-	Warning   bool `json:"warning"`
-	Critical  bool `json:"critical"`
-	Reset     bool `json:"reset"`
-	AuthError bool `json:"auth_error"` // Auth failure notifications
+	Warning       bool `json:"warning"`
+	Critical      bool `json:"critical"`
+	Reset         bool `json:"reset"`
+	ResetFiveHour bool `json:"reset_five_hour"`
+	AuthError     bool `json:"auth_error"` // Auth failure notifications
 }
 
 // QuotaStatus represents the current state of a quota for notification evaluation.
@@ -159,6 +160,7 @@ type notificationSettingsJSON struct {
 	NotifyWarning     bool                  `json:"notify_warning"`
 	NotifyCritical    bool                  `json:"notify_critical"`
 	NotifyReset       bool                  `json:"notify_reset"`
+	NotifyReset5Hour  bool                  `json:"notify_reset_five_hour"`
 	NotifyAuthError   bool                  `json:"notify_auth_error"`
 	CooldownMinutes   int                   `json:"cooldown_minutes"`
 	Channels          *NotificationChannels `json:"channels,omitempty"`
@@ -200,10 +202,11 @@ func (e *NotificationEngine) Reload() error {
 		e.cfg.Cooldown = time.Duration(notif.CooldownMinutes) * time.Minute
 	}
 	e.cfg.Types = NotificationTypes{
-		Warning:   notif.NotifyWarning,
-		Critical:  notif.NotifyCritical,
-		Reset:     notif.NotifyReset,
-		AuthError: notif.NotifyAuthError,
+		Warning:       notif.NotifyWarning,
+		Critical:      notif.NotifyCritical,
+		Reset:         notif.NotifyReset,
+		ResetFiveHour: notif.NotifyReset5Hour,
+		AuthError:     notif.NotifyAuthError,
 	}
 
 	overrides := make(map[string]ThresholdOverride, len(notif.Overrides))
@@ -534,7 +537,7 @@ func (e *NotificationEngine) Check(status QuotaStatus) {
 		if err := e.store.ClearNotificationLog(provider, quotaKey); err != nil {
 			e.logger.Error("failed to clear notification log on reset", "error", err)
 		}
-		if cfg.Types.Reset && !(hasOverride && override.DisableReset) {
+		if cfg.Types.Reset && shouldSendResetNotification(cfg.Types, status) && !(hasOverride && override.DisableReset) {
 			e.sendNotification(mailer, pushSender, cfg.Channels, status, "reset")
 		}
 		return
@@ -572,6 +575,18 @@ func (e *NotificationEngine) Check(status QuotaStatus) {
 		e.sendNotification(mailer, pushSender, cfg.Channels, status, "warning")
 		return
 	}
+}
+
+func shouldSendResetNotification(types NotificationTypes, status QuotaStatus) bool {
+	if !isFiveHourQuota(status.QuotaKey) {
+		return true
+	}
+	return types.ResetFiveHour
+}
+
+func isFiveHourQuota(quotaKey string) bool {
+	key := strings.ToLower(strings.TrimSpace(quotaKey))
+	return key == "five_hour" || key == "5_hour" || key == "five-hour" || key == "5-hour"
 }
 
 // SendTestEmail sends a test email to verify SMTP configuration.

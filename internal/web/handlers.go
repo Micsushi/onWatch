@@ -62,6 +62,7 @@ type ProviderAgentController interface {
 	Start(key string) error
 	Stop(key string)
 	IsRunning(key string) bool
+	TriggerPollAll()
 }
 
 // ProviderStatus represents one provider's runtime/config status.
@@ -1052,6 +1053,14 @@ func (h *Handler) getProviderFromRequest(r *http.Request) (string, error) {
 
 	provider := r.URL.Query().Get("provider")
 	if provider == "" {
+		if prefsProvider, ok := h.forkPreferences()["default_provider"].(string); ok && prefsProvider != "" {
+			if prefsProvider == "both" && h.config.HasMultipleProviders() {
+				return "both", nil
+			}
+			if h.config.HasProvider(prefsProvider) {
+				return prefsProvider, nil
+			}
+		}
 		if h.config.HasMultipleProviders() {
 			return "both", nil
 		}
@@ -1113,6 +1122,63 @@ func (h *Handler) apiIntegrationsDashboardVisible() bool {
 		return dashboard
 	}
 	return true
+}
+
+func defaultForkPreferences() map[string]interface{} {
+	return map[string]interface{}{
+		"default_provider":      "both",
+		"all_dashboard_density": "compact",
+	}
+}
+
+func sanitizeForkPreferences(prefs map[string]interface{}) map[string]interface{} {
+	result := defaultForkPreferences()
+	if raw, ok := prefs["default_provider"].(string); ok {
+		provider := strings.ToLower(strings.TrimSpace(raw))
+		validProvider := regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(provider)
+		if provider != "" && validProvider {
+			result["default_provider"] = provider
+		}
+	}
+	if raw, ok := prefs["all_dashboard_density"].(string); ok {
+		density := strings.ToLower(strings.TrimSpace(raw))
+		if density == "comfortable" || density == "compact" {
+			result["all_dashboard_density"] = density
+		}
+	}
+	return result
+}
+
+func (h *Handler) forkPreferences() map[string]interface{} {
+	if h.store == nil {
+		return defaultForkPreferences()
+	}
+	raw, err := h.store.GetSetting("fork_preferences")
+	if err != nil || raw == "" {
+		return defaultForkPreferences()
+	}
+	var prefs map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &prefs); err != nil {
+		return defaultForkPreferences()
+	}
+	return sanitizeForkPreferences(prefs)
+}
+
+func (h *Handler) forkDefaultProvider(providers []string) string {
+	prefs := h.forkPreferences()
+	provider, _ := prefs["default_provider"].(string)
+	if provider == "" {
+		provider = "both"
+	}
+	for _, p := range providers {
+		if p == provider {
+			return provider
+		}
+	}
+	if len(providers) > 0 {
+		return providers[0]
+	}
+	return ""
 }
 
 func (h *Handler) saveAPIIntegrationsVisibility(vis map[string]bool) error {
@@ -1633,6 +1699,20 @@ func (h *Handler) ToggleProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 // ReloadProviders reloads provider configuration from env and reconciles runtime polling.
+// PollForce restarts all running provider agents, triggering an immediate poll cycle.
+func (h *Handler) PollForce(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.agentManager == nil {
+		respondError(w, http.StatusServiceUnavailable, "agent manager not available")
+		return
+	}
+	h.agentManager.TriggerPollAll()
+	respondJSON(w, http.StatusOK, map[string]interface{}{"triggered": true})
+}
+
 func (h *Handler) ReloadProviders(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1769,12 +1849,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		if h.config.HasMultipleProviders() {
 			providers = append(providers, "both")
 		}
-		if len(providers) > 0 {
-			currentProvider = providers[0]
-		}
-		if h.config.HasMultipleProviders() {
-			currentProvider = "both"
-		}
+		currentProvider = h.forkDefaultProvider(providers)
 		// Allow overriding via query param
 		if reqProvider := r.URL.Query().Get("provider"); reqProvider != "" {
 			reqProvider = strings.ToLower(reqProvider)
@@ -5895,9 +5970,10 @@ func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := map[string]interface{}{
-		"timezone":        tz,
-		"hidden_insights": hiddenInsights,
-		"menubar":         menubarSettings,
+		"timezone":         tz,
+		"hidden_insights":  hiddenInsights,
+		"menubar":          menubarSettings,
+		"fork_preferences": h.forkPreferences(),
 	}
 
 	// SMTP settings (never return the actual password)
@@ -6040,6 +6116,26 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		result["hidden_insights"] = keys
 	}
 
+	// Handle personal fork preferences
+	if raw, ok := body["fork_preferences"]; ok {
+		var prefs map[string]interface{}
+		if err := json.Unmarshal(raw, &prefs); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid fork_preferences value")
+			return
+		}
+		if prefs == nil {
+			prefs = map[string]interface{}{}
+		}
+		normalized := sanitizeForkPreferences(prefs)
+		prefsJSON, _ := json.Marshal(normalized)
+		if err := h.store.SetSetting("fork_preferences", string(prefsJSON)); err != nil {
+			h.logger.Error("failed to save fork preferences", "error", err)
+			respondError(w, http.StatusInternalServerError, "failed to save fork preferences")
+			return
+		}
+		result["fork_preferences"] = normalized
+	}
+
 	// Handle SMTP settings
 	if raw, ok := body["smtp"]; ok {
 		var smtp struct {
@@ -6132,7 +6228,8 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		discord.WebhookURL = strings.TrimSpace(discord.WebhookURL)
-		if discord.WebhookURL == "" {
+		webhookProvided := discord.WebhookURL != ""
+		if !webhookProvided {
 			existingJSON, _ := h.store.GetSetting("discord")
 			if existingJSON != "" {
 				var existing map[string]interface{}
@@ -6143,7 +6240,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if discord.WebhookURL != "" && !notify.IsEncryptedValue(discord.WebhookURL) {
+		if webhookProvided && !notify.IsEncryptedValue(discord.WebhookURL) {
 			if !strings.HasPrefix(discord.WebhookURL, "https://discord.com/api/webhooks/") &&
 				!strings.HasPrefix(discord.WebhookURL, "https://discordapp.com/api/webhooks/") {
 				respondError(w, http.StatusBadRequest, "Discord webhook URL must be a Discord webhook URL")
@@ -6184,6 +6281,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			NotifyWarning     bool                         `json:"notify_warning"`
 			NotifyCritical    bool                         `json:"notify_critical"`
 			NotifyReset       bool                         `json:"notify_reset"`
+			NotifyReset5Hour  bool                         `json:"notify_reset_five_hour"`
 			NotifyAuthError   bool                         `json:"notify_auth_error"`
 			CooldownMinutes   int                          `json:"cooldown_minutes"`
 			Channels          *notify.NotificationChannels `json:"channels,omitempty"`

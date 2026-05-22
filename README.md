@@ -24,7 +24,7 @@ It works with any tool that uses Synthetic, Z.ai, Anthropic, Codex, GitHub Copil
 **One-line install:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/onllm-dev/onwatch/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Micsushi/onWatch/main/install.sh | bash
 ```
 
 This downloads the binary to `~/.onwatch/`, creates a `.env` config, sets up a systemd service (Linux) or self-daemonizes (macOS), and adds `onwatch` to your PATH.
@@ -34,19 +34,21 @@ On macOS, the installer downloads the standard binary with menubar support.
 ### Homebrew (macOS & Linux)
 
 ```bash
-brew install onllm-dev/tap/onwatch
+brew install Micsushi/tap/onwatch
 onwatch setup    # Interactive setup wizard for API keys and config
 ```
+
+> **Note:** Homebrew requires a separate tap repository (`Micsushi/homebrew-tap`). See the [Homebrew tap docs](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap) to set one up.
 
 ### Windows
 
 **One-line install** (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/onllm-dev/onwatch/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/Micsushi/onWatch/main/install.ps1 | iex
 ```
 
-Or download `install.bat` from the [Releases](https://github.com/onllm-dev/onwatch/releases) page and double-click it.
+Or download `install.bat` from the [Releases](https://github.com/Micsushi/onWatch/releases) page and double-click it.
 
 This downloads the binary to `%USERPROFILE%\.onwatch\`, runs interactive setup for API keys, creates a `.env` config, and adds `onwatch` to your PATH.
 
@@ -54,12 +56,12 @@ For manual setup or troubleshooting, see the [Windows Setup Guide](docs/WINDOWS_
 
 ### Manual Installation
 
-**Download binaries** from the [Releases](https://github.com/onllm-dev/onwatch/releases) page. Binaries are available for macOS (ARM64, AMD64), Linux (AMD64, ARM64), and Windows (AMD64).
+**Download binaries** from the [Releases](https://github.com/Micsushi/onWatch/releases) page. Binaries are available for macOS (ARM64, AMD64), Linux (AMD64, ARM64), and Windows (AMD64).
 
 **Or build from source** (requires Go 1.25+):
 
 ```bash
-git clone https://github.com/onllm-dev/onwatch.git && cd onwatch
+git clone https://github.com/Micsushi/onWatch.git && cd onWatch
 cp .env.example .env    # then add your API keys
 ./app.sh --build && ./onwatch --debug    # or: make build && ./onwatch --debug
 ```
@@ -77,7 +79,7 @@ Or via `app.sh`:
 ./app.sh --docker --run
 ```
 
-The Docker image uses a distroless base (~10-12 MB) and runs as non-root. An Alpine variant with shell access is also available (`ghcr.io/onllm-dev/onwatch:alpine`). Data persists via volume mount at `/data`. Logs go to stdout (`docker logs -f onwatch`). See [Docker Deployment](#docker-deployment) for details.
+The Docker image uses a distroless base (~10-12 MB) and runs as non-root. An Alpine variant with shell access is also available (`ghcr.io/micsushi/onwatch:alpine`). Data persists via volume mount at `/data`. Logs go to stdout (`docker logs -f onwatch`). See [Docker Deployment](#docker-deployment) for details.
 
 ### Configure
 
@@ -236,7 +238,7 @@ Yes. onWatch monitors the API provider (Synthetic, Z.ai, Anthropic, Codex, GitHu
 
 ### Does onWatch send any data to external servers?
 
-No. Zero telemetry. All data stays in a local SQLite file. The only outbound calls are to the Synthetic, Z.ai, Anthropic, Codex, GitHub Copilot, MiniMax, Gemini CLI, Cursor, and Antigravity quota APIs you configure (Antigravity connects to localhost only). Fully auditable on [GitHub](https://github.com/onllm-dev/onwatch) (GPL-3.0).
+No. Zero telemetry. All data stays in a local SQLite file. The only outbound calls are to the Synthetic, Z.ai, Anthropic, Codex, GitHub Copilot, MiniMax, Gemini CLI, Cursor, and Antigravity quota APIs you configure (Antigravity connects to localhost only). Fully auditable on [GitHub](https://github.com/Micsushi/onWatch) (GPL-3.0).
 
 ### How much memory does onWatch use?
 
@@ -418,7 +420,7 @@ Multi-arch images (linux/amd64, linux/arm64) are automatically built and publish
 docker run -d --name onwatch -p 9211:9211 \
   -v onwatch-data:/data \
   -e SYNTHETIC_API_KEY=your_key_here \
-  ghcr.io/onllm-dev/onwatch:latest
+  ghcr.io/micsushi/onwatch:latest
 ```
 
 An Alpine variant with shell access is also available for users who need `docker exec` (e.g. Codex multi-account setup):
@@ -428,7 +430,7 @@ An Alpine variant with shell access is also available for users who need `docker
 docker run -d --name onwatch -p 9211:9211 \
   -v onwatch-data:/data \
   -e SYNTHETIC_API_KEY=your_key_here \
-  ghcr.io/onllm-dev/onwatch:alpine
+  ghcr.io/micsushi/onwatch:alpine
 ```
 
 | Tag | Base | Shell | Size |
@@ -439,7 +441,7 @@ docker run -d --name onwatch -p 9211:9211 \
 **Docker Compose (recommended):**
 
 ```bash
-git clone https://github.com/onllm-dev/onwatch.git && cd onwatch
+git clone https://github.com/Micsushi/onWatch.git && cd onWatch
 cp .env.docker.example .env
 nano .env  # Add your API keys
 docker-compose up -d
@@ -512,7 +514,7 @@ The `docker-compose.yml` includes memory limits (64M limit, 32M reservation), lo
 
 **Database path is not writable:** If startup shows `database path is not writable`, fix bind mount ownership recursively with `sudo chown -R 65532:65532 ./onwatch-data` or use named volumes.
 **Container won't start:** Check `docker-compose logs -f`; verify API keys in `.env` and port 9211 availability.
-**Debugging:** The default distroless image has no shell. Use the Alpine variant (`ghcr.io/onllm-dev/onwatch:alpine`) if you need `docker exec` access, or use a sidecar: `docker run -it --rm --pid=container:onwatch --net=container:onwatch nicolaka/netshoot bash`
+**Debugging:** The default distroless image has no shell. Use the Alpine variant (`ghcr.io/micsushi/onwatch:alpine`) if you need `docker exec` access, or use a sidecar: `docker run -it --rm --pid=container:onwatch --net=container:onwatch nicolaka/netshoot bash`
 
 **Anthropic 429 rate limit errors:** Anthropic's `/api/oauth/usage` endpoint has aggressive rate limits (~5 requests per token). onWatch automatically handles this by refreshing the OAuth token when rate limited, which provides a fresh rate limit window. This is transparent to users - onWatch logs "Rate limit bypassed successfully" when this occurs. The workaround requires OAuth credentials (auto-detected from Claude Code); API key authentication does not support token refresh. See [issue #16](https://github.com/onllm-dev/onWatch/issues/16) and [anthropics/claude-code#31021](https://github.com/anthropics/claude-code/issues/31021) for details.
 

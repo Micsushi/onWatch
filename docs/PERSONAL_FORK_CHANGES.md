@@ -7,6 +7,8 @@ This fork keeps upstream onWatch as the base, but it is tuned for my local Windo
 - `onwatch` on this machine now rebuilds from this repo before starting the dashboard.
 - Running `onwatch` with no arguments or `onwatch restart` stops the previously installed onWatch process, builds the current repo, replaces the local binary, and starts the fresh build on port `9211`.
 - The local wrapper stamps dev builds with a unique version string, so dashboard CSS and JavaScript cache-bust on each rebuild.
+- A Windows scheduled task can run `scripts/windows-background-watchdog.ps1` at login to keep the local fork running in the background.
+- The watchdog checks hourly and calls the repo-backed `onwatch restart` wrapper if the installed process is not running.
 - Temporary local build folders such as `.tmp-go/`, `.tmp-install/`, and `.tmp-local-preview/` are ignored by git.
 
 ## Dashboard
@@ -21,6 +23,9 @@ This fork keeps upstream onWatch as the base, but it is tuned for my local Windo
 - Dashboard and settings footers were removed for personal use.
 - Menubar upstream footer/support links were removed.
 - Settings autosave when changed; the manual global Save Settings button was removed.
+- Settings > General includes fork preferences for the default dashboard and All dashboard density.
+- The default dashboard preference is stored in the app database, so it follows local and hosted installs.
+- The All dashboard density can be switched between compact and comfortable without editing code.
 
 ## Notifications
 
@@ -29,6 +34,7 @@ This fork keeps upstream onWatch as the base, but it is tuned for my local Windo
 - Discord webhook URLs are encrypted before storage when an encryption key is available.
 - Settings includes a dedicated Discord test button.
 - Discord delivery is used for quota, reset, and auth error notifications when enabled.
+- 5-hour reset notifications are off by default and can be enabled separately from other reset notifications.
 - Browser push and SMTP notification behavior remains available.
 
 ## Hosted Deployment
@@ -46,6 +52,8 @@ This fork keeps upstream onWatch as the base, but it is tuned for my local Windo
 - `ONWATCH_TRUST_PROXY_AUTH`: when true, the web server skips built-in login/session middleware and trusts the proxy-auth boundary.
 - Discord settings are stored in the database under the `discord` setting.
 - Notification channel settings now support `email`, `push`, and `discord`.
+- Personal fork preferences are stored in the database under the `fork_preferences` setting.
+- Notification settings support `notify_reset_five_hour`; it defaults to false.
 
 ## Still Planned
 

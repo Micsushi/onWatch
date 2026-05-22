@@ -3632,6 +3632,70 @@ func TestHandler_UpdateSettings_HiddenInsights(t *testing.T) {
 	}
 }
 
+func TestHandler_GetSettings_ForkPreferencesDefaults(t *testing.T) {
+	t.Parallel()
+	s, _ := store.New(":memory:")
+	defer s.Close()
+
+	cfg := createTestConfigWithSynthetic()
+	h := NewHandler(s, nil, nil, nil, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	rr := httptest.NewRecorder()
+	h.GetSettings(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rr.Code)
+	}
+
+	var response map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	prefs, ok := response["fork_preferences"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected fork_preferences map, got %T", response["fork_preferences"])
+	}
+	if prefs["default_provider"] != "both" {
+		t.Errorf("expected default provider both, got %v", prefs["default_provider"])
+	}
+	if prefs["all_dashboard_density"] != "compact" {
+		t.Errorf("expected compact density, got %v", prefs["all_dashboard_density"])
+	}
+}
+
+func TestHandler_UpdateSettings_ForkPreferences(t *testing.T) {
+	t.Parallel()
+	s, _ := store.New(":memory:")
+	defer s.Close()
+
+	cfg := createTestConfigWithSynthetic()
+	h := NewHandler(s, nil, nil, nil, cfg)
+
+	body := strings.NewReader(`{"fork_preferences":{"default_provider":"codex","all_dashboard_density":"comfortable"}}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/settings", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.UpdateSettings(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+
+	val, _ := s.GetSetting("fork_preferences")
+	var prefs map[string]interface{}
+	if err := json.Unmarshal([]byte(val), &prefs); err != nil {
+		t.Fatalf("failed to decode saved fork preferences: %v", err)
+	}
+	if prefs["default_provider"] != "codex" {
+		t.Errorf("expected default provider codex, got %v", prefs["default_provider"])
+	}
+	if prefs["all_dashboard_density"] != "comfortable" {
+		t.Errorf("expected comfortable density, got %v", prefs["all_dashboard_density"])
+	}
+}
+
 func TestHandler_GetSettings_SMTPMasksPassword(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")

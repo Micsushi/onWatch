@@ -4,7 +4,7 @@
 ::
 :: This batch file launches the PowerShell installer script.
 :: For direct PowerShell installation, run:
-::   irm https://raw.githubusercontent.com/onllm-dev/onwatch/main/install.ps1 | iex
+::   irm https://raw.githubusercontent.com/Micsushi/onWatch/main/install.ps1 | iex
 
 echo.
 echo   onWatch Installer for Windows
@@ -26,7 +26,7 @@ if %ERRORLEVEL% neq 0 (
 :: Run the PowerShell installer
 :: -ExecutionPolicy Bypass allows running the script without changing system policy
 :: -NoProfile skips loading the user's PowerShell profile for faster startup
-powershell -ExecutionPolicy Bypass -NoProfile -Command "& { irm https://raw.githubusercontent.com/onllm-dev/onwatch/main/install.ps1 | iex }"
+powershell -ExecutionPolicy Bypass -NoProfile -Command "& { irm https://raw.githubusercontent.com/Micsushi/onWatch/main/install.ps1 | iex }"
 
 :: If PowerShell exits with an error, show a message
 if %ERRORLEVEL% neq 0 (

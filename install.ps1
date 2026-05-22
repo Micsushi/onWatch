@@ -1,6 +1,6 @@
 # ═══════════════════════════════════════════════════════════════════════
 # onWatch Installer for Windows
-# Usage: irm https://raw.githubusercontent.com/onllm-dev/onwatch/main/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/Micsushi/onWatch/main/install.ps1 | iex
 # Or run directly: .\install.ps1
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 $INSTALL_DIR = if ($env:ONWATCH_INSTALL_DIR) { $env:ONWATCH_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".onwatch" }
 $BIN_DIR = Join-Path $INSTALL_DIR "bin"
 $DATA_DIR = Join-Path $INSTALL_DIR "data"
-$REPO = "onllm-dev/onwatch"
+$REPO = "Micsushi/onWatch"
 $ASSET_NAME = "onwatch-windows-amd64.exe"
 
 # ─── Colors (ANSI escape sequences for modern terminals) ───────────────

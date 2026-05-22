@@ -775,6 +775,22 @@ button, input, select { font-family: inherit; }
   box-shadow: var(--shadow-card);
 }
 
+body.all-density-comfortable .all-providers-view {
+  gap: 18px;
+}
+
+body.all-density-comfortable .provider-card-body {
+  padding: 16px;
+}
+
+body.all-density-comfortable .provider-kpis {
+  gap: 12px;
+}
+
+body.all-density-comfortable .provider-kpi-card {
+  padding: 14px 16px;
+}
+
 .provider-insights {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(var(--layout-insight-min), 1fr));

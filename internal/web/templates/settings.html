@@ -200,6 +200,10 @@
                         <span>Reset notifications (quota cycle resets)</span>
                     </label>
                     <label class="settings-checkbox-row">
+                        <input type="checkbox" id="notify-reset-five-hour">
+                        <span>5-hour reset notifications</span>
+                    </label>
+                    <label class="settings-checkbox-row">
                         <input type="checkbox" id="notify-auth-error">
                         <span>Auth error alerts (token refresh failures)</span>
                     </label>
@@ -348,6 +352,37 @@
                             <option value="available">Available (% remaining)</option>
                         </select>
                         <span class="settings-field-hint">Applies to all providers unless overridden in the per-provider settings.</span>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-divider"></div>
+            <div class="settings-section">
+                <h3 class="settings-section-title">Fork Preferences</h3>
+                <p class="settings-section-desc">Control the personal fork defaults used by the dashboard.</p>
+                <div class="settings-fields">
+                    <div class="settings-field settings-field-half">
+                        <label for="settings-default-provider">Default Dashboard</label>
+                        <select id="settings-default-provider" class="settings-input">
+                            <option value="both">All providers</option>
+                            <option value="anthropic">Anthropic</option>
+                            <option value="codex">Codex</option>
+                            <option value="antigravity">Antigravity</option>
+                            <option value="gemini">Gemini</option>
+                            <option value="minimax">MiniMax</option>
+                            <option value="cursor">Cursor</option>
+                            <option value="openrouter">OpenRouter</option>
+                            <option value="zai">Z.ai</option>
+                            <option value="synthetic">Synthetic</option>
+                            <option value="copilot">Copilot</option>
+                            <option value="api-integrations">API Integrations</option>
+                        </select>
+                    </div>
+                    <div class="settings-field settings-field-half">
+                        <label for="settings-all-density">All Dashboard Density</label>
+                        <select id="settings-all-density" class="settings-input">
+                            <option value="compact">Compact</option>
+                            <option value="comfortable">Comfortable</option>
+                        </select>
                     </div>
                 </div>
             </div>

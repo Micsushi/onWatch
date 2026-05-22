@@ -138,3 +138,29 @@ func (m *AgentManager) IsRunning(key string) bool {
 	_, running := m.running[key]
 	return running
 }
+
+// TriggerPoll restarts a running agent, causing an immediate poll cycle.
+// Returns true if the agent was running and was restarted.
+func (m *AgentManager) TriggerPoll(key string) bool {
+	m.mu.RLock()
+	_, running := m.running[key]
+	m.mu.RUnlock()
+	if !running {
+		return false
+	}
+	m.Stop(key)
+	return m.Start(key) == nil
+}
+
+// TriggerPollAll restarts all currently running agents.
+func (m *AgentManager) TriggerPollAll() {
+	m.mu.RLock()
+	keys := make([]string, 0, len(m.running))
+	for key := range m.running {
+		keys = append(keys, key)
+	}
+	m.mu.RUnlock()
+	for _, key := range keys {
+		m.TriggerPoll(key)
+	}
+}
