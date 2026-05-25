@@ -1357,7 +1357,7 @@ func TestDaemonChildRun_HelperProcess(t *testing.T) {
 		os.Exit(0)
 	case "server_error_test":
 		// Bind a port first, then try to start run() on the same port.
-		// The web server will fail to bind → serverErr path in run() is covered.
+		// The web server will fail to bind -> serverErr path in run() is covered.
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			os.Exit(3)
@@ -1366,7 +1366,7 @@ func TestDaemonChildRun_HelperProcess(t *testing.T) {
 		// Keep ln open so server can't bind - set the env var BEFORE calling main()
 		_ = os.Setenv("ONWATCH_PORT", strconv.Itoa(port))
 		os.Args = []string{"onwatch", "--debug", "--test"}
-		main() // server fails to bind → serverErr → run() logs error and exits
+		main() // server fails to bind -> serverErr -> run() logs error and exits
 		ln.Close()
 		os.Exit(0)
 	default:
@@ -2327,7 +2327,7 @@ func TestStopPreviousInstance_WithLivePID(t *testing.T) {
 		t.Fatalf("write pid file: %v", err)
 	}
 
-	// stopPreviousInstance sends SIGTERM → covers the "stopped=true" + time.Sleep branch
+	// stopPreviousInstance sends SIGTERM -> covers the "stopped=true" + time.Sleep branch
 	out := captureStdout(t, func() {
 		stopPreviousInstance(0, true)
 	})
@@ -2663,7 +2663,7 @@ func TestDaemonChildRun_FixExplicitDBPath(t *testing.T) {
 		"CODEX_TOKEN=",
 		"HOME="+home,
 		fmt.Sprintf("ONWATCH_PORT=%d", port),
-		"ONWATCH_DB_PATH="+explicitDB, // explicit path → DBPathExplicit=true → fixExplicitDBPath
+		"ONWATCH_DB_PATH="+explicitDB, // explicit path -> DBPathExplicit=true -> fixExplicitDBPath
 		"ONWATCH_ADMIN_PASS=testpass",
 	), 600)
 }
@@ -2687,14 +2687,14 @@ func TestRunStatus_WithLogAndDBFiles(t *testing.T) {
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
 	pid := cmd.Process.Pid
-	// Write PID:PORT format (port=0 → triggers the non-testMode log file search,
+	// Write PID:PORT format (port=0 -> triggers the non-testMode log file search,
 	// but testMode=true so log path = ".onwatch-test.log")
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d:0", pid)), 0o644); err != nil {
 		t.Fatalf("write pid file: %v", err)
 	}
 
 	// Create the log file in the current dir so the stat check succeeds
-	// (testMode=true → logPath = ".onwatch-test.log")
+	// (testMode=true -> logPath = ".onwatch-test.log")
 	logFile := ".onwatch-test.log"
 	if err := os.WriteFile(logFile, []byte("log data\n"), 0o600); err != nil {
 		t.Fatalf("write log file: %v", err)

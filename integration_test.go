@@ -570,11 +570,7 @@ func makeRequest(t *testing.T, method, url string, body string) (*http.Response,
 	respBody, _ := io.ReadAll(resp.Body)
 	return resp, string(respBody)
 }
-
-// ═══════════════════════════════════════════════════════════════════════
 // 3.1 Synthetic Data Integrity (5 tests)
-// ═══════════════════════════════════════════════════════════════════════
-
 // TestIntegration_Synthetic_SnapshotStoredCorrectly verifies every field of a Synthetic
 // snapshot is stored and round-tripped from the DB accurately.
 func TestIntegration_Synthetic_SnapshotStoredCorrectly(t *testing.T) {
@@ -775,11 +771,7 @@ func TestIntegration_Synthetic_HandlerReturnsDBData(t *testing.T) {
 		t.Errorf("subscription.limit: want 1350, got %v", sub["limit"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════════
 // 3.2 Z.ai Data Integrity (7 tests)
-// ═══════════════════════════════════════════════════════════════════════
-
 // TestIntegration_Zai_SnapshotStoredCorrectly verifies every field of a Z.ai
 // snapshot is stored and round-tripped.
 func TestIntegration_Zai_SnapshotStoredCorrectly(t *testing.T) {
@@ -1041,11 +1033,7 @@ func TestIntegration_Zai_HandlerReturnsDBData(t *testing.T) {
 		t.Errorf("tokensLimit.limit: want 200000000, got %v", tokens["limit"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════════
 // 3.3 Anthropic Data Integrity (9 tests)
-// ═══════════════════════════════════════════════════════════════════════
-
 // TestIntegration_Anthropic_SnapshotStoredCorrectly verifies every field of an
 // Anthropic snapshot is stored and round-tripped.
 func TestIntegration_Anthropic_SnapshotStoredCorrectly(t *testing.T) {
@@ -1365,11 +1353,7 @@ func TestIntegration_Anthropic_HandlerReturnsDBData(t *testing.T) {
 		t.Error("Expected at least 1 quota in response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════════
 // 3.4 Cross-Provider & Multi-Provider (5 tests)
-// ═══════════════════════════════════════════════════════════════════════
-
 // TestIntegration_CrossProvider_IndependentResets verifies that resetting one
 // provider's quota doesn't affect other providers.
 func TestIntegration_CrossProvider_IndependentResets(t *testing.T) {
@@ -1622,11 +1606,7 @@ func TestIntegration_CrossProvider_ParallelPolling(t *testing.T) {
 		t.Fatal("Missing Anthropic snapshot")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════════
 // 3.5 API Endpoint Validation (18 tests)
-// ═══════════════════════════════════════════════════════════════════════
-
 // TestIntegration_API_Providers verifies /api/providers returns configured providers.
 func TestIntegration_API_Providers(t *testing.T) {
 	h, _ := testutil.TestHandler(t)
@@ -2128,11 +2108,7 @@ func TestIntegration_API_PasswordChangeValidation(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════════
 // 3.6 Auth & Session Integration (4 tests)
-// ═══════════════════════════════════════════════════════════════════════
-
 // TestIntegration_Auth_LoginSessionDashboard tests the full auth flow:
 // login -> get session cookie -> access dashboard.
 func TestIntegration_Auth_LoginSessionDashboard(t *testing.T) {
@@ -2250,11 +2226,7 @@ func TestIntegration_Auth_ExpiredSession(t *testing.T) {
 		t.Error("Expected invalid token to be rejected")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════════
 // 3.7 Settings Data Persistence (3 tests)
-// ═══════════════════════════════════════════════════════════════════════
-
 // TestIntegration_Settings_NotificationRoundTrip verifies notification settings
 // are persisted and retrieved correctly.
 func TestIntegration_Settings_NotificationRoundTrip(t *testing.T) {
@@ -2370,11 +2342,7 @@ func TestIntegration_Settings_HiddenInsightsRoundTrip(t *testing.T) {
 		t.Error("Missing 'weekly_pace' in hidden insights")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════════
 // Additional integration tests to reach 30+
-// ═══════════════════════════════════════════════════════════════════════
-
 // TestIntegration_API_DashboardRendersWithConfig verifies dashboard HTML renders
 // with proper config (providers in template data).
 func TestIntegration_API_DashboardRendersWithConfig(t *testing.T) {

@@ -2021,7 +2021,7 @@ func TestAntigravityClient_Detect_NoProcess_ReturnsError(t *testing.T) {
 	// When connection is nil, Detect will run detectProcess.
 	// On darwin/linux it runs `ps aux` - antigravity won't be found in CI,
 	// so we expect ErrAntigravityProcessNotFound (or similar).
-	// This exercises detectProcess → detectProcessUnix (on darwin/linux).
+	// This exercises detectProcess -> detectProcessUnix (on darwin/linux).
 	logger := discardLoggerCredentials()
 	client := NewAntigravityClient(logger)
 
@@ -3157,7 +3157,7 @@ func TestParsePortsFromWindowsNetstat_ValidListeningEntry(t *testing.T) {
 }
 
 func TestParsePortsFromWindowsNetstat_NonNumericPID(t *testing.T) {
-	// When PID is not a number, strconv.Atoi fails → continue
+	// When PID is not a number, strconv.Atoi fails -> continue
 	output := "  TCP    0.0.0.0:42100         0.0.0.0:0              LISTENING       notapid\n"
 	ports := parsePortsFromWindowsNetstat(output, 42100)
 	if len(ports) != 0 {
@@ -3189,7 +3189,7 @@ func TestGroupModelsByQuota_WithResetTime(t *testing.T) {
 	}
 
 	pools := GroupModelsByQuota(models)
-	// Both models share the same fraction + reset time → same pool
+	// Both models share the same fraction + reset time -> same pool
 	if len(pools) != 1 {
 		t.Fatalf("expected 1 pool (same fraction+reset), got %d", len(pools))
 	}

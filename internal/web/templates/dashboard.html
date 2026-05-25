@@ -12,7 +12,7 @@
             {{range .Providers}}
             <button class="provider-tab {{if eq . $.CurrentProvider}}active{{end}}"
                     data-provider="{{.}}" role="tab" aria-selected="{{if eq . $.CurrentProvider}}true{{else}}false{{end}}">
-                {{if eq . "synthetic"}}Synthetic{{else if eq . "zai"}}Z.ai{{else if eq . "anthropic"}}Anthropic{{else if eq . "copilot"}}Copilot{{else if eq . "codex"}}Codex{{else if eq . "antigravity"}}Antigravity{{else if eq . "minimax"}}MiniMax{{else if eq . "gemini"}}Gemini{{else if eq . "cursor"}}Cursor{{else if eq . "api-integrations"}}API Integrations{{else if eq . "both"}}All{{else}}{{.}}{{end}}
+                {{if eq . "synthetic"}}Synthetic{{else if eq . "zai"}}Z.ai{{else if eq . "anthropic"}}Anthropic{{else if eq . "copilot"}}Copilot{{else if eq . "codex"}}Codex{{else if eq . "antigravity"}}Antigravity{{else if eq . "minimax"}}MiniMax{{else if eq . "gemini"}}Gemini{{else if eq . "cursor"}}Cursor{{else if eq . "api-integrations"}}Cost{{else if eq . "both"}}All{{else}}{{.}}{{end}}
             </button>
             {{end}}
         </div>
@@ -101,10 +101,84 @@
         <div class="quota-grid" id="quota-grid-copilot" data-provider="copilot"></div>
         {{else if eq .CurrentProvider "anthropic"}}
         <!-- Anthropic quota cards (dynamically populated by JS) -->
-        <div class="quota-grid" id="quota-grid-anthropic" data-provider="anthropic"></div>
+        <div class="quota-grid" id="quota-grid-anthropic" data-provider="anthropic">
+            <article class="quota-card quota-card-loading" aria-busy="true">
+                <header class="card-header">
+                    <h2 class="quota-title">
+                        <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
+                        <span class="loading-line title"></span>
+                    </h2>
+                    <span class="loading-spinner" aria-label="Loading"></span>
+                </header>
+                <div class="progress-stats">
+                    <span class="loading-line percent"></span>
+                    <span class="loading-line label"></span>
+                </div>
+                <div class="progress-wrapper"><div class="progress-bar"><div class="progress-fill loading-fill"></div></div></div>
+                <footer class="card-footer">
+                    <span class="loading-pill status"></span>
+                    <span class="loading-line reset"></span>
+                </footer>
+            </article>
+            <article class="quota-card quota-card-loading" aria-busy="true">
+                <header class="card-header">
+                    <h2 class="quota-title">
+                        <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+                        <span class="loading-line title"></span>
+                    </h2>
+                    <span class="loading-spinner" aria-label="Loading"></span>
+                </header>
+                <div class="progress-stats">
+                    <span class="loading-line percent"></span>
+                    <span class="loading-line label"></span>
+                </div>
+                <div class="progress-wrapper"><div class="progress-bar"><div class="progress-fill loading-fill"></div></div></div>
+                <footer class="card-footer">
+                    <span class="loading-pill status"></span>
+                    <span class="loading-line reset"></span>
+                </footer>
+            </article>
+        </div>
         {{else if eq .CurrentProvider "codex"}}
         <!-- Codex quota cards for selected profile (dynamically populated by JS) -->
-        <div class="quota-grid" id="quota-grid-codex" data-provider="codex"></div>
+        <div class="quota-grid" id="quota-grid-codex" data-provider="codex">
+            <article class="quota-card quota-card-loading" aria-busy="true">
+                <header class="card-header">
+                    <h2 class="quota-title">
+                        <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
+                        <span class="loading-line title"></span>
+                    </h2>
+                    <span class="loading-spinner" aria-label="Loading"></span>
+                </header>
+                <div class="progress-stats">
+                    <span class="loading-line percent"></span>
+                    <span class="loading-line label"></span>
+                </div>
+                <div class="progress-wrapper"><div class="progress-bar"><div class="progress-fill loading-fill"></div></div></div>
+                <footer class="card-footer">
+                    <span class="loading-pill status"></span>
+                    <span class="loading-line reset"></span>
+                </footer>
+            </article>
+            <article class="quota-card quota-card-loading" aria-busy="true">
+                <header class="card-header">
+                    <h2 class="quota-title">
+                        <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20"/></svg>
+                        <span class="loading-line title"></span>
+                    </h2>
+                    <span class="loading-spinner" aria-label="Loading"></span>
+                </header>
+                <div class="progress-stats">
+                    <span class="loading-line percent"></span>
+                    <span class="loading-line label"></span>
+                </div>
+                <div class="progress-wrapper"><div class="progress-bar"><div class="progress-fill loading-fill"></div></div></div>
+                <footer class="card-footer">
+                    <span class="loading-pill status"></span>
+                    <span class="loading-line reset"></span>
+                </footer>
+            </article>
+        </div>
         {{else if eq .CurrentProvider "antigravity"}}
         <!-- Antigravity quota cards (dynamically populated by JS) -->
         <div class="quota-grid" id="quota-grid-antigravity" data-provider="antigravity"></div>
@@ -122,7 +196,46 @@
         <div class="quota-grid" id="quota-grid-cursor" data-provider="cursor"></div>
         {{else if eq .CurrentProvider "api-integrations"}}
         <div class="api-integrations-dashboard" id="api-integrations-dashboard" data-provider="api-integrations">
-            <div class="quota-grid" id="api-integrations-grid"></div>
+            <div class="quota-grid" id="api-integrations-grid">
+                <article class="quota-card api-integrations-card quota-card-loading" aria-busy="true">
+                    <header class="card-header">
+                        <div class="quota-title-block">
+                            <h2 class="quota-title"><span class="loading-line title"></span></h2>
+                            <div class="api-integrations-header-meta">
+                                <span class="api-integrations-provider-pill"><span class="loading-line reset"></span></span>
+                            </div>
+                        </div>
+                        <span class="loading-spinner" aria-label="Loading"></span>
+                    </header>
+                    <div class="api-integrations-card-stats">
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Requests: </span><span class="loading-line label"></span></div>
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Total Tokens: </span><span class="loading-line label"></span></div>
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Input: </span><span class="loading-line label"></span></div>
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Cached Input: </span><span class="loading-line label"></span></div>
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Output: </span><span class="loading-line label"></span></div>
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Estimated Cost: </span><span class="loading-line label"></span></div>
+                    </div>
+                </article>
+                <article class="quota-card api-integrations-card quota-card-loading" aria-busy="true">
+                    <header class="card-header">
+                        <div class="quota-title-block">
+                            <h2 class="quota-title"><span class="loading-line title"></span></h2>
+                            <div class="api-integrations-header-meta">
+                                <span class="api-integrations-provider-pill"><span class="loading-line reset"></span></span>
+                            </div>
+                        </div>
+                        <span class="loading-spinner" aria-label="Loading"></span>
+                    </header>
+                    <div class="api-integrations-card-stats">
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Requests: </span><span class="loading-line label"></span></div>
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Total Tokens: </span><span class="loading-line label"></span></div>
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Input: </span><span class="loading-line label"></span></div>
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Cached Input: </span><span class="loading-line label"></span></div>
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Output: </span><span class="loading-line label"></span></div>
+                        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Estimated Cost: </span><span class="loading-line label"></span></div>
+                    </div>
+                </article>
+            </div>
         </div>
         {{else}}
         <div class="quota-grid" id="quota-grid" data-provider="{{.CurrentProvider}}">
@@ -316,6 +429,102 @@
         </div>
         {{end}}
 
+        {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex")}}
+        <section class="sessions-section platform-cost-section" id="platform-cost-section" data-provider="{{.CurrentProvider}}">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 1v22"/>
+                        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6"/>
+                    </svg>
+                    Estimated Token Cost
+                </h3>
+                <span class="table-legend">API list-price estimate from local token logs</span>
+            </header>
+            <div class="platform-cost-summary" id="platform-cost-summary">
+                <div class="platform-cost-metric primary">
+                    <span class="platform-cost-label">Estimated Cost</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Total Tokens</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Requests</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Blended Cost / 1M</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Last Seen</span>
+                    <strong>--</strong>
+                </div>
+            </div>
+            <div class="platform-cost-chart-card">
+                <div class="platform-cost-chart-header">
+                    <span id="platform-cost-chart-title">Token & Cost Growth</span>
+                    <div class="platform-cost-chart-controls">
+                        <span class="platform-cost-chart-subtitle" id="platform-cost-chart-subtitle"><span class="loading-spinner inline" aria-hidden="true"></span>Loading cost history</span>
+                        <div class="range-selector graph-mode-toggle" id="platform-cost-chart-mode-select" role="group" aria-label="Cost graph style">
+                            <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative">Cumulative</button>
+                            <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket">Per Period</button>
+                        </div>
+                        <div class="range-selector platform-cost-range-selector" role="group" aria-label="Cost graph time range">
+                            <button class="platform-cost-range-btn" type="button" data-range="1h">1h</button>
+                            <button class="platform-cost-range-btn active" type="button" data-range="6h">6h</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="24h">24h</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="7d">7d</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="30d">30d</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="all">All</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="platform-cost-chart-wrap">
+                    <div class="chart-loading-overlay" id="platform-cost-chart-loading" aria-live="polite">
+                        <span class="loading-spinner" aria-hidden="true"></span>
+                        <span>Loading cost history</span>
+                    </div>
+                    <canvas id="platform-cost-chart"></canvas>
+                    <div class="chart-empty-state" id="platform-cost-chart-empty" hidden aria-live="polite"></div>
+                </div>
+            </div>
+            <div class="platform-cost-breakdown-header">
+                <h4 class="platform-cost-breakdown-title">Cost Breakdown</h4>
+                <div class="platform-cost-breakdown-tabs" role="group" aria-label="Cost breakdown view">
+                    <button class="platform-cost-breakdown-tab active" type="button" data-cost-view="types">By Token Type</button>
+                    <button class="platform-cost-breakdown-tab" type="button" data-cost-view="models">By Model</button>
+                </div>
+            </div>
+            <div class="table-wrapper platform-cost-models">
+                <table class="data-table" id="platform-cost-models-table">
+                    <thead id="platform-cost-models-thead">
+                        <tr>
+                            <th>Model</th>
+                            <th>Effort</th>
+                            <th>Mode</th>
+                            <th>Speed</th>
+                            <th>Requests</th>
+                            <th>Total Tokens</th>
+                            <th>Input</th>
+                            <th>Cached</th>
+                            <th>Cache Write</th>
+                            <th>Output</th>
+                            <th>Reasoning</th>
+                            <th>Estimated Cost</th>
+                            <th>Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody id="platform-cost-models-tbody">
+                        <tr><td colspan="13" class="empty-state"><span class="loading-spinner inline" aria-hidden="true"></span>Loading cost telemetry...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        {{end}}
+
         {{if eq .CurrentProvider "api-integrations"}}
         <div class="api-integrations-insights-panels">
             <section class="insights-panel" id="api-integrations-all-time-insights-panel">
@@ -374,7 +583,7 @@
                         <path d="M3 3v18h18"/>
                         <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
                     </svg>
-                    {{if eq .CurrentProvider "api-integrations"}}API Integration Usage{{else}}Usage Graphs{{end}}
+                    {{if eq .CurrentProvider "api-integrations"}}Cost Over Time{{else}}Usage Graphs{{end}}
                 </h3>
                 <div class="chart-controls">
                     {{if eq .CurrentProvider "api-integrations"}}
@@ -382,9 +591,13 @@
                         <option value="tokenPerCall">Tokens per Request</option>
                         <option value="requestCount">Requests</option>
                         <option value="accumulatedTokens">Accumulated Token Use</option>
-                        <option value="totalCostUsd">Cost (where available)</option>
+                        <option value="totalCostUsd">Estimated Cost</option>
                     </select>
                     {{end}}
+                    <div class="range-selector graph-mode-toggle" id="chart-mode-select" role="group" aria-label="Graph style">
+                        <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative">Cumulative</button>
+                        <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket">Per Period</button>
+                    </div>
                     <div class="range-selector" role="group" aria-label="Time range">
                         <button class="range-btn" data-range="1h">1h</button>
                         <button class="range-btn active" data-range="6h">6h</button>
@@ -396,11 +609,50 @@
             </header>
             <div class="chart-container">
                 <canvas id="usage-chart"></canvas>
+                <div class="chart-empty-state" id="usage-chart-empty" hidden aria-live="polite"></div>
             </div>
         </section>
         {{end}}
 
         {{if eq .CurrentProvider "api-integrations"}}
+        <section class="sessions-section api-integrations-models-section" id="api-integrations-models-section">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 7h16"/>
+                        <path d="M4 12h16"/>
+                        <path d="M4 17h16"/>
+                    </svg>
+                    Model Cost Breakdown
+                </h3>
+            </header>
+            <div class="table-wrapper">
+                <table class="data-table" id="api-integrations-models-table">
+                    <thead>
+                        <tr>
+                            <th>Integration</th>
+                            <th>Model</th>
+                            <th>Effort</th>
+                            <th>Mode</th>
+                            <th>Speed</th>
+                            <th>Requests</th>
+                            <th>Total Tokens</th>
+                            <th>Input</th>
+                            <th>Cached</th>
+                            <th>Cache Write</th>
+                            <th>Output</th>
+                            <th>Reasoning</th>
+                            <th>Estimated Cost</th>
+                            <th>Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody id="api-integrations-models-tbody">
+                        <tr><td colspan="14" class="empty-state">No model usage yet.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
         <section class="sessions-section api-integrations-health-section" id="api-integrations-health-section">
             <header class="section-header">
                 <h3 class="section-title">

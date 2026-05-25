@@ -4,7 +4,7 @@ const BASE_PATH = (document.querySelector('meta[name="base-path"]') || {}).conte
 const API_BASE = BASE_PATH;
 const REFRESH_INTERVAL = 60000;
 
-// ── Lazy Loading via IntersectionObserver ──
+// Lazy Loading via IntersectionObserver
 const _lazyLoaded = new Set();
 function lazyLoadOnVisible(selector, callback) {
   const el = document.querySelector(selector);
@@ -22,7 +22,7 @@ function lazyLoadOnVisible(selector, callback) {
   observer.observe(el);
 }
 
-// ── Auth helper: redirect to login on 401 ──
+// Auth helper: redirect to login on 401
 async function authFetch(url, options) {
   // Add CSRF protection header for state-changing requests
   options = options || {};
@@ -44,7 +44,7 @@ async function authFetch(url, options) {
   return res;
 }
 
-// ── Provider State ──
+// Provider State
 function getCurrentProvider() {
   const bothView = document.getElementById('both-view') || document.getElementById('all-providers-container');
   if (bothView) return 'both';
@@ -110,7 +110,7 @@ function getBothViewProviders() {
   return [];
 }
 
-// ── Global State ──
+// Global State
 const State = {
   chart: null,
   chartSyn: null,
@@ -181,13 +181,42 @@ const State = {
   apiIntegrationsCurrent: null,
   apiIntegrationsHistory: null,
   apiIntegrationsHealth: null,
+  apiIntegrationsCurrentCacheTs: 0,
+  apiIntegrationsCurrentLoaded: false,
   apiIntegrationsVisibility: { dashboard: true },
   apiIntegrationsSelectedMetric: 'tokenPerCall',
   apiIntegrationsActiveWindow: '8d',
+  graphMode: 'cumulative',
+  platformCostChart: null,
+  platformCostMetric: 'totalCostUsd',
+  platformCostGraphMode: 'cumulative',
+  platformCostBreakdownView: 'types',
+  platformCostRange: '6h',
+  platformCostHistoryRange: null,
+  platformCostHistoryLoading: false,
+  platformCostHistoryInflightKey: null,
+  platformCostSessionHistory: null,
+  platformCostSessionTotals: null,
+  platformCostSessionModels: null,
+  platformCostHistoryCache: {},
+  platformCostPrefetchControllers: {},
+  platformCostPrefetchTimers: [],
+  platformCostRefreshTimer: null,
+  platformCostRefreshProvider: null,
 };
 
-// ── Persistence ──
+const API_INTEGRATIONS_CURRENT_CACHE_KEY = 'onwatch-api-integrations-current-v1';
+const PLATFORM_COST_HISTORY_CACHE_KEY = 'onwatch-platform-cost-history-v1';
+const PROVIDER_DATA_CACHE_KEY = 'onwatch-provider-data-cache-v1';
+const API_INTEGRATIONS_CURRENT_CACHE_TTL_MS = 60000;
+const PLATFORM_COST_HISTORY_CACHE_TTL_MS = 60000;
+const PROVIDER_CURRENT_CACHE_TTL_MS = 60000;
+const PROVIDER_HISTORY_CACHE_TTL_MS = 120000;
+const PROVIDER_INSIGHTS_CACHE_TTL_MS = 120000;
+const PLATFORM_COST_REFRESH_INTERVAL_MS = 15000;
+const PLATFORM_COST_PREFETCH_RANGES = ['1h', '6h', '24h', '7d', '30d', 'all'];
 
+// Persistence
 function loadHiddenQuotas() {
   try {
     const stored = localStorage.getItem('onwatch-hidden-quotas');
@@ -208,8 +237,273 @@ function saveHiddenQuotas() {
   }
 }
 
-// ── Codex Profile Persistence (multi-account beta) ──
+function readJSONStorage(storage, key) {
+  try {
+    const raw = storage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
 
+function writeJSONStorage(storage, key, value) {
+  try {
+    storage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    // silent - cache writes are opportunistic
+  }
+}
+
+function getCachedAPIIntegrationsCurrent(maxAgeMs = API_INTEGRATIONS_CURRENT_CACHE_TTL_MS) {
+  const cached = readJSONStorage(localStorage, API_INTEGRATIONS_CURRENT_CACHE_KEY);
+  if (!cached || !cached.ts || Date.now() - cached.ts > maxAgeMs) return null;
+  return cached;
+}
+
+function setCachedAPIIntegrationsCurrent(current, health) {
+  if (!current || typeof current !== 'object') return;
+  const payload = { ts: Date.now(), current, health: health || null };
+  State.apiIntegrationsCurrentCacheTs = payload.ts;
+  writeJSONStorage(localStorage, API_INTEGRATIONS_CURRENT_CACHE_KEY, payload);
+}
+
+function providerDataCacheKey(kind, provider, extra = '') {
+  const account = provider === 'codex'
+    ? `codex:${State.codexAccount || 1}`
+    : (provider === 'minimax' ? `minimax:${State.minimaxAccount || ''}` : '');
+  return [kind, provider || '', account, extra || ''].join(':');
+}
+
+function getProviderDataCache() {
+  const cached = readJSONStorage(sessionStorage, PROVIDER_DATA_CACHE_KEY);
+  return cached && typeof cached === 'object' ? cached : {};
+}
+
+function getCachedProviderData(kind, provider, extra = '', maxAgeMs = PROVIDER_CURRENT_CACHE_TTL_MS) {
+  const cache = getProviderDataCache();
+  const cached = cache[providerDataCacheKey(kind, provider, extra)];
+  if (!cached || !cached.ts || Date.now() - cached.ts > maxAgeMs) return null;
+  return cached;
+}
+
+function setCachedProviderData(kind, provider, extra = '', payload = {}) {
+  if (!provider || !payload) return;
+  const cache = getProviderDataCache();
+  cache[providerDataCacheKey(kind, provider, extra)] = { ts: Date.now(), ...payload };
+  writeJSONStorage(sessionStorage, PROVIDER_DATA_CACHE_KEY, cache);
+}
+
+function applyAPIIntegrationsCurrentData(current, health, options = {}) {
+  if (current && typeof current === 'object') State.apiIntegrationsCurrent = current;
+  if (health !== undefined) State.apiIntegrationsHealth = health;
+  State.apiIntegrationsCurrentLoaded = Boolean(State.apiIntegrationsCurrent);
+  const provider = getCurrentProvider();
+  if (provider === 'api-integrations') {
+    renderAPIIntegrationsCards();
+    renderAPIIntegrationsModelCosts();
+    renderAPIIntegrationsHealth();
+    renderAPIIntegrationsInsights();
+  } else if (provider === 'both') {
+    if (State.allProvidersCurrent) {
+      State.allProvidersCurrent.apiIntegrations = { current: State.apiIntegrationsCurrent || {}, health: State.apiIntegrationsHealth || null };
+      renderAllProvidersView();
+    }
+  } else if (supportsPlatformCost(provider)) {
+    renderPlatformCostPanel(provider);
+  }
+  if (!options.fromCache) {
+    const lastUpdated = document.getElementById('last-updated');
+    if (lastUpdated) lastUpdated.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+    const statusDot = document.getElementById('status-dot');
+    if (statusDot) statusDot.classList.remove('stale');
+  }
+}
+
+function loadPlatformCostHistoryCache() {
+  const cached = readJSONStorage(sessionStorage, PLATFORM_COST_HISTORY_CACHE_KEY);
+  State.platformCostHistoryCache = cached && typeof cached === 'object' ? cached : {};
+}
+
+function platformCostCacheKey(provider, range) {
+  return `${provider || ''}:${normalizePlatformCostRange(range)}`;
+}
+
+function getCachedPlatformCostHistory(provider, range, maxAgeMs = PLATFORM_COST_HISTORY_CACHE_TTL_MS) {
+  const cache = State.platformCostHistoryCache || {};
+  const cached = cache[platformCostCacheKey(provider, range)];
+  if (!cached || !cached.ts || Date.now() - cached.ts > maxAgeMs) return null;
+  return cached;
+}
+
+function setCachedPlatformCostHistory(provider, range, payload) {
+  if (!provider || !payload) return;
+  const cache = State.platformCostHistoryCache || {};
+  cache[platformCostCacheKey(provider, range)] = { ts: Date.now(), ...payload };
+  State.platformCostHistoryCache = cache;
+  writeJSONStorage(sessionStorage, PLATFORM_COST_HISTORY_CACHE_KEY, cache);
+}
+
+function applyPlatformCostHistoryPayload(range, payload) {
+  State.platformCostSessionTotals = payload.sessionTotals || {};
+  State.platformCostSessionModels = payload.sessionModels || {};
+  State.platformCostSessionHistory = payload.sessionHistory || {};
+  if (payload.apiHistory) State.apiIntegrationsHistory = payload.apiHistory;
+  State.platformCostHistoryRange = normalizePlatformCostRange(range);
+}
+
+function abortPlatformCostPrefetches(exceptProvider = '') {
+  const keepPrefix = exceptProvider ? `${exceptProvider}:` : '';
+  State.platformCostPrefetchTimers = (State.platformCostPrefetchTimers || []).filter((timer) => {
+    if (keepPrefix && timer.provider === exceptProvider) return true;
+    window.clearTimeout(timer.id);
+    return false;
+  });
+  Object.entries(State.platformCostPrefetchControllers || {}).forEach(([key, controller]) => {
+    if (keepPrefix && key.startsWith(keepPrefix)) return;
+    try {
+      controller.abort();
+    } catch (e) {
+      // silent - abort is best effort
+    }
+    delete State.platformCostPrefetchControllers[key];
+  });
+}
+
+async function fetchPlatformCostPayload(provider, range, signal) {
+  range = normalizePlatformCostRange(range);
+  const integration = platformCostIntegrationNames[provider] || '';
+  const requests = [
+    authFetch(`${API_BASE}/api/api-integrations/sessions?range=${range}&integration=${encodeURIComponent(integration)}`, { signal }),
+  ];
+  if (range !== 'all') {
+    requests.push(authFetch(`${API_BASE}/api/api-integrations/history?range=${range}`, { signal }));
+  }
+  const [sessionRes, bucketRes] = await Promise.all(requests);
+  let sessionHistory = {};
+  let sessionTotals = {};
+  let sessionModels = {};
+  let apiHistory = null;
+  if (sessionRes.ok) {
+    const sessionData = await sessionRes.json();
+    sessionTotals = sessionData && typeof sessionData === 'object' ? (sessionData._totals || {}) : {};
+    sessionModels = sessionData && typeof sessionData === 'object' ? (sessionData._models || {}) : {};
+    if (sessionData && typeof sessionData === 'object') {
+      delete sessionData._totals;
+      delete sessionData._models;
+    }
+    sessionHistory = sessionData || {};
+  }
+  if (bucketRes && bucketRes.ok) {
+    apiHistory = await bucketRes.json();
+  }
+  return { sessionHistory, sessionTotals, sessionModels, apiHistory };
+}
+
+async function prefetchPlatformCostRange(provider, range, options = {}) {
+  if (!supportsPlatformCost(provider)) return;
+  range = normalizePlatformCostRange(range);
+  const key = platformCostCacheKey(provider, range);
+  if (!options.force && getCachedPlatformCostHistory(provider, range)) return;
+  if (State.platformCostPrefetchControllers[key]) return;
+  if (getCurrentProvider() !== provider) return;
+
+  const controller = new AbortController();
+  State.platformCostPrefetchControllers[key] = controller;
+  try {
+    const payload = await fetchPlatformCostPayload(provider, range, controller.signal);
+    if (controller.signal.aborted || getCurrentProvider() !== provider) return;
+    setCachedPlatformCostHistory(provider, range, payload);
+    if (normalizePlatformCostRange(State.platformCostRange || State.currentRange || '6h') === range && !State.platformCostHistoryLoading) {
+      applyPlatformCostHistoryPayload(range, payload);
+      renderPlatformCostPanel(provider);
+    }
+  } catch (e) {
+    if (!controller.signal.aborted) {
+      // silent - background warming should never disturb foreground data
+    }
+  } finally {
+    if (State.platformCostPrefetchControllers[key] === controller) {
+      delete State.platformCostPrefetchControllers[key];
+    }
+  }
+}
+
+function prefetchPlatformCostRanges(provider, options = {}) {
+  if (!supportsPlatformCost(provider) || getCurrentProvider() !== provider) return;
+  State.platformCostPrefetchTimers = (State.platformCostPrefetchTimers || []).filter((timer) => {
+    if (timer.provider !== provider) return true;
+    window.clearTimeout(timer.id);
+    return false;
+  });
+  abortPlatformCostPrefetches(provider);
+  const activeRange = normalizePlatformCostRange(State.platformCostRange || State.currentRange || '6h');
+  const ranges = [...PLATFORM_COST_PREFETCH_RANGES].sort((a, b) => {
+    if (a === activeRange) return -1;
+    if (b === activeRange) return 1;
+    return PLATFORM_COST_PREFETCH_RANGES.indexOf(a) - PLATFORM_COST_PREFETCH_RANGES.indexOf(b);
+  });
+  let delay = options.delayMs || 0;
+  ranges.forEach((range) => {
+    const timeoutId = window.setTimeout(() => {
+      State.platformCostPrefetchTimers = (State.platformCostPrefetchTimers || [])
+        .filter(timer => timer.id !== timeoutId);
+      if (getCurrentProvider() !== provider) {
+        abortPlatformCostPrefetches();
+        return;
+      }
+      prefetchPlatformCostRange(provider, range, options);
+    }, delay);
+    State.platformCostPrefetchTimers.push({ id: timeoutId, provider });
+    delay += 250;
+  });
+}
+
+function startPlatformCostRefreshLoop(provider) {
+  if (!supportsPlatformCost(provider)) return;
+  if (State.platformCostRefreshProvider && State.platformCostRefreshProvider !== provider) {
+    abortPlatformCostPrefetches();
+  }
+  State.platformCostRefreshProvider = provider;
+  if (State.platformCostRefreshTimer) return;
+  State.platformCostRefreshTimer = window.setInterval(() => {
+    const currentProvider = getCurrentProvider();
+    if (currentProvider !== State.platformCostRefreshProvider || !supportsPlatformCost(currentProvider)) {
+      window.clearInterval(State.platformCostRefreshTimer);
+      State.platformCostRefreshTimer = null;
+      State.platformCostRefreshProvider = null;
+      abortPlatformCostPrefetches();
+      return;
+    }
+    prefetchPlatformCostRanges(currentProvider, { force: false });
+  }, PLATFORM_COST_REFRESH_INTERVAL_MS);
+}
+
+window.addEventListener('pagehide', () => {
+  abortPlatformCostPrefetches();
+  if (State.platformCostRefreshTimer) {
+    window.clearInterval(State.platformCostRefreshTimer);
+    State.platformCostRefreshTimer = null;
+  }
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    abortPlatformCostPrefetches();
+    if (State.platformCostRefreshTimer) {
+      window.clearInterval(State.platformCostRefreshTimer);
+      State.platformCostRefreshTimer = null;
+    }
+    State.platformCostRefreshProvider = null;
+    return;
+  }
+  const provider = getCurrentProvider();
+  if (supportsPlatformCost(provider)) {
+    startPlatformCostRefreshLoop(provider);
+    prefetchPlatformCostRanges(provider, { delayMs: 500 });
+  }
+});
+
+// Codex Profile Persistence (multi-account beta)
 function loadCodexAccount() {
   try {
     const stored = localStorage.getItem('onwatch-codex-account');
@@ -377,8 +671,7 @@ function codexAccountParam() {
   return State.codexAccount ? `&account=${encodeURIComponent(State.codexAccount)}` : '';
 }
 
-// ── MiniMax Account Persistence (multi-account) ──
-
+// MiniMax Account Persistence (multi-account)
 function loadMiniMaxAccount() {
   try {
     const stored = localStorage.getItem('onwatch-minimax-account');
@@ -518,8 +811,7 @@ function minimaxAccountParam() {
   return State.minimaxAccount ? `&account=${encodeURIComponent(State.minimaxAccount)}` : '';
 }
 
-// ── Insight Visibility (DB-persisted) ──
-
+// Insight Visibility (DB-persisted)
 // Cross-provider insight correlation map (mirrors backend)
 const insightCorrelations = [
   ['cycle_utilization', 'token_budget'],
@@ -608,8 +900,7 @@ async function unhideInsight(key) {
   fetchDeepInsights();
 }
 
-// ── Provider Persistence ──
-
+// Provider Persistence
 function loadDefaultProvider() {
   try {
     return localStorage.getItem('onwatch-default-provider') || 'both';
@@ -621,8 +912,17 @@ function loadDefaultProvider() {
 function saveDefaultProvider(provider) {
   try {
     localStorage.setItem('onwatch-default-provider', provider);
+    document.cookie = `onwatch-default-provider=${encodeURIComponent(provider)}; Path=${BASE_PATH || '/'}; Max-Age=31536000; SameSite=Lax`;
   } catch (e) {
     // silent
+  }
+}
+
+function hasDefaultProviderCookie() {
+  try {
+    return document.cookie.split(';').some(part => part.trim().startsWith('onwatch-default-provider='));
+  } catch (e) {
+    return false;
   }
 }
 
@@ -635,11 +935,12 @@ function loadAllDashboardDensity() {
 }
 
 function applyForkPreferences(prefs = {}) {
-  const defaultProvider = (prefs.default_provider || loadDefaultProvider() || 'both').toString().trim().toLowerCase();
+  const hasDefaultProvider = Object.prototype.hasOwnProperty.call(prefs, 'default_provider');
+  const defaultProvider = hasDefaultProvider ? (prefs.default_provider || 'both').toString().trim().toLowerCase() : '';
   const density = (prefs.all_dashboard_density || loadAllDashboardDensity() || 'compact').toString().trim().toLowerCase();
   const normalizedDensity = density === 'comfortable' ? 'comfortable' : 'compact';
 
-  if (defaultProvider) {
+  if (hasDefaultProvider && defaultProvider) {
     saveDefaultProvider(defaultProvider);
     const select = document.getElementById('settings-default-provider');
     if (select && select.value !== defaultProvider) select.value = defaultProvider;
@@ -673,10 +974,16 @@ function normalizeAPIIntegrationsMetric(metric) {
   return apiIntegrationsMetricOptions.has(value) ? value : 'tokenPerCall';
 }
 
+function normalizeGraphMode(mode) {
+  return String(mode || '').trim() === 'bucket' ? 'bucket' : 'cumulative';
+}
+
 function loadAPIIntegrationsPreferences() {
   try {
     const metric = localStorage.getItem('onwatch-api-integrations-metric');
     State.apiIntegrationsSelectedMetric = normalizeAPIIntegrationsMetric(metric);
+    State.graphMode = normalizeGraphMode(localStorage.getItem('onwatch-graph-mode'));
+    State.platformCostGraphMode = normalizeGraphMode(localStorage.getItem('onwatch-platform-cost-graph-mode'));
     const activeWindow = localStorage.getItem('onwatch-api-integrations-active-window');
     if (activeWindow) {
       State.apiIntegrationsActiveWindow = activeWindow;
@@ -689,6 +996,22 @@ function loadAPIIntegrationsPreferences() {
 function saveAPIIntegrationsMetric(metric) {
   try {
     localStorage.setItem('onwatch-api-integrations-metric', normalizeAPIIntegrationsMetric(metric));
+  } catch (e) {
+    // silent
+  }
+}
+
+function saveGraphMode(mode) {
+  try {
+    localStorage.setItem('onwatch-graph-mode', normalizeGraphMode(mode));
+  } catch (e) {
+    // silent
+  }
+}
+
+function savePlatformCostGraphMode(mode) {
+  try {
+    localStorage.setItem('onwatch-platform-cost-graph-mode', normalizeGraphMode(mode));
   } catch (e) {
     // silent
   }
@@ -820,7 +1143,7 @@ const anthropicChartColorFallback = [
   { border: '#EC4899', bg: 'rgba(236, 72, 153, 0.08)' }
 ];
 
-// ── Copilot display names (mirrors backend CopilotDisplayName) ──
+// Copilot display names (mirrors backend CopilotDisplayName)
 const copilotDisplayNames = {
   premium_interactions: 'Premium Requests',
   chat: 'Chat',
@@ -1039,8 +1362,7 @@ const geminiChartColorFallback = [
   { border: '#81C995', bg: 'rgba(129, 201, 149, 0.08)' },
 ];
 
-// ── Renewal Categories for Cycle Overview ──
-
+// Renewal Categories for Cycle Overview
 const renewalCategories = {
   anthropic: [
     { label: '5-Hour', groupBy: 'five_hour' },
@@ -1139,117 +1461,7 @@ function getQuotaDisplayName(quotaKey, provider) {
   return overviewQuotaDisplayNames[quotaKey] || quotaKey;
 };
 
-// ── Anthropic Dynamic Card Rendering ──
-
-// ── Anthropic Promo ──
-
-function isAnthropicPeakHours(promo) {
-  const now = new Date();
-  const etStr = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
-  const et = new Date(etStr);
-  const hour = et.getHours();
-  const day = et.getDay();
-  const isWeekday = day >= 1 && day <= 5;
-  return promo.peakWeekdaysOnly ? (isWeekday && hour >= promo.peakStartHourET && hour < promo.peakEndHourET) : false;
-}
-
-// Compute minutes until the next peak/off-peak transition in ET
-function promoMinutesUntilTransition(promo) {
-  const now = new Date();
-  const etStr = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
-  const et = new Date(etStr);
-  const hour = et.getHours();
-  const min = et.getMinutes();
-  const day = et.getDay(); // 0=Sun, 6=Sat
-  const isWeekday = day >= 1 && day <= 5;
-  const isPeak = promo.peakWeekdaysOnly ? (isWeekday && hour >= promo.peakStartHourET && hour < promo.peakEndHourET) : false;
-
-  let totalMin;
-  if (isPeak) {
-    // Currently peak - countdown to peak end (peakEndHourET today)
-    totalMin = (promo.peakEndHourET - hour - 1) * 60 + (60 - min);
-  } else if (isWeekday && hour < promo.peakStartHourET) {
-    // Before peak today - countdown to peak start
-    totalMin = (promo.peakStartHourET - hour - 1) * 60 + (60 - min);
-  } else {
-    // After peak on weekday, or weekend - countdown to next weekday peak start
-    let daysToAdd;
-    if (day === 5) daysToAdd = 3;      // Fri after peak -> Mon
-    else if (day === 6) daysToAdd = 2;  // Sat -> Mon
-    else if (day === 0) daysToAdd = 1;  // Sun -> Mon
-    else daysToAdd = 1;                 // Weekday after peak -> next day
-    totalMin = (daysToAdd - 1) * 1440 + (24 - hour - 1) * 60 + (60 - min) + promo.peakStartHourET * 60;
-  }
-
-  // Cap at promo end date if provided (empty string = ongoing, no cap).
-  if (promo.endsAt) {
-    const promoEnd = new Date(promo.endsAt);
-    if (!isNaN(promoEnd.getTime())) {
-      const promoEndMin = Math.floor((promoEnd - now) / 60000);
-      if (promoEndMin > 0 && promoEndMin < totalMin) totalMin = promoEndMin;
-    }
-  }
-
-  return Math.max(0, totalMin);
-}
-
-// Format minutes into a compact countdown string
-function formatPromoCountdown(minutes) {
-  if (minutes <= 0) return '';
-  if (minutes >= 1440) {
-    const d = Math.floor(minutes / 1440);
-    const h = Math.floor((minutes % 1440) / 60);
-    return h > 0 ? d + 'd ' + h + 'h' : d + 'd';
-  }
-  if (minutes >= 60) {
-    const h = Math.floor(minutes / 60);
-    const m = minutes % 60;
-    return m > 0 ? h + 'h ' + m + 'm' : h + 'h';
-  }
-  return minutes + 'm';
-}
-
-// Build the full promo label text with countdown.
-// Renders "Peak hours till <countdown to peak end>" or "Off-peak hours till
-// <countdown to next peak start>" so users always know how long the current
-// state lasts.
-function promoLabelWithCountdown(promo) {
-  const label = isAnthropicPeakHours(promo) ? 'Peak hours' : 'Off-peak hours';
-  const mins = promoMinutesUntilTransition(promo);
-  const countdown = formatPromoCountdown(mins);
-  return countdown ? label + ' till ' + countdown : label;
-}
-
-// Store current promo for card rendering
-let _anthropicPromo = null;
-
-function updateAnthropicPromoState(promo) {
-  _anthropicPromo = promo || null;
-  refreshPromoTags();
-  // Re-evaluate every 30s for countdown updates (no API call)
-  if (window._promoInterval) clearInterval(window._promoInterval);
-  if (_anthropicPromo) {
-    window._promoInterval = setInterval(refreshPromoTags, 30000);
-  }
-}
-
-function refreshPromoTags() {
-  document.querySelectorAll('.promo-tag-inline').forEach(el => {
-    if (!_anthropicPromo) { el.remove(); return; }
-    const isPeak = isAnthropicPeakHours(_anthropicPromo);
-    el.className = 'promo-tag-inline ' + (isPeak ? 'promo-peak' : 'promo-offpeak');
-    el.textContent = promoLabelWithCountdown(_anthropicPromo);
-  });
-}
-
-function promoTagHTML() {
-  if (!_anthropicPromo) return '';
-  const isPeak = isAnthropicPeakHours(_anthropicPromo);
-  const cls = isPeak ? 'promo-peak' : 'promo-offpeak';
-  const text = promoLabelWithCountdown(_anthropicPromo);
-  return `<a class="promo-tag-inline ${cls}" href="https://www.reddit.com/r/ClaudeAI/comments/1s4idaq/update_on_session_limits/" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="${escapeHTML(_anthropicPromo.description)}">${text}</a>`;
-}
-
+// Anthropic Dynamic Card Rendering
 function renderAnthropicQuotaCards(quotas, containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -1292,7 +1504,6 @@ function renderAnthropicQuotaCards(quotas, containerId) {
           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
           ${statusCfg.label}
         </span>
-        ${promoTagHTML()}
         <span class="reset-time" id="${resetId}">${q.resetsAt ? 'Resets: ' + formatDateTime(q.resetsAt) : ''}</span>
       </footer>
     </article>`;
@@ -1512,8 +1723,7 @@ async function loadAnthropicModalCycles(quotaName) {
   } catch (err) { /* modal cycles error - non-critical */ }
 }
 
-// ── Copilot Dynamic Card Rendering ──
-
+// Copilot Dynamic Card Rendering
 function renderCopilotQuotaCards(quotas, containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -1927,8 +2137,7 @@ async function loadCopilotModalCycles(quotaName) {
   } catch (err) { /* modal cycles error - non-critical */ }
 }
 
-// ── Antigravity Dynamic Card Rendering ──
-
+// Antigravity Dynamic Card Rendering
 // Antigravity model icons by model ID pattern
 const antigravityQuotaIcons = {
   'claude': '<path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>',
@@ -2087,8 +2296,7 @@ function updateAntigravityCard(quota) {
   }
 }
 
-// ── Gemini Quota Cards ──
-
+// Gemini Quota Cards
 function renderGeminiQuotaCards(quotas, containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -2476,8 +2684,7 @@ async function loadAntigravityModalCycles(groupKey) {
   } catch (err) { /* modal cycles error - non-critical */ }
 }
 
-// ── Codex Dynamic Card Rendering ──
-
+// Codex Dynamic Card Rendering
 function renderCodexQuotaCards(quotas, containerId, planType) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -2824,8 +3031,7 @@ async function loadCodexModalCycles(quotaName) {
   } catch (err) { /* modal cycles error - non-critical */ }
 }
 
-// ── Utilities ──
-
+// Utilities
 function formatDuration(seconds) {
   if (seconds < 0) return 'Resetting...';
   const totalHours = Math.floor(seconds / 3600);
@@ -2871,6 +3077,29 @@ function formatDateTime(isoString) {
   return d.toLocaleString('en-US', opts);
 }
 
+function platformCostTimeScale(range) {
+  if (range === 'all' || range === '30d' || range === '7d') {
+    return { unit: 'day', displayFormats: { day: 'MMM d', hour: 'MMM d, HH:mm', minute: 'MMM d, HH:mm' } };
+  }
+  if (range === '24h') {
+    return { unit: 'hour', displayFormats: { hour: 'HH:mm', minute: 'HH:mm', day: 'MMM d' } };
+  }
+  if (range === '1h') {
+    return { unit: 'minute', displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' } };
+  }
+  return { unit: 'hour', displayFormats: { hour: 'HH:mm', minute: 'HH:mm', day: 'MMM d' } };
+}
+
+function laterDateString(current, candidate) {
+  if (!candidate) return current || null;
+  if (!current) return candidate;
+  const currentTime = Date.parse(current);
+  const candidateTime = Date.parse(candidate);
+  if (!Number.isFinite(currentTime)) return candidate;
+  if (!Number.isFinite(candidateTime)) return current;
+  return candidateTime > currentTime ? candidate : current;
+}
+
 function formatChartXAxisLabel(isoOrLabel, range) {
   if (!isoOrLabel) return '';
 
@@ -2905,12 +3134,11 @@ function getThemeColors() {
   };
 }
 
-// ── Timezone Badge & Selector ──
-
+// Timezone Badge & Selector
 // Active timezone (empty = browser default)
 let activeTimezone = '';
 
-// Legacy → canonical timezone aliases
+// Legacy -> canonical timezone aliases
 const TZ_ALIASES = {
   'Asia/Calcutta': 'Asia/Kolkata',
   'US/Eastern': 'America/New_York',
@@ -2921,7 +3149,7 @@ const TZ_ALIASES = {
 
 function normalizeTz(tz) { return TZ_ALIASES[tz] || tz; }
 
-// Curated timezone list sorted by UTC offset (descending: east → west).
+// Curated timezone list sorted by UTC offset (descending: east -> west).
 // India (Asia/Kolkata) is always present.
 const TZ_LIST = (() => {
   const base = [
@@ -3122,8 +3350,7 @@ async function selectTz(tz, picker, badge) {
   }
 }
 
-// ── Theme ──
-
+// Theme
 function initTheme() {
   const toggle = document.getElementById('theme-toggle');
   if (!toggle) return;
@@ -3210,8 +3437,7 @@ function initLayoutToggle() {
   }
 }
 
-// ── Card Updates ──
-
+// Card Updates
 function updateCard(quotaType, data, suffix) {
   const key = suffix ? `${quotaType}_${suffix}` : quotaType;
   const prev = State.currentQuotas[key];
@@ -3322,13 +3548,142 @@ function startCountdowns() {
   }, 1000);
 }
 
-// ── Data Fetching ──
+// Data Fetching
+function applyProviderCurrentPayload(provider, data, apiIntegrationsCurrentData = null, apiIntegrationsHealthData = null, requestAccount = null, options = {}) {
+  if (provider === 'codex' && requestAccount !== null && State.codexAccount !== requestAccount) return;
+
+  if (provider === 'both') {
+    if (apiIntegrationsCurrentData || apiIntegrationsHealthData) {
+      data.apiIntegrations = { current: apiIntegrationsCurrentData || {}, health: apiIntegrationsHealthData || null };
+      State.apiIntegrationsCurrent = apiIntegrationsCurrentData || {};
+      State.apiIntegrationsHealth = apiIntegrationsHealthData || null;
+    }
+    State.allProvidersCurrent = data;
+    renderAllProvidersView();
+  } else if (provider === 'copilot') {
+    if (data.quotas) {
+      const container = document.getElementById('quota-grid-copilot');
+      if (container && container.children.length === 0) {
+        renderCopilotQuotaCards(data.quotas, 'quota-grid-copilot');
+      }
+      data.quotas.forEach(q => updateCopilotCard(q));
+    }
+  } else if (provider === 'anthropic') {
+    if (data.quotas) {
+      const container = document.getElementById('quota-grid-anthropic');
+      const renderedCount = container ? container.querySelectorAll('.quota-card.anthropic-card').length : 0;
+      if (container && (container.children.length === 0 || renderedCount !== data.quotas.length)) {
+        renderAnthropicQuotaCards(data.quotas, 'quota-grid-anthropic');
+      }
+      data.quotas.forEach(q => updateAnthropicCard(q));
+      if (State.anthropicSessionQuotas.length === 0) {
+        State.anthropicSessionQuotas = sortQuotaKeysForProvider(data.quotas.map(q => q.name), 'anthropic').slice(0, 3);
+        updateAnthropicSessionHeaders();
+      }
+    }
+  } else if (provider === 'codex') {
+    fetchCodexUsage({ mode: 'codex', data });
+  } else if (provider === 'antigravity') {
+    if (data.quotas) {
+      const container = document.getElementById('quota-grid-antigravity');
+      if (container && container.children.length === 0) {
+        renderAntigravityQuotaCards(data.quotas, 'quota-grid-antigravity');
+      }
+      data.quotas.forEach(q => updateAntigravityCard(q));
+    }
+  } else if (provider === 'minimax') {
+    if (data.quotas) {
+      const container = document.getElementById('quota-grid-minimax');
+      if (container && container.children.length !== data.quotas.length) {
+        renderMiniMaxQuotaCards(data.quotas, 'quota-grid-minimax');
+      } else if (container && container.children.length === 0) {
+        renderMiniMaxQuotaCards(data.quotas, 'quota-grid-minimax');
+      } else {
+        data.quotas.forEach(q => updateMiniMaxCard(q));
+      }
+    }
+  } else if (provider === 'gemini') {
+    if (data.quotas) {
+      const container = document.getElementById('quota-grid-gemini');
+      if (container && container.children.length === 0) {
+        renderGeminiQuotaCards(data.quotas, 'quota-grid-gemini');
+      }
+      data.quotas.forEach(q => updateGeminiCard(q));
+    }
+  } else if (provider === 'cursor') {
+    if (data.quotas) {
+      renderCursorQuotaCards(data.quotas || [], 'quota-grid-cursor');
+    }
+  } else if (provider === 'openrouter') {
+    if (data.credits) {
+      const container = document.getElementById('quota-grid-openrouter');
+      if (container && container.children.length === 0) {
+        renderOpenRouterCard(data.credits, 'quota-grid-openrouter');
+      } else {
+        updateOpenRouterCard(data.credits);
+      }
+    }
+  } else if (provider === 'zai') {
+    updateCard('tokensLimit', data.tokensLimit);
+    updateCard('timeLimit', data.timeLimit);
+    updateCard('toolCalls', data.toolCalls);
+  } else {
+    updateCard('subscription', data.subscription);
+    updateCard('search', data.search);
+    updateCard('toolCalls', data.toolCalls);
+  }
+
+  if (supportsPlatformCost(provider)) {
+    if (apiIntegrationsCurrentData) {
+      State.apiIntegrationsCurrent = apiIntegrationsCurrentData;
+      if (apiIntegrationsHealthData) State.apiIntegrationsHealth = apiIntegrationsHealthData;
+    }
+    renderPlatformCostPanel(provider);
+  }
+
+  if (!options.fromCache) {
+    const lastUpdated = document.getElementById('last-updated');
+    if (lastUpdated) {
+      lastUpdated.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+    }
+    const statusDot = document.getElementById('status-dot');
+    if (statusDot) statusDot.classList.remove('stale');
+  }
+}
 
 async function fetchCurrent() {
   const requestProvider = getCurrentProvider();
   const requestAccount = requestProvider === 'codex' ? State.codexAccount : null;
   const requestSeq = (State.currentRequestSeq || 0) + 1;
   State.currentRequestSeq = requestSeq;
+
+  if (requestProvider === 'api-integrations' || requestProvider === 'both' || supportsPlatformCost(requestProvider)) {
+    const cached = getCachedAPIIntegrationsCurrent();
+    if (cached) {
+      requestAnimationFrame(() => {
+        if (State.currentRequestSeq !== requestSeq) return;
+        if (getCurrentProvider() !== requestProvider) return;
+        applyAPIIntegrationsCurrentData(cached.current || {}, cached.health || null, { fromCache: true });
+      });
+    }
+  }
+  if (requestProvider !== 'api-integrations') {
+    const cached = getCachedProviderData('current', requestProvider, '', PROVIDER_CURRENT_CACHE_TTL_MS);
+    if (cached && cached.data) {
+      requestAnimationFrame(() => {
+        if (State.currentRequestSeq !== requestSeq) return;
+        if (getCurrentProvider() !== requestProvider) return;
+        applyProviderCurrentPayload(
+          requestProvider,
+          cached.data,
+          cached.apiIntegrationsCurrent || null,
+          cached.apiIntegrationsHealth || null,
+          requestAccount,
+          { fromCache: true }
+        );
+      });
+    }
+  }
 
   try {
     if (requestProvider === 'api-integrations') {
@@ -3342,16 +3697,8 @@ async function fetchCurrent() {
       requestAnimationFrame(() => {
         if (State.currentRequestSeq !== requestSeq) return;
         if (getCurrentProvider() !== requestProvider) return;
-        State.apiIntegrationsCurrent = currentData;
-        State.apiIntegrationsHealth = healthData;
-        renderAPIIntegrationsCards();
-        renderAPIIntegrationsHealth();
-        renderAPIIntegrationsInsights();
-
-        const lastUpdated = document.getElementById('last-updated');
-        if (lastUpdated) lastUpdated.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
-        const statusDot = document.getElementById('status-dot');
-        if (statusDot) statusDot.classList.remove('stale');
+        setCachedAPIIntegrationsCurrent(currentData, healthData);
+        applyAPIIntegrationsCurrentData(currentData, healthData);
       });
       return;
     }
@@ -3362,7 +3709,7 @@ async function fetchCurrent() {
 
     let apiIntegrationsCurrentData = null;
     let apiIntegrationsHealthData = null;
-    if (requestProvider === 'both' && State.apiIntegrationsVisibility?.dashboard !== false) {
+    if ((requestProvider === 'both' || supportsPlatformCost(requestProvider)) && State.apiIntegrationsVisibility?.dashboard !== false) {
       try {
         const [apiIntegrationsCurrentRes, apiIntegrationsHealthRes] = await Promise.all([
           authFetch(`${API_BASE}/api/api-integrations/current`),
@@ -3370,9 +3717,13 @@ async function fetchCurrent() {
         ]);
         if (apiIntegrationsCurrentRes.ok) apiIntegrationsCurrentData = await apiIntegrationsCurrentRes.json();
         if (apiIntegrationsHealthRes.ok) apiIntegrationsHealthData = await apiIntegrationsHealthRes.json();
+        if (apiIntegrationsCurrentData) {
+          setCachedAPIIntegrationsCurrent(apiIntegrationsCurrentData, apiIntegrationsHealthData);
+        }
       } catch (e) {
         // silent - API integrations summary should not break all-provider current load
       }
+      State.apiIntegrationsCurrentLoaded = true;
     }
 
     requestAnimationFrame(() => {
@@ -3380,101 +3731,12 @@ async function fetchCurrent() {
       if (getCurrentProvider() !== requestProvider) return;
       if (requestProvider === 'codex' && State.codexAccount !== requestAccount) return;
 
-      const provider = requestProvider;
-      if (provider === 'both') {
-        if (apiIntegrationsCurrentData || apiIntegrationsHealthData) {
-          data.apiIntegrations = { current: apiIntegrationsCurrentData || {}, health: apiIntegrationsHealthData || null };
-          State.apiIntegrationsCurrent = apiIntegrationsCurrentData || {};
-          State.apiIntegrationsHealth = apiIntegrationsHealthData || null;
-        }
-        State.allProvidersCurrent = data;
-        renderAllProvidersView();
-      } else if (provider === 'copilot') {
-        // Copilot response: { capturedAt: ..., quotas: [...] }
-        if (data.quotas) {
-          const container = document.getElementById('quota-grid-copilot');
-          if (container && container.children.length === 0) {
-            renderCopilotQuotaCards(data.quotas, 'quota-grid-copilot');
-          }
-          data.quotas.forEach(q => updateCopilotCard(q));
-        }
-      } else if (provider === 'anthropic') {
-        // Anthropic response: { capturedAt: ..., quotas: [...], promo?: {...} }
-        // Set promo state before rendering cards so promoTagHTML() works
-        updateAnthropicPromoState(data.promo || null);
-        if (data.quotas) {
-          const container = document.getElementById('quota-grid-anthropic');
-          if (container && container.children.length === 0) {
-            renderAnthropicQuotaCards(data.quotas, 'quota-grid-anthropic');
-          }
-          data.quotas.forEach(q => updateAnthropicCard(q));
-          // Store quota names for session table headers using Anthropic display order.
-          if (State.anthropicSessionQuotas.length === 0) {
-            State.anthropicSessionQuotas = sortQuotaKeysForProvider(data.quotas.map(q => q.name), 'anthropic').slice(0, 3);
-            updateAnthropicSessionHeaders();
-          }
-        }
-      } else if (provider === 'codex') {
-        fetchCodexUsage({ mode: 'codex', data });
-      } else if (provider === 'antigravity') {
-        // Antigravity response: { capturedAt: ..., quotas: [...] }
-        if (data.quotas) {
-          const container = document.getElementById('quota-grid-antigravity');
-          if (container && container.children.length === 0) {
-            renderAntigravityQuotaCards(data.quotas, 'quota-grid-antigravity');
-          }
-          data.quotas.forEach(q => updateAntigravityCard(q));
-        }
-      } else if (provider === 'minimax') {
-        if (data.quotas) {
-          const container = document.getElementById('quota-grid-minimax');
-          if (container && container.children.length !== data.quotas.length) {
-            renderMiniMaxQuotaCards(data.quotas, 'quota-grid-minimax');
-          } else if (container && container.children.length === 0) {
-            renderMiniMaxQuotaCards(data.quotas, 'quota-grid-minimax');
-          } else {
-            data.quotas.forEach(q => updateMiniMaxCard(q));
-          }
-        }
-      } else if (provider === 'gemini') {
-        if (data.quotas) {
-          const container = document.getElementById('quota-grid-gemini');
-          if (container && container.children.length === 0) {
-            renderGeminiQuotaCards(data.quotas, 'quota-grid-gemini');
-          }
-          data.quotas.forEach(q => updateGeminiCard(q));
-        }
-      } else if (provider === 'cursor') {
-        if (data.quotas) {
-          renderCursorQuotaCards(data.quotas || [], 'quota-grid-cursor');
-        }
-      } else if (provider === 'openrouter') {
-        if (data.credits) {
-          const container = document.getElementById('quota-grid-openrouter');
-          if (container && container.children.length === 0) {
-            renderOpenRouterCard(data.credits, 'quota-grid-openrouter');
-          } else {
-            updateOpenRouterCard(data.credits);
-          }
-        }
-      } else if (provider === 'zai') {
-        updateCard('tokensLimit', data.tokensLimit);
-        updateCard('timeLimit', data.timeLimit);
-        updateCard('toolCalls', data.toolCalls);
-      } else {
-        updateCard('subscription', data.subscription);
-        updateCard('search', data.search);
-        updateCard('toolCalls', data.toolCalls);
-      }
-
-      const lastUpdated = document.getElementById('last-updated');
-      if (lastUpdated) {
-        lastUpdated.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
-      }
-
-      const statusDot = document.getElementById('status-dot');
-      if (statusDot) statusDot.classList.remove('stale');
-
+      setCachedProviderData('current', requestProvider, '', {
+        data,
+        apiIntegrationsCurrent: apiIntegrationsCurrentData,
+        apiIntegrationsHealth: apiIntegrationsHealthData,
+      });
+      applyProviderCurrentPayload(requestProvider, data, apiIntegrationsCurrentData, apiIntegrationsHealthData, requestAccount);
     });
   } catch (err) {
     // fetch error - cards show fallback state
@@ -3544,8 +3806,7 @@ async function fetchCodexUsage(options = {}) {
 }
 
 
-// ── Anthropic Session Table Header Updates ──
-
+// Anthropic Session Table Header Updates
 // Mapping from sorted quota API keys to the 3 positional session columns (sub, search, tool)
 // Backend sorts ActiveQuotaNames() alphabetically and maps first 3 to these DB columns.
 const anthropicSessionSlots = ['sub', 'search', 'tool'];
@@ -3577,8 +3838,7 @@ function getAnthropicSessionLabel(idx) {
   return fallbacks[idx] || `Quota ${idx + 1}`;
 }
 
-// ── Deep Insights (Interactive Cards) ──
-
+// Deep Insights (Interactive Cards)
 // Title-specific icons for insight cards (Feather/Lucide style)
 const insightTitleIcons = {
   'Avg Cycle Utilization': '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>', // clock/gauge
@@ -3623,6 +3883,47 @@ const insightIcons = {
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>'
 };
 
+function applyDeepInsightsPayload(provider, data, statsEl, cardsEl) {
+  if (provider === 'both') {
+    State.allProvidersInsights = data;
+    renderAllProvidersView();
+    return;
+  }
+
+  let allStats = data.stats || [];
+  let allInsights = data.insights || [];
+
+  allStats = getSingleViewInsightStats(provider, allStats);
+  allInsights = getSingleViewInsightCards(provider, allInsights);
+
+  const expandedHidden = expandCorrelatedKeys(State.hiddenInsights);
+  allInsights = allInsights.filter(i => !i.key || !expandedHidden.has(i.key));
+
+  if (statsEl) {
+    statsEl.innerHTML = allStats.length > 0 ? allStats.map(s =>
+      (s.metric || s.severity || s.desc)
+        ? buildEnrichedStatHTML(s)
+        : `<div class="insight-stat">
+            <div class="insight-stat-value">${escapeHTML(s.value)}</div>
+            <div class="insight-stat-label">${escapeHTML(s.label)}</div>
+            ${s.sublabel ? `<div class="insight-stat-sublabel">${escapeHTML(s.sublabel)}</div>` : ''}
+          </div>`
+    ).join('') : '';
+    statsEl.querySelectorAll('.insight-card').forEach(card => {
+      attachInsightCardEvents(card, statsEl);
+    });
+    statsEl.querySelectorAll('.insight-eye-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleInsightVisibility(btn.dataset.key);
+      });
+    });
+  }
+
+  renderInsightCards(cardsEl, allInsights);
+  renderHiddenInsightsBadge();
+}
+
 async function fetchDeepInsights() {
   const provider = getCurrentProvider();
   if (provider === 'api-integrations') {
@@ -3644,6 +3945,17 @@ async function fetchDeepInsights() {
     renderInsightsRangePills();
   }
 
+  const cached = getCachedProviderData('insights', requestProvider, requestRange, PROVIDER_INSIGHTS_CACHE_TTL_MS);
+  if (cached && cached.data) {
+    requestAnimationFrame(() => {
+      if (State.insightsRequestSeq !== requestSeq) return;
+      if (getCurrentProvider() !== requestProvider) return;
+      if (requestProvider === 'codex' && State.codexAccount !== requestAccount) return;
+      if (State.insightsRange !== requestRange) return;
+      applyDeepInsightsPayload(requestProvider, cached.data, statsEl, cardsEl, { fromCache: true });
+    });
+  }
+
   try {
     const res = await authFetch(`${API_BASE}/api/insights?${providerParam()}&range=${requestRange}`);
     if (!res.ok) throw new Error('Failed to fetch insights');
@@ -3654,50 +3966,8 @@ async function fetchDeepInsights() {
     if (requestProvider === 'codex' && State.codexAccount !== requestAccount) return;
     if (State.insightsRange !== requestRange) return;
 
-    if (requestProvider === 'both') {
-      State.allProvidersInsights = data;
-      renderAllProvidersView();
-      return;
-    } else {
-      // Single provider mode
-      let allStats = data.stats || [];
-      let allInsights = data.insights || [];
-
-      allStats = getSingleViewInsightStats(requestProvider, allStats);
-      allInsights = getSingleViewInsightCards(requestProvider, allInsights);
-
-      // Filter out hidden insights
-      const expandedHidden = expandCorrelatedKeys(State.hiddenInsights);
-      allInsights = allInsights.filter(i => !i.key || !expandedHidden.has(i.key));
-
-      // Render stats
-      if (statsEl) {
-        statsEl.innerHTML = allStats.length > 0 ? allStats.map(s =>
-          (s.metric || s.severity || s.desc)
-            ? buildEnrichedStatHTML(s)
-            : `<div class="insight-stat">
-                <div class="insight-stat-value">${escapeHTML(s.value)}</div>
-                <div class="insight-stat-label">${escapeHTML(s.label)}</div>
-                ${s.sublabel ? `<div class="insight-stat-sublabel">${escapeHTML(s.sublabel)}</div>` : ''}
-              </div>`
-        ).join('') : '';
-        statsEl.querySelectorAll('.insight-card').forEach(card => {
-          attachInsightCardEvents(card, statsEl);
-        });
-        statsEl.querySelectorAll('.insight-eye-btn').forEach(btn => {
-          btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleInsightVisibility(btn.dataset.key);
-          });
-        });
-      }
-
-      // Render insight cards
-      renderInsightCards(cardsEl, allInsights);
-    }
-
-    // Render hidden insights badge
-    renderHiddenInsightsBadge();
+    setCachedProviderData('insights', requestProvider, requestRange, { data });
+    applyDeepInsightsPayload(requestProvider, data, statsEl, cardsEl);
   } catch (err) {
     // insights fetch error - panel shows fallback state
     if (State.insightsRequestSeq !== requestSeq) return;
@@ -3755,8 +4025,11 @@ function renderAPIIntegrationsInsights() {
   const activeThreshold = now - activeWindowMs;
 
   const totals = entries.reduce((acc, entry) => {
-    acc.inputTokens += Number(entry.promptTokens || 0);
-    acc.outputTokens += Number(entry.completionTokens || 0);
+    acc.inputTokens += Number(entry.inputTokens || entry.promptTokens || 0);
+    acc.cachedInputTokens += Number(entry.cachedInputTokens || 0);
+    acc.cacheCreationInputTokens += Number(entry.cacheCreationInputTokens || 0);
+    acc.outputTokens += Number(entry.outputTokens || entry.completionTokens || 0);
+    acc.reasoningTokens += Number(entry.reasoningTokens || 0);
     acc.totalTokens += Number(entry.totalTokens || 0);
     acc.requestCount += Number(entry.requestCount || 0);
     const lastCapturedAt = entry.lastCapturedAt ? Date.parse(entry.lastCapturedAt) : NaN;
@@ -3766,7 +4039,10 @@ function renderAPIIntegrationsInsights() {
     return acc;
   }, {
     inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheCreationInputTokens: 0,
     outputTokens: 0,
+    reasoningTokens: 0,
     totalTokens: 0,
     requestCount: 0,
     activeIntegrations: 0,
@@ -3787,8 +4063,8 @@ function renderAPIIntegrationsInsights() {
     let integrationRecentTokens = 0;
     typedRows.forEach((row, index) => {
       const value = Number(row.totalTokens || 0);
-      const inputValue = Number(row.promptTokens || 0);
-      const outputValue = Number(row.completionTokens || 0);
+      const inputValue = Number(row.inputTokens || row.promptTokens || 0);
+      const outputValue = Number(row.outputTokens || row.completionTokens || 0);
       const requestValue = Number(row.requestCount || 0);
       recentWindowTokens += value;
       recentInputTokens += inputValue;
@@ -3819,8 +4095,11 @@ function renderAPIIntegrationsInsights() {
     { label: 'Tracked Integrations', value: formatNumber(entries.length), sublabel: 'Integrations seen since records started' },
     { label: 'Providers', value: formatNumber(totalProviders.size), sublabel: 'Distinct providers across all integrations' },
     { label: 'Total Tokens', value: formatNumber(totals.totalTokens), sublabel: 'Accumulated token volume' },
-    { label: 'Input Tokens', value: formatNumber(totals.inputTokens), sublabel: 'Prompt-side tokens across all time' },
+    { label: 'Input Tokens', value: formatNumber(totals.inputTokens), sublabel: 'Billable non-cached input tokens' },
+    { label: 'Cached Input', value: formatNumber(totals.cachedInputTokens), sublabel: 'Discounted prompt-cache reads' },
+    { label: 'Cache Write', value: formatNumber(totals.cacheCreationInputTokens), sublabel: 'Prompt-cache creation tokens' },
     { label: 'Output Tokens', value: formatNumber(totals.outputTokens), sublabel: 'Completion-side tokens across all time' },
+    { label: 'Reasoning Tokens', value: formatNumber(totals.reasoningTokens), sublabel: 'Reasoning tokens reported by providers' },
     { label: 'API Calls', value: formatNumber(totals.requestCount), sublabel: 'Recorded requests since this dataset started' },
     { label: 'Average Tokens per Call', value: avgTokensPerCall > 0 ? formatNumber(avgTokensPerCall.toFixed(1)) : '0.0', sublabel: 'Average request size across all recorded calls' },
   ].map((stat) => `
@@ -4035,8 +4314,7 @@ function attachInsightCardEvents(card, container) {
   });
 }
 
-// ── Hidden Insights Badge ──
-
+// Hidden Insights Badge
 function renderHiddenInsightsBadge() {
   const panel = document.querySelector('.insights-panel');
   if (!panel) return;
@@ -4075,8 +4353,7 @@ function renderHiddenInsightsBadge() {
   }
 }
 
-// ── Chart: Crosshair Plugin ──
-
+// Chart: Crosshair Plugin
 const crosshairPlugin = {
   id: 'crosshair',
   afterDraw(chart, args, options) {
@@ -4095,8 +4372,7 @@ const crosshairPlugin = {
   }
 };
 
-// ── Chart Init & Update ──
-
+// Chart Init & Update
 function computeYMax(datasets, chart, options = {}) {
   // Filter out hidden datasets - check both ds.hidden and chart metadata visibility
   const visibleDatasets = datasets.filter((ds, i) => {
@@ -4129,6 +4405,299 @@ function computeYMax(datasets, chart, options = {}) {
   const yMax = Math.min(Math.max(Math.ceil(paddedMax / 5) * 5, 10), cap);
 
   return yMax;
+}
+
+function niceAxisMax(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return undefined;
+  const magnitude = 10 ** Math.floor(Math.log10(numeric));
+  const normalized = numeric / magnitude;
+  let nice;
+  if (normalized <= 1) {
+    nice = 1;
+  } else if (normalized <= 2) {
+    nice = 2;
+  } else if (normalized <= 2.5) {
+    nice = 2.5;
+  } else if (normalized <= 5) {
+    nice = 5;
+  } else {
+    nice = 10;
+  }
+  return nice * magnitude;
+}
+
+function chartRangeUsageLabel(range) {
+  const rangeKey = String(range || '6h').toLowerCase();
+  const labels = {
+    '1h': 'past 1 hour',
+    '6h': 'past 6 hours',
+    '24h': 'past 24 hours',
+    '7d': 'past 7 days',
+    '15d': 'past 15 days',
+    '30d': 'past 30 days',
+    all: 'all time',
+  };
+  return labels[rangeKey] || `past ${rangeKey}`;
+}
+
+function noUsageMessage(range) {
+  return `No usage for the ${chartRangeUsageLabel(range)}.`;
+}
+
+function datasetsHaveNonZeroValue(datasets) {
+  return (datasets || []).some((dataset) => (dataset.data || []).some((point) => {
+    const value = typeof point === 'number' ? point : Number(point && point.y);
+    return Number.isFinite(value) && value > 0;
+  }));
+}
+
+function setChartEmptyState(canvasID, empty, message) {
+  const canvas = document.getElementById(canvasID);
+  const emptyEl = document.getElementById(`${canvasID}-empty`);
+  if (canvas) canvas.hidden = Boolean(empty);
+  if (!emptyEl) return;
+  emptyEl.hidden = !empty;
+  if (empty) {
+    emptyEl.textContent = message || 'No usage in this range.';
+  }
+}
+
+function graphBucketIntervalMs(range) {
+  const rangeKey = String(range || '6h').toLowerCase();
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const intervals = {
+    '1h': 10 * minute,
+    '6h': hour,
+    '24h': 3 * hour,
+    '7d': day,
+    '15d': 2 * day,
+    '30d': 3 * day,
+    all: 7 * day,
+  };
+  return intervals[rangeKey] || hour;
+}
+
+function graphBucketCount(range) {
+  const rangeKey = String(range || '6h').toLowerCase();
+  const counts = {
+    '1h': 6,
+    '6h': 6,
+    '24h': 8,
+    '7d': 7,
+    '15d': 8,
+    '30d': 10,
+  };
+  return counts[rangeKey] || null;
+}
+
+function graphBarSizing(range, datasetCount = 2) {
+  const bucketCount = graphBucketCount(range) || 8;
+  const seriesCount = Math.max(1, datasetCount);
+  const density = bucketCount * seriesCount;
+  return {
+    categoryPercentage: density > 28 ? 0.58 : density > 18 ? 0.66 : 0.74,
+    barPercentage: density > 28 ? 0.54 : density > 18 ? 0.62 : 0.7,
+    maxBarThickness: density > 28 ? 18 : density > 18 ? 26 : 44,
+  };
+}
+
+function graphBucketUnit(range) {
+  return graphBucketIntervalMs(range) >= 24 * 60 * 60 * 1000 ? 'day' : 'hour';
+}
+
+function graphBucketTimeUnit(range) {
+  const intervalMs = graphBucketIntervalMs(range);
+  if (intervalMs < 60 * 60 * 1000) return 'minute';
+  if (intervalMs < 24 * 60 * 60 * 1000) return 'hour';
+  return 'day';
+}
+
+function graphBucketStart(date, range) {
+  const source = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(source.getTime())) return null;
+  const intervalMs = graphBucketIntervalMs(range);
+  if (intervalMs === 24 * 60 * 60 * 1000) {
+    const bucket = new Date(source);
+    bucket.setHours(0, 0, 0, 0);
+    return bucket;
+  }
+  return new Date(Math.floor(source.getTime() / intervalMs) * intervalMs);
+}
+
+function graphBucketEnd(date, range) {
+  const start = graphBucketStart(date, range);
+  return start ? new Date(start.getTime() + graphBucketIntervalMs(range)) : null;
+}
+
+function graphBucketRange(range, points = []) {
+  const intervalMs = graphBucketIntervalMs(range);
+  const rangeKey = String(range || '6h').toLowerCase();
+  const validTimes = points
+    .map(point => point && point.x instanceof Date ? point.x.getTime() : new Date(point && point.x).getTime())
+    .filter(time => Number.isFinite(time));
+  let start;
+  let end;
+  if (rangeKey === 'all' && validTimes.length > 0) {
+    start = new Date(Math.min(...validTimes));
+    end = new Date(Math.max(...validTimes) + intervalMs);
+  } else {
+    const count = graphBucketCount(range) || 6;
+    end = graphBucketStart(new Date(), range) || new Date();
+    start = new Date(end.getTime() - (count - 1) * intervalMs);
+  }
+  const startBucket = graphBucketStart(start, range) || start;
+  const endBucket = graphBucketStart(end, range) || end;
+  const buckets = [];
+  for (let time = startBucket.getTime(); time <= endBucket.getTime(); time += intervalMs) {
+    const periodStart = new Date(time);
+    const periodEnd = new Date(time + intervalMs);
+    buckets.push({
+      x: new Date(time + intervalMs / 2),
+      y: 0,
+      count: 0,
+      periodStart,
+      periodEnd,
+    });
+    if (buckets.length > 400) break;
+  }
+  return buckets;
+}
+
+function formatPeriodTooltipTitle(point) {
+  if (!point || !point.raw || !point.raw.periodStart || !point.raw.periodEnd) {
+    return point && point.label ? point.label : '';
+  }
+  const start = point.raw.periodStart instanceof Date ? point.raw.periodStart : new Date(point.raw.periodStart);
+  const end = point.raw.periodEnd instanceof Date ? point.raw.periodEnd : new Date(point.raw.periodEnd);
+  const sameDay = start.toDateString() === end.toDateString();
+  const dateOptions = { month: 'short', day: 'numeric' };
+  const timeOptions = { hour: 'numeric', minute: '2-digit' };
+  const startDate = start.toLocaleDateString([], dateOptions);
+  const startTime = start.toLocaleTimeString([], timeOptions);
+  const endDate = end.toLocaleDateString([], dateOptions);
+  const endTime = end.toLocaleTimeString([], timeOptions);
+  return sameDay
+    ? `${startDate}, ${startTime} - ${endTime}`
+    : `${startDate}, ${startTime} - ${endDate}, ${endTime}`;
+}
+
+function aggregateDatasetForBuckets(dataset, range) {
+  const strategy = dataset._barStrategy || 'delta';
+  const points = (dataset.data || [])
+    .filter(point => point && point.x != null && point.y != null && Number.isFinite(Number(point.y)))
+    .map(point => ({ x: point.x instanceof Date ? point.x : new Date(point.x), y: Number(point.y) }))
+    .filter(point => !Number.isNaN(point.x.getTime()))
+    .sort((a, b) => a.x.getTime() - b.x.getTime());
+  const buckets = new Map(graphBucketRange(range, points).map(bucket => [bucket.periodStart.toISOString(), bucket]));
+  let previous = null;
+  points.forEach((point) => {
+    const bucketStart = graphBucketStart(point.x, range);
+    if (!bucketStart) return;
+    let value = point.y;
+    if (strategy === 'delta') {
+      value = previous == null ? 0 : Math.max(0, point.y - previous);
+      previous = point.y;
+    }
+    const key = bucketStart.toISOString();
+    const intervalMs = graphBucketIntervalMs(range);
+    const existing = buckets.get(key) || {
+      x: new Date(bucketStart.getTime() + intervalMs / 2),
+      y: 0,
+      count: 0,
+      periodStart: bucketStart,
+      periodEnd: new Date(bucketStart.getTime() + intervalMs),
+    };
+    existing.y += value;
+    existing.count += 1;
+    buckets.set(key, existing);
+  });
+  return [...buckets.values()]
+    .sort((a, b) => a.x.getTime() - b.x.getTime())
+    .map(bucket => ({
+      x: bucket.x,
+      y: strategy === 'average' && bucket.count > 0 ? bucket.y / bucket.count : bucket.y,
+      periodStart: bucket.periodStart,
+      periodEnd: bucket.periodEnd,
+    }));
+}
+
+function applyGraphModeToDatasets(datasets, range, mode = State.graphMode) {
+  const graphMode = normalizeGraphMode(mode);
+  const barSizing = graphBarSizing(range, (datasets || []).length);
+  return (datasets || []).map((dataset) => {
+    if (graphMode !== 'bucket') {
+      return {
+        ...dataset,
+        type: 'line',
+        fill: dataset.fill !== undefined ? dataset.fill : true,
+        tension: dataset.tension !== undefined ? dataset.tension : 0.4,
+        pointRadius: dataset.pointRadius !== undefined ? dataset.pointRadius : 0,
+        pointHoverRadius: dataset.pointHoverRadius !== undefined ? dataset.pointHoverRadius : 4,
+      };
+    }
+    const color = dataset.borderColor || dataset.backgroundColor || '#14B8A6';
+    return {
+      ...dataset,
+      type: 'bar',
+      data: aggregateDatasetForBuckets(dataset, range),
+      fill: false,
+      tension: 0,
+      borderWidth: 1,
+      borderColor: color,
+      backgroundColor: dataset.backgroundColor || color,
+      pointRadius: 0,
+      pointHoverRadius: 0,
+      spanGaps: false,
+      segment: undefined,
+      barPercentage: barSizing.barPercentage,
+      categoryPercentage: barSizing.categoryPercentage,
+      maxBarThickness: barSizing.maxBarThickness,
+      borderRadius: 4,
+      borderSkipped: false,
+    };
+  });
+}
+
+function applyChartGraphMode(chart, range, mode = State.graphMode) {
+  if (!chart) return;
+  const graphMode = normalizeGraphMode(mode);
+  chart.config.type = graphMode === 'bucket' ? 'bar' : 'line';
+  if (chart.options?.scales?.x) {
+    chart.options.scales.x.offset = graphMode === 'bucket';
+    if (graphMode === 'bucket') {
+      const datasets = chart.data?.datasets || [];
+      const firstDataset = datasets.find(dataset => Array.isArray(dataset.data) && dataset.data.length > 0);
+      const first = firstDataset?.data?.[0];
+      const last = firstDataset?.data?.[firstDataset.data.length - 1];
+      chart.options.scales.x.min = first?.periodStart;
+      chart.options.scales.x.max = last?.periodEnd;
+    } else {
+      delete chart.options.scales.x.min;
+      delete chart.options.scales.x.max;
+    }
+  }
+}
+
+function setMainChartDatasets(datasets, range, options = {}) {
+  if (!State.chart) return;
+  const mode = normalizeGraphMode(options.mode || State.graphMode);
+  const chartDatasets = applyGraphModeToDatasets(datasets, range, mode);
+  if (!datasetsHaveNonZeroValue(chartDatasets)) {
+    setChartEmptyState('usage-chart', true, options.emptyMessage || noUsageMessage(range));
+    State.chart.data.datasets = [];
+    State.chart.update('none');
+    return;
+  }
+  setChartEmptyState('usage-chart', false);
+  State.chart.data.datasets = chartDatasets;
+  applyChartGraphMode(State.chart, range, mode);
+  updateTimeScale(State.chart, range);
+  State.chartYMax = computeYMax(State.chart.data.datasets, State.chart, { cap: options.cap });
+  State.chart.options.scales.y.max = State.chartYMax;
+  State.chart.update();
 }
 
 function initChart() {
@@ -4184,7 +4753,7 @@ function initChart() {
 
   const isAPIIntegrations = provider === 'api-integrations';
   State.chart = new Chart(ctx, {
-    type: 'line',
+    type: normalizeGraphMode(State.graphMode) === 'bucket' ? 'bar' : 'line',
     data: {
       labels: [],
       datasets: defaultDatasets
@@ -4221,6 +4790,7 @@ function initChart() {
           displayColors: true,
           usePointStyle: true,
           callbacks: {
+            title: items => items && items.length > 0 ? formatPeriodTooltipTitle(items[0]) : '',
             label: function(ctx) {
               if (ctx.parsed.y == null) return null;
               if (isAPIIntegrations) {
@@ -4241,6 +4811,7 @@ function initChart() {
       scales: {
         x: {
           type: 'time',
+          offset: normalizeGraphMode(State.graphMode) === 'bucket',
           time: { unit: 'hour', displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' } },
           grid: { color: colors.grid, drawBorder: false },
           ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' }
@@ -4311,6 +4882,34 @@ function updateChartTheme() {
   State.chart.update('none');
 }
 
+function applyProviderHistoryPayload(provider, range, data, apiIntegrationsHistoryData = null) {
+  if (provider === 'api-integrations') {
+    State.apiIntegrationsHistory = data;
+    State.platformCostHistoryRange = range;
+    renderAPIIntegrationsChart(range);
+    renderAPIIntegrationsInsights();
+    return;
+  }
+
+  if (apiIntegrationsHistoryData) {
+    State.apiIntegrationsHistory = apiIntegrationsHistoryData;
+    State.platformCostHistoryRange = range;
+  }
+
+  if (provider === 'both') {
+    if (apiIntegrationsHistoryData) {
+      data.apiIntegrations = apiIntegrationsHistoryData;
+    }
+    State.allProvidersHistory = data;
+    renderAllProvidersView();
+    return;
+  }
+
+  if (supportsPlatformCost(provider)) {
+    renderPlatformCostChart(provider, range);
+  }
+}
+
 async function fetchHistory(range) {
   if (range === undefined) {
     const activeBtn = document.querySelector('.range-btn[data-range].active');
@@ -4323,6 +4922,17 @@ async function fetchHistory(range) {
   const requestSeq = (State.historyRequestSeq || 0) + 1;
   State.historyRequestSeq = requestSeq;
 
+  const cached = getCachedProviderData('history', requestProvider, range, PROVIDER_HISTORY_CACHE_TTL_MS);
+  if (cached && cached.data) {
+    requestAnimationFrame(() => {
+      if (State.historyRequestSeq !== requestSeq) return;
+      if (getCurrentProvider() !== requestProvider) return;
+      if (requestProvider === 'codex' && State.codexAccount !== requestAccount) return;
+      if (State.currentRange !== requestRange) return;
+      applyProviderHistoryPayload(requestProvider, range, cached.data, cached.apiIntegrationsHistory || null);
+    });
+  }
+
   try {
     if (requestProvider === 'api-integrations') {
       const res = await authFetch(`${API_BASE}/api/api-integrations/history?range=${range}`);
@@ -4334,6 +4944,8 @@ async function fetchHistory(range) {
       if (State.currentRange !== requestRange) return;
 
       State.apiIntegrationsHistory = data;
+      State.platformCostHistoryRange = range;
+      setCachedProviderData('history', requestProvider, range, { data });
       renderAPIIntegrationsChart(range);
       renderAPIIntegrationsInsights();
       return;
@@ -4361,11 +4973,18 @@ async function fetchHistory(range) {
     if (State.currentRange !== requestRange) return;
 
     const provider = requestProvider;
+    if (apiIntegrationsHistoryData) {
+      State.apiIntegrationsHistory = apiIntegrationsHistoryData;
+      State.platformCostHistoryRange = range;
+    }
+    setCachedProviderData('history', requestProvider, range, {
+      data,
+      apiIntegrationsHistory: apiIntegrationsHistoryData,
+    });
 
     if (provider === 'both') {
       if (apiIntegrationsHistoryData) {
         data.apiIntegrations = apiIntegrationsHistoryData;
-        State.apiIntegrationsHistory = apiIntegrationsHistoryData;
       }
       State.allProvidersHistory = data;
       renderAllProvidersView();
@@ -4400,11 +5019,8 @@ async function fetchHistory(range) {
         };
         datasets.push(mainDataset);
       });
-      State.chart.data.datasets = datasets;
-      updateTimeScale(State.chart, range);
-      State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
-      State.chart.options.scales.y.max = State.chartYMax;
-      State.chart.update();
+      setMainChartDatasets(datasets, range);
+      renderPlatformCostChart(provider, range);
       return;
     }
 
@@ -4438,16 +5054,13 @@ async function fetchHistory(range) {
         };
         datasets.push(mainDataset);
       });
-      State.chart.data.datasets = datasets;
-      updateTimeScale(State.chart, range);
-      State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
-      State.chart.options.scales.y.max = State.chartYMax;
-      State.chart.update();
+      setMainChartDatasets(datasets, range);
+      renderPlatformCostChart(provider, range);
       return;
     }
 
     if (provider === 'copilot') {
-      // Copilot history: array of { capturedAt, quotas: [...] } → transform to flat object
+      // Copilot history: array of { capturedAt, quotas: [...] } -> transform to flat object
       // Extract quota keys and build datasets
       const quotaKeys = new Set();
       historyRows.forEach(d => {
@@ -4477,11 +5090,8 @@ async function fetchHistory(range) {
         };
         datasets.push(mainDataset);
       });
-      State.chart.data.datasets = datasets;
-      updateTimeScale(State.chart, range);
-      State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
-      State.chart.options.scales.y.max = State.chartYMax;
-      State.chart.update();
+      setMainChartDatasets(datasets, range);
+      renderPlatformCostChart(provider, range);
       return;
     }
 
@@ -4515,11 +5125,8 @@ async function fetchHistory(range) {
           segment: getSegmentStyle(gapSegments, color.border)
         });
       });
-      State.chart.data.datasets = datasets;
-      updateTimeScale(State.chart, range);
-      State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
-      State.chart.options.scales.y.max = State.chartYMax;
-      State.chart.update();
+      setMainChartDatasets(datasets, range);
+      renderPlatformCostChart(provider, range);
       return;
     }
 
@@ -4551,11 +5158,8 @@ async function fetchHistory(range) {
         };
         datasets.push(mainDataset);
       });
-      State.chart.data.datasets = datasets;
-      updateTimeScale(State.chart, range);
-      State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
-      State.chart.options.scales.y.max = State.chartYMax;
-      State.chart.update();
+      setMainChartDatasets(datasets, range);
+      renderPlatformCostChart(provider, range);
       return;
     }
 
@@ -4587,11 +5191,8 @@ async function fetchHistory(range) {
         };
         datasets.push(mainDataset);
       });
-      State.chart.data.datasets = datasets;
-      updateTimeScale(State.chart, range);
-      State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
-      State.chart.options.scales.y.max = State.chartYMax;
-      State.chart.update();
+      setMainChartDatasets(datasets, range);
+      renderPlatformCostChart(provider, range);
       return;
     }
 
@@ -4632,11 +5233,7 @@ async function fetchHistory(range) {
           segment: getSegmentStyle(gapSegments, color.border)
         });
       });
-      State.chart.data.datasets = datasets;
-      updateTimeScale(State.chart, range);
-      State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
-      State.chart.options.scales.y.max = State.chartYMax;
-      State.chart.update();
+      setMainChartDatasets(datasets, range);
       return;
     }
 
@@ -4665,11 +5262,7 @@ async function fetchHistory(range) {
         };
         datasets.push(mainDataset);
       });
-      State.chart.data.datasets = datasets;
-      updateTimeScale(State.chart, range);
-      State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
-      State.chart.options.scales.y.max = State.chartYMax;
-      State.chart.update();
+      setMainChartDatasets(datasets, range);
       return;
     }
 
@@ -4704,17 +5297,14 @@ async function fetchHistory(range) {
       State.chart.data.datasets = datasets;
     }
 
-    updateTimeScale(State.chart, range);
-    State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
-    State.chart.options.scales.y.max = State.chartYMax;
-    State.chart.update();
+    setMainChartDatasets(State.chart.data.datasets, range);
+    renderPlatformCostChart(provider, range);
   } catch (err) {
     // history fetch error - chart shows empty state
   }
 }
 
-// ── "Both" Mode: Provider Cards ──
-
+// "Both" Mode: Provider Cards
 const bothProviderNames = {
   synthetic: 'Synthetic',
   zai: 'Z.ai',
@@ -4725,7 +5315,7 @@ const bothProviderNames = {
   minimax: 'MiniMax',
   gemini: 'Gemini',
   cursor: 'Cursor',
-  'api-integrations': 'API Integrations',
+  'api-integrations': 'Cost',
 };
 
 function escapeHTML(value) {
@@ -4908,11 +5498,6 @@ function buildAllProviderEntries() {
       order.push(provider);
     });
 
-  // Set Anthropic promo state so promoTagHTML() works in both view
-  if (current.anthropic && current.anthropic.promo) {
-    updateAnthropicPromoState(current.anthropic.promo);
-  }
-
   const entries = [];
 
   const addProviderEntry = (provider) => {
@@ -4930,7 +5515,7 @@ function buildAllProviderEntries() {
       entries.push({
         provider: 'api-integrations',
         cardKey: sanitizeProviderCardKey('api-integrations-summary'),
-        title: 'API Integrations',
+        title: 'Cost',
         summary,
         health: payload.health || null,
         summaryOnly: true,
@@ -5033,7 +5618,6 @@ function buildAllProviderEntries() {
         : (provider === 'cursor'
           ? (payload.planName || toTitleCase(payload.accountType || ''))
           : toTitleCase(payload.planType || '')),
-      promoHtml: provider === 'anthropic' && payload.promo ? promoTagHTML() : '',
       planType: payload.planType || '',
       quotas: normalizeBothQuotas(provider, payload),
       insights: insights[provider] || { stats: [], insights: [] },
@@ -5067,7 +5651,7 @@ function renderProviderKPIHTML(quotas, cardKey) {
     const countdown = timeUntil > 0 ? formatDuration(timeUntil) : '--:--';
 
     // Register in State.currentQuotas so startCountdowns can tick this down.
-    // Key format: kpiv-<cardKey>-<quotaName> → countdown element id: countdown-kpiv-<cardKey>-<quotaName>
+    // Key format: kpiv-<cardKey>-<quotaName> -> countdown element id: countdown-kpiv-<cardKey>-<quotaName>
     const safeQuotaName = sanitizeProviderCardKey(quota.name || '');
     const stateKey = cardKey ? `kpiv-${cardKey}-${safeQuotaName}` : null;
     if (stateKey) {
@@ -5352,8 +5936,9 @@ function renderAPIIntegrationsCards() {
     const providerSummary = providerNames.length > 2
       ? `${providerNames.slice(0, 2).join(', ')} +${providerNames.length - 2}`
       : providerNames.join(', ');
-    const promptTokens = Number(entry.promptTokens || 0);
-    const completionTokens = Number(entry.completionTokens || 0);
+    const inputTokens = Number(entry.inputTokens || entry.promptTokens || 0);
+    const outputTokens = Number(entry.outputTokens || entry.completionTokens || 0);
+    const cachedInputTokens = Number(entry.cachedInputTokens || 0);
     return `<article class="quota-card api-integrations-card">
       <header class="card-header">
         <div class="quota-title-block">
@@ -5367,11 +5952,1046 @@ function renderAPIIntegrationsCards() {
       <div class="api-integrations-card-stats">
         <div class="api-integrations-stat"><span class="api-integrations-stat-label">Requests: </span><span class="api-integrations-stat-value">${formatNumber(Number(entry.requestCount || 0))}</span></div>
         <div class="api-integrations-stat"><span class="api-integrations-stat-label">Total Tokens: </span><span class="api-integrations-stat-value">${formatNumber(Number(entry.totalTokens || 0))}</span></div>
-        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Input / Output: </span><span class="api-integrations-stat-value">${formatNumber(promptTokens)} / ${formatNumber(completionTokens)}</span></div>
-        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Cost (where available): </span><span class="api-integrations-stat-value">${entry.totalCostUsd != null ? formatCurrencyUSD(Number(entry.totalCostUsd || 0)) : '--'}</span></div>
+        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Input: </span><span class="api-integrations-stat-value">${formatNumber(inputTokens)}</span></div>
+        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Cached Input: </span><span class="api-integrations-stat-value">${formatNumber(cachedInputTokens)}</span></div>
+        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Output: </span><span class="api-integrations-stat-value">${formatNumber(outputTokens)}</span></div>
+        <div class="api-integrations-stat"><span class="api-integrations-stat-label">Estimated Cost: </span><span class="api-integrations-stat-value">${entry.totalCostUsd != null ? formatCurrencyUSD(Number(entry.totalCostUsd || 0)) : '--'}</span></div>
       </div>
     </article>`;
   }).join('');
+}
+
+function getAPIIntegrationsModelCostRows() {
+  const rows = [];
+  getAPIIntegrationEntries().forEach((entry) => {
+    const providers = Array.isArray(entry.providers) ? entry.providers : [];
+    providers.forEach((provider) => {
+      const accounts = Array.isArray(provider.accounts) ? provider.accounts : [];
+      accounts.forEach((account) => {
+        const models = Array.isArray(account.models) ? account.models : [];
+        models.forEach((model) => {
+          const efforts = Array.isArray(model.efforts) && model.efforts.length > 0
+            ? model.efforts
+            : [{
+              reasoningEffort: 'unknown',
+              mode: 'unknown',
+              speedMode: 'unknown',
+              requestCount: model.requestCount,
+              promptTokens: model.promptTokens,
+              completionTokens: model.completionTokens,
+              totalTokens: model.totalTokens,
+              inputTokens: model.inputTokens,
+              cachedInputTokens: model.cachedInputTokens,
+              cacheCreationInputTokens: model.cacheCreationInputTokens,
+              outputTokens: model.outputTokens,
+              reasoningTokens: model.reasoningTokens,
+              totalCostUsd: model.totalCostUsd,
+              lastCapturedAt: model.lastCapturedAt,
+            }];
+          efforts.forEach((effort) => {
+            const reasoningEffort = effort.reasoningEffort || 'unknown';
+            const mode = effort.mode || 'unknown';
+            const speedMode = effort.speedMode || 'unknown';
+            const existing = rows.find(row => row.integration === entry.integration
+              && row.model === model.model
+              && row.reasoningEffort === reasoningEffort
+              && row.mode === mode
+              && row.speedMode === speedMode);
+            const target = existing || {
+              integration: entry.integration,
+              model: model.model || 'unknown',
+              reasoningEffort,
+              mode,
+              speedMode,
+              requestCount: 0,
+              promptTokens: 0,
+              completionTokens: 0,
+              totalTokens: 0,
+              inputTokens: 0,
+              cachedInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              outputTokens: 0,
+              reasoningTokens: 0,
+              totalCostUsd: null,
+              lastCapturedAt: null,
+            };
+            target.requestCount += Number(effort.requestCount || 0);
+            target.promptTokens += Number(effort.promptTokens || 0);
+            target.completionTokens += Number(effort.completionTokens || 0);
+            target.totalTokens += Number(effort.totalTokens || 0);
+            target.inputTokens += Number(effort.inputTokens || effort.promptTokens || 0);
+            target.cachedInputTokens += Number(effort.cachedInputTokens || 0);
+            target.cacheCreationInputTokens += Number(effort.cacheCreationInputTokens || 0);
+            target.outputTokens += Number(effort.outputTokens || effort.completionTokens || 0);
+            target.reasoningTokens += Number(effort.reasoningTokens || 0);
+            if (effort.totalCostUsd != null) {
+              target.totalCostUsd = Number(target.totalCostUsd || 0) + Number(effort.totalCostUsd || 0);
+            }
+            target.lastCapturedAt = laterDateString(target.lastCapturedAt, effort.lastCapturedAt);
+            if (!existing) rows.push(target);
+          });
+        });
+      });
+    });
+  });
+  return rows.sort((a, b) => Number(b.totalCostUsd || 0) - Number(a.totalCostUsd || 0)
+    || Number(b.totalTokens || 0) - Number(a.totalTokens || 0)
+    || String(a.model || '').localeCompare(String(b.model || '')));
+}
+
+function renderAPIIntegrationsModelCosts() {
+  const tbody = document.getElementById('api-integrations-models-tbody');
+  if (!tbody) return;
+  const rows = getAPIIntegrationsModelCostRows();
+  if (rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="14" class="empty-state">No model usage yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => {
+    return `<tr>
+      <td>${escapeHTML(row.integration || '--')}</td>
+      <td><code>${escapeHTML(row.model || '--')}</code></td>
+      <td>${escapeHTML(row.reasoningEffort || 'unknown')}</td>
+      <td>${escapeHTML(row.mode || 'unknown')}</td>
+      <td>${escapeHTML(row.speedMode || 'unknown')}</td>
+      <td>${formatNumber(Number(row.requestCount || 0))}</td>
+      <td>${formatNumber(Number(row.totalTokens || 0))}</td>
+      <td>${formatNumber(Number(row.inputTokens || 0))}</td>
+      <td>${formatNumber(Number(row.cachedInputTokens || 0))}</td>
+      <td>${formatNumber(Number(row.cacheCreationInputTokens || 0))}</td>
+      <td>${formatNumber(Number(row.outputTokens || 0))}</td>
+      <td>${formatNumber(Number(row.reasoningTokens || 0))}</td>
+      <td>${row.totalCostUsd != null ? formatCurrencyUSD(Number(row.totalCostUsd || 0)) : '--'}</td>
+      <td>${row.lastCapturedAt ? escapeHTML(formatDateTime(row.lastCapturedAt)) : '--'}</td>
+    </tr>`;
+  }).join('');
+}
+
+const platformCostIntegrationNames = {
+  anthropic: 'Claude Code',
+  codex: 'Codex CLI',
+  gemini: 'Gemini CLI',
+  antigravity: 'Antigravity',
+  cursor: 'Cursor',
+};
+
+function supportsPlatformCost(provider = getCurrentProvider()) {
+  return Boolean(platformCostIntegrationNames[provider]);
+}
+
+const platformCostMetricMeta = {
+  totalCostUsd: { label: 'Estimated Cost', title: 'Cost Over Time', bucketLabel: 'cost buckets', emptyLabel: 'No cost samples in range', format: value => formatCurrencyUSD(Number(value || 0)) },
+  totalTokens: { label: 'Total Tokens', title: 'Token Use Over Time', bucketLabel: 'token buckets', emptyLabel: 'No token samples in range', format: value => formatNumber(Number(value || 0)) },
+  inputTokens: { label: 'Input Tokens', title: 'Input Tokens Over Time', bucketLabel: 'input buckets', emptyLabel: 'No input samples in range', format: value => formatNumber(Number(value || 0)) },
+  cachedInputTokens: { label: 'Cached Input', title: 'Cached Input Over Time', bucketLabel: 'cached input buckets', emptyLabel: 'No cached input samples in range', format: value => formatNumber(Number(value || 0)) },
+  cacheCreationInputTokens: { label: 'Cache Write', title: 'Cache Write Tokens Over Time', bucketLabel: 'cache write buckets', emptyLabel: 'No cache write samples in range', format: value => formatNumber(Number(value || 0)) },
+  outputTokens: { label: 'Output Tokens', title: 'Output Tokens Over Time', bucketLabel: 'output buckets', emptyLabel: 'No output samples in range', format: value => formatNumber(Number(value || 0)) },
+  reasoningTokens: { label: 'Reasoning Tokens', title: 'Reasoning Tokens Over Time', bucketLabel: 'reasoning buckets', emptyLabel: 'No reasoning samples in range', format: value => formatNumber(Number(value || 0)) },
+};
+
+function normalizePlatformCostMetric(metric) {
+  return platformCostMetricMeta[metric] ? metric : 'totalCostUsd';
+}
+
+const tokenCostTypeMeta = {
+  inputTokens: { label: 'Input', rateKey: 'input', tokenKey: 'inputTokens' },
+  cachedInputTokens: { label: 'Cached Input', rateKey: 'cached', tokenKey: 'cachedInputTokens' },
+  cacheCreationInputTokens: { label: 'Cache Write', rateKey: 'cacheWrite', tokenKey: 'cacheCreationInputTokens' },
+  outputTokens: { label: 'Output', rateKey: 'output', tokenKey: 'outputTokens' },
+  reasoningTokens: { label: 'Reasoning Output', rateKey: 'output', tokenKey: 'reasoningTokens' },
+};
+
+const platformPricingPerMillion = {
+  'claude-sonnet-4-5': { input: 3, cached: 0.30, cacheWrite: 3.75, output: 15 },
+  'claude-sonnet-4-20250514': { input: 3, cached: 0.30, cacheWrite: 3.75, output: 15 },
+  'claude-sonnet-4-6': { input: 3, cached: 0.30, cacheWrite: 3.75, output: 15 },
+  'claude-opus-4-7': { input: 15, cached: 1.50, cacheWrite: 18.75, output: 75 },
+  'claude-haiku-4-5-20251001': { input: 1, cached: 0.10, cacheWrite: 1.25, output: 5 },
+  'gpt-5.5': { input: 5, cached: 0.50, cacheWrite: 5, output: 30 },
+  'gpt-5.2-codex': { input: 1.75, cached: 0.175, cacheWrite: 1.75, output: 14 },
+  'google/gemini-2.5-pro': { input: 1.25, cached: 0.125, cacheWrite: 1.5625, output: 10 },
+  'gemini-2.5-pro': { input: 1.25, cached: 0.125, cacheWrite: 1.5625, output: 10 },
+  'gemini-2.5-flash': { input: 0.30, cached: 0.03, cacheWrite: 0.375, output: 2.50 },
+};
+
+function normalizeModelPricingKey(model) {
+  return String(model || '').trim().toLowerCase();
+}
+
+function getPlatformPricing(model) {
+  const key = normalizeModelPricingKey(model);
+  if (platformPricingPerMillion[key]) return platformPricingPerMillion[key];
+  if (platformPricingPerMillion[`google/${key}`]) return platformPricingPerMillion[`google/${key}`];
+  const foundKey = Object.keys(platformPricingPerMillion).find(candidate => candidate.endsWith(`/${key}`));
+  return foundKey ? platformPricingPerMillion[foundKey] : null;
+}
+
+function computeRowCostBreakdown(row) {
+  const pricing = getPlatformPricing(row.model);
+  const totalCost = row.totalCostUsd != null ? Number(row.totalCostUsd || 0) : null;
+  const result = {
+    inputTokens: { tokens: Number(row.inputTokens || 0), ratePerMillion: null, cost: null },
+    cachedInputTokens: { tokens: Number(row.cachedInputTokens || 0), ratePerMillion: null, cost: null },
+    cacheCreationInputTokens: { tokens: Number(row.cacheCreationInputTokens || 0), ratePerMillion: null, cost: null },
+    outputTokens: { tokens: Number(row.outputTokens || 0), ratePerMillion: null, cost: null },
+    reasoningTokens: { tokens: Number(row.reasoningTokens || 0), ratePerMillion: null, cost: null },
+    totalCost,
+    blendedRatePerMillion: null,
+    multiplier: 1,
+    priced: Boolean(pricing),
+  };
+  if (!pricing) {
+    if (totalCost != null && Number(row.totalTokens || 0) > 0) {
+      result.blendedRatePerMillion = totalCost / Number(row.totalTokens || 0) * 1000000;
+    }
+    return result;
+  }
+  let baseCost = 0;
+  Object.entries(tokenCostTypeMeta).forEach(([type, meta]) => {
+    const tokens = result[type].tokens;
+    const rate = Number(pricing[meta.rateKey] || 0);
+    result[type].ratePerMillion = rate;
+    result[type].cost = tokens * rate / 1000000;
+    baseCost += result[type].cost;
+  });
+  const multiplier = totalCost != null && baseCost > 0 ? totalCost / baseCost : 1;
+  result.multiplier = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
+  Object.keys(tokenCostTypeMeta).forEach((type) => {
+    if (result[type].ratePerMillion != null) {
+      result[type].ratePerMillion *= result.multiplier;
+      result[type].cost *= result.multiplier;
+    }
+  });
+  if (totalCost != null && Number(row.totalTokens || 0) > 0) {
+    result.blendedRatePerMillion = totalCost / Number(row.totalTokens || 0) * 1000000;
+  }
+  return result;
+}
+
+function formatRatePerMillion(value) {
+  return value == null || !Number.isFinite(Number(value)) ? '--' : `${formatCurrencyUSD(Number(value))} / 1M`;
+}
+
+function buildTokenTypeCostRows(modelRows) {
+  const totals = Object.entries(tokenCostTypeMeta).map(([type, meta]) => ({
+    type,
+    label: meta.label,
+    tokens: 0,
+    cost: 0,
+    hasCost: false,
+  }));
+  modelRows.forEach((row) => {
+    const breakdown = computeRowCostBreakdown(row);
+    totals.forEach((total) => {
+      const part = breakdown[total.type];
+      total.tokens += Number(part.tokens || 0);
+      if (part.cost != null) {
+        total.cost += Number(part.cost || 0);
+        total.hasCost = true;
+      }
+    });
+  });
+  const allCost = totals.reduce((sum, row) => sum + (row.hasCost ? row.cost : 0), 0);
+  return totals.map(row => ({
+    ...row,
+    effectiveRatePerMillion: row.tokens > 0 && row.hasCost ? row.cost / row.tokens * 1000000 : null,
+    share: allCost > 0 && row.hasCost ? row.cost / allCost : null,
+  }));
+}
+
+function getPlatformCostEntry(provider = getCurrentProvider()) {
+  const integration = platformCostIntegrationNames[provider];
+  if (!integration || !State.apiIntegrationsCurrent) return null;
+  return State.apiIntegrationsCurrent[integration] || null;
+}
+
+function getModelRowsFromAPIIntegrationEntry(entry) {
+  const rows = [];
+  if (!entry) return rows;
+  const providers = Array.isArray(entry.providers) ? entry.providers : [];
+  providers.forEach((provider) => {
+    const accounts = Array.isArray(provider.accounts) ? provider.accounts : [];
+    accounts.forEach((account) => {
+      const models = Array.isArray(account.models) ? account.models : [];
+      models.forEach((model) => {
+        const efforts = Array.isArray(model.efforts) && model.efforts.length > 0
+          ? model.efforts
+          : [{
+            reasoningEffort: 'unknown',
+            mode: 'unknown',
+            speedMode: 'unknown',
+            requestCount: model.requestCount,
+            promptTokens: model.promptTokens,
+            completionTokens: model.completionTokens,
+            totalTokens: model.totalTokens,
+            inputTokens: model.inputTokens,
+            cachedInputTokens: model.cachedInputTokens,
+            cacheCreationInputTokens: model.cacheCreationInputTokens,
+            outputTokens: model.outputTokens,
+            reasoningTokens: model.reasoningTokens,
+            totalCostUsd: model.totalCostUsd,
+            lastCapturedAt: model.lastCapturedAt,
+          }];
+        efforts.forEach((effort) => {
+          const key = model.model || 'unknown';
+          const reasoningEffort = effort.reasoningEffort || 'unknown';
+          const mode = effort.mode || 'unknown';
+          const speedMode = effort.speedMode || 'unknown';
+          let row = rows.find(item => item.model === key
+            && item.reasoningEffort === reasoningEffort
+            && item.mode === mode
+            && item.speedMode === speedMode);
+          if (!row) {
+            row = {
+              model: key,
+              reasoningEffort,
+              mode,
+              speedMode,
+              requestCount: 0,
+              promptTokens: 0,
+              completionTokens: 0,
+              totalTokens: 0,
+              inputTokens: 0,
+              cachedInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              outputTokens: 0,
+              reasoningTokens: 0,
+              totalCostUsd: null,
+              lastCapturedAt: null,
+            };
+            rows.push(row);
+          }
+          row.requestCount += Number(effort.requestCount || 0);
+          row.promptTokens += Number(effort.promptTokens || 0);
+          row.completionTokens += Number(effort.completionTokens || 0);
+          row.totalTokens += Number(effort.totalTokens || 0);
+          row.inputTokens += Number(effort.inputTokens || effort.promptTokens || 0);
+          row.cachedInputTokens += Number(effort.cachedInputTokens || 0);
+          row.cacheCreationInputTokens += Number(effort.cacheCreationInputTokens || 0);
+          row.outputTokens += Number(effort.outputTokens || effort.completionTokens || 0);
+          row.reasoningTokens += Number(effort.reasoningTokens || 0);
+          if (effort.totalCostUsd != null) {
+            row.totalCostUsd = Number(row.totalCostUsd || 0) + Number(effort.totalCostUsd || 0);
+          }
+          row.lastCapturedAt = laterDateString(row.lastCapturedAt, effort.lastCapturedAt);
+        });
+      });
+    });
+  });
+  return rows.sort((a, b) => Number(b.totalCostUsd || 0) - Number(a.totalCostUsd || 0)
+    || Number(b.totalTokens || 0) - Number(a.totalTokens || 0)
+    || String(a.model || '').localeCompare(String(b.model || '')));
+}
+
+function renderPlatformCostPanel(provider = getCurrentProvider()) {
+  const section = document.getElementById('platform-cost-section');
+  if (!section || !supportsPlatformCost(provider)) return;
+  const entry = getPlatformCostEntry(provider);
+  section.hidden = false;
+  if (!entry) {
+    if (State.apiIntegrationsCurrentLoaded) {
+      renderPlatformCostEmptyPanel();
+    }
+    bindPlatformCostRangeControls(State.platformCostRange || State.currentRange || '6h');
+    return;
+  }
+
+  const summaryEl = document.getElementById('platform-cost-summary');
+  const tableHead = document.getElementById('platform-cost-models-thead');
+  const tbody = document.getElementById('platform-cost-models-tbody');
+  const rows = getPlatformCostBreakdownRows(provider);
+  const totalCost = entry.totalCostUsd != null ? Number(entry.totalCostUsd || 0) : null;
+  const costPerMillion = totalCost != null && Number(entry.totalTokens || 0) > 0
+    ? (totalCost / Number(entry.totalTokens || 0)) * 1000000
+    : null;
+
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div class="platform-cost-metric primary">
+        <span class="platform-cost-label">Estimated Cost</span>
+        <strong>${totalCost != null ? formatCurrencyUSD(totalCost) : '--'}</strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Total Tokens</span>
+        <strong>${formatNumber(Number(entry.totalTokens || 0))}</strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Requests</span>
+        <strong>${formatNumber(Number(entry.requestCount || 0))}</strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Blended Cost / 1M</span>
+        <strong>${formatRatePerMillion(costPerMillion).replace(' / 1M', '')}</strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Last Seen</span>
+        <strong>${entry.lastCapturedAt ? escapeHTML(formatDateTime(entry.lastCapturedAt)) : '--'}</strong>
+      </div>
+    `;
+  }
+
+  document.querySelectorAll('.platform-cost-breakdown-tab').forEach((button) => {
+    const view = button.dataset.costView || 'types';
+    button.classList.toggle('active', view === State.platformCostBreakdownView);
+    if (!button.dataset.bound) {
+      button.addEventListener('click', () => {
+        State.platformCostBreakdownView = button.dataset.costView || 'types';
+        renderPlatformCostPanel(getCurrentProvider());
+      });
+      button.dataset.bound = 'true';
+    }
+  });
+
+  if (tbody && tableHead) {
+    renderPlatformCostBreakdownTable(rows, tableHead, tbody);
+  }
+  renderPlatformCostChart(provider, State.platformCostRange || State.currentRange || '6h');
+  startPlatformCostRefreshLoop(provider);
+  prefetchPlatformCostRanges(provider, { delayMs: 500 });
+}
+
+function platformCostLoadingLabel(range) {
+  return platformCostRangeLabel(normalizePlatformCostRange(range));
+}
+
+function setPlatformCostRangeControlsLoading(range, loading) {
+  document.querySelectorAll('.platform-cost-range-btn').forEach((button) => {
+    button.classList.toggle('active', button.dataset.range === range);
+    button.disabled = Boolean(loading);
+    button.setAttribute('aria-busy', loading ? 'true' : 'false');
+  });
+}
+
+function setPlatformCostChartLoading(loading, message = 'Loading cost history') {
+  const overlay = document.getElementById('platform-cost-chart-loading');
+  const canvas = document.getElementById('platform-cost-chart');
+  if (loading) setChartEmptyState('platform-cost-chart', false);
+  if (overlay) {
+    overlay.hidden = !loading;
+    if (loading) {
+      overlay.innerHTML = `<span class="loading-spinner" aria-hidden="true"></span><span>${escapeHTML(message)}</span>`;
+    }
+  }
+  if (canvas) canvas.classList.toggle('is-loading', Boolean(loading));
+}
+
+function renderPlatformCostLoadingPanel(range = State.platformCostRange || State.currentRange || '6h') {
+  const summaryEl = document.getElementById('platform-cost-summary');
+  const subtitle = document.getElementById('platform-cost-chart-subtitle');
+  const tableHead = document.getElementById('platform-cost-models-thead');
+  const tbody = document.getElementById('platform-cost-models-tbody');
+  const label = platformCostLoadingLabel(range);
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div class="platform-cost-metric primary">
+        <span class="platform-cost-label">Estimated Cost (${escapeHTML(label)})</span>
+        <strong><span class="loading-spinner tiny" aria-hidden="true"></span></strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Tokens (${escapeHTML(label)})</span>
+        <strong><span class="loading-spinner tiny" aria-hidden="true"></span></strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Requests (${escapeHTML(label)})</span>
+        <strong><span class="loading-spinner tiny" aria-hidden="true"></span></strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Blended Cost / 1M</span>
+        <strong><span class="loading-spinner tiny" aria-hidden="true"></span></strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Last Seen</span>
+        <strong><span class="loading-spinner tiny" aria-hidden="true"></span></strong>
+      </div>
+    `;
+  }
+  if (subtitle) subtitle.innerHTML = '<span class="loading-spinner inline" aria-hidden="true"></span>Loading cost history';
+  if (tableHead) {
+    tableHead.innerHTML = `<tr>
+      <th>Token Type</th>
+      <th>Tokens</th>
+      <th>Effective Rate</th>
+      <th>Total Cost</th>
+      <th>Cost Share</th>
+    </tr>`;
+  }
+  if (tbody) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><span class="loading-spinner inline" aria-hidden="true"></span>Loading cost telemetry...</td></tr>';
+  }
+  setPlatformCostChartLoading(true);
+  setPlatformCostRangeControlsLoading(normalizePlatformCostRange(range), true);
+}
+
+function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
+  const summaryEl = document.getElementById('platform-cost-summary');
+  const subtitle = document.getElementById('platform-cost-chart-subtitle');
+  const tableHead = document.getElementById('platform-cost-models-thead');
+  const tbody = document.getElementById('platform-cost-models-tbody');
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div class="platform-cost-metric primary">
+        <span class="platform-cost-label">Estimated Cost</span>
+        <strong>--</strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Total Tokens</span>
+        <strong>--</strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Requests</span>
+        <strong>--</strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Blended Cost / 1M</span>
+        <strong>--</strong>
+      </div>
+      <div class="platform-cost-metric">
+        <span class="platform-cost-label">Last Seen</span>
+        <strong>--</strong>
+      </div>
+    `;
+  }
+  if (subtitle) subtitle.textContent = message;
+  setPlatformCostChartLoading(false);
+  setChartEmptyState('platform-cost-chart', false);
+  setPlatformCostRangeControlsLoading(State.platformCostRange || State.currentRange || '6h', false);
+  if (State.platformCostChart) {
+    State.platformCostChart.destroy();
+    State.platformCostChart = null;
+  }
+  if (tableHead) {
+    tableHead.innerHTML = `<tr>
+      <th>Token Type</th>
+      <th>Tokens</th>
+      <th>Effective Rate</th>
+      <th>Total Cost</th>
+      <th>Cost Share</th>
+    </tr>`;
+  }
+  if (tbody) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-state">${escapeHTML(message)}</td></tr>`;
+  }
+}
+
+function getPlatformCostBreakdownRows(provider = getCurrentProvider()) {
+  const integration = platformCostIntegrationNames[provider] || '';
+  const selectedRange = normalizePlatformCostRange(State.platformCostRange || State.currentRange || '6h');
+  const sessionModels = State.platformCostSessionModels || {};
+  const rangeRows = sessionModels[integration];
+  const hasLoadedSelectedRange = State.platformCostHistoryRange === selectedRange;
+  const isLoadingSelectedRange = State.platformCostHistoryLoading
+    && State.platformCostHistoryInflightKey === `${provider || ''}:${selectedRange}`;
+  if (Array.isArray(rangeRows)) {
+    return [...rangeRows].sort((a, b) => Number(b.totalCostUsd || 0) - Number(a.totalCostUsd || 0)
+      || Number(b.totalTokens || 0) - Number(a.totalTokens || 0)
+      || String(a.model || '').localeCompare(String(b.model || '')));
+  }
+  if (hasLoadedSelectedRange || isLoadingSelectedRange) {
+    return [];
+  }
+  return getModelRowsFromAPIIntegrationEntry(getPlatformCostEntry(provider));
+}
+
+function renderPlatformCostBreakdownTable(rows, tableHead, tbody) {
+  const view = State.platformCostBreakdownView === 'models' ? 'models' : 'types';
+  if (rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No cost telemetry yet.</td></tr>';
+    return;
+  }
+  if (view === 'models') {
+    tableHead.innerHTML = `<tr>
+      <th>Model</th>
+      <th>Effort</th>
+      <th>Speed</th>
+      <th>Requests</th>
+      <th>Total Tokens</th>
+      <th>Total Cost</th>
+      <th>Cost / 1M</th>
+      <th>Input Cost</th>
+      <th>Cached Cost</th>
+      <th>Cache Write Cost</th>
+      <th>Output Cost</th>
+      <th>Reasoning Cost</th>
+      <th>Last Seen</th>
+    </tr>`;
+    tbody.innerHTML = rows.map(row => {
+      const breakdown = computeRowCostBreakdown(row);
+      return `<tr>
+        <td><code>${escapeHTML(row.model || '--')}</code></td>
+        <td>${escapeHTML(row.reasoningEffort || 'unknown')}</td>
+        <td>${escapeHTML(row.speedMode || 'unknown')}</td>
+        <td>${formatNumber(Number(row.requestCount || 0))}</td>
+        <td>${formatNumber(Number(row.totalTokens || 0))}</td>
+        <td>${row.totalCostUsd != null ? formatCurrencyUSD(Number(row.totalCostUsd || 0)) : '--'}</td>
+        <td>${formatRatePerMillion(breakdown.blendedRatePerMillion)}</td>
+        <td>${breakdown.inputTokens.cost != null ? formatCurrencyUSD(breakdown.inputTokens.cost) : '--'}</td>
+        <td>${breakdown.cachedInputTokens.cost != null ? formatCurrencyUSD(breakdown.cachedInputTokens.cost) : '--'}</td>
+        <td>${breakdown.cacheCreationInputTokens.cost != null ? formatCurrencyUSD(breakdown.cacheCreationInputTokens.cost) : '--'}</td>
+        <td>${breakdown.outputTokens.cost != null ? formatCurrencyUSD(breakdown.outputTokens.cost) : '--'}</td>
+        <td>${breakdown.reasoningTokens.cost != null ? formatCurrencyUSD(breakdown.reasoningTokens.cost) : '--'}</td>
+        <td>${row.lastCapturedAt ? escapeHTML(formatDateTime(row.lastCapturedAt)) : '--'}</td>
+      </tr>`;
+    }).join('');
+    return;
+  }
+
+  tableHead.innerHTML = `<tr>
+    <th>Token Type</th>
+    <th>Tokens</th>
+    <th>Effective Rate</th>
+    <th>Total Cost</th>
+    <th>Cost Share</th>
+  </tr>`;
+  tbody.innerHTML = buildTokenTypeCostRows(rows).map(row => `<tr>
+    <td>${escapeHTML(row.label)}</td>
+    <td>${formatNumber(Number(row.tokens || 0))}</td>
+    <td>${formatRatePerMillion(row.effectiveRatePerMillion)}</td>
+    <td>${row.hasCost ? formatCurrencyUSD(row.cost) : '--'}</td>
+    <td>${row.share != null ? `${(row.share * 100).toFixed(1)}%` : '--'}</td>
+  </tr>`).join('');
+}
+
+function renderPlatformCostChart(provider = getCurrentProvider(), range = State.currentRange || '6h') {
+  const canvas = document.getElementById('platform-cost-chart');
+  if (!canvas || typeof Chart === 'undefined' || !supportsPlatformCost(provider)) return;
+  range = normalizePlatformCostRange(range);
+  State.platformCostRange = range;
+  const integration = platformCostIntegrationNames[provider];
+  const hasLoadedSelectedRange = State.platformCostHistoryRange === range;
+  const rows = hasLoadedSelectedRange ? getPlatformCostHistoryRows(integration) : [];
+  if (!State.platformCostHistoryLoading && !hasLoadedSelectedRange) {
+    fetchPlatformCostHistory(range, provider);
+  }
+  bindPlatformCostRangeControls(range);
+  const subtitle = document.getElementById('platform-cost-chart-subtitle');
+  const title = document.getElementById('platform-cost-chart-title');
+  const graphMode = normalizeGraphMode(State.platformCostGraphMode);
+  if (title) {
+    title.textContent = graphMode === 'bucket'
+      ? 'Token & Cost per Period'
+      : 'Token & Cost Growth';
+  }
+  if (State.platformCostHistoryLoading && !hasLoadedSelectedRange) {
+    if (State.platformCostChart) {
+      setPlatformCostChartLoading(true, `Loading ${platformCostRangeLabel(range)} cost history`);
+      setPlatformCostRangeControlsLoading(range, true);
+    } else {
+      renderPlatformCostLoadingPanel(range);
+    }
+    return;
+  }
+  const cumulative = buildPlatformCumulativeSeries(rows, range);
+  const bucketed = buildPlatformBucketSeries(rows, range);
+  const timeScale = graphMode === 'bucket'
+    ? {
+      unit: graphBucketTimeUnit(range),
+      displayFormats: { hour: 'MMM d, HH:mm', day: 'MMM d', minute: 'HH:mm' },
+    }
+    : platformCostTimeScale(range);
+  const hasUsageInRange = rows.some(row => Number(row.totalCostUsd || 0) > 0
+    || Number(row.totalTokens || 0) > 0
+    || Number(row.requestCount || 0) > 0);
+  if (subtitle) {
+    subtitle.textContent = hasUsageInRange
+      ? (graphMode === 'bucket'
+        ? `${formatNumber(bucketed.cost.length)} periods`
+        : `${formatNumber(cumulative.cost.length)} chats`)
+      : noUsageMessage(range);
+  }
+  setPlatformCostChartLoading(false);
+  setPlatformCostRangeControlsLoading(range, false);
+  updatePlatformCostSummaryForRange(provider, range, rows);
+  if (!hasUsageInRange) {
+    setChartEmptyState('platform-cost-chart', true, noUsageMessage(range));
+    if (State.platformCostChart) {
+      State.platformCostChart.data = { datasets: [] };
+      State.platformCostChart.update('none');
+    }
+    return;
+  }
+  setChartEmptyState('platform-cost-chart', false);
+
+  Chart.register(crosshairPlugin);
+  const colors = getThemeColors();
+  const chartType = graphMode === 'bucket' ? 'bar' : 'line';
+  const barSizing = graphBarSizing(range, 2);
+  const costColor = '#14B8A6';
+  const tokensColor = '#38BDF8';
+  const costFill = graphMode === 'bucket' ? 'rgba(20, 184, 166, 0.18)' : 'rgba(20, 184, 166, 0.12)';
+  const tokensFill = graphMode === 'bucket' ? 'rgba(56, 189, 248, 0.16)' : 'rgba(56, 189, 248, 0.12)';
+  const activeMaxCost = graphMode === 'bucket' ? bucketed.maxCost : cumulative.maxCost;
+  const activeMaxTokens = graphMode === 'bucket' ? bucketed.maxTokens : cumulative.maxTokens;
+  const yMaxCost = niceAxisMax(activeMaxCost * 1.18);
+  const yMaxTokens = niceAxisMax(activeMaxTokens * 1.18);
+  const chartData = {
+    datasets: [
+        {
+          type: chartType,
+          label: graphMode === 'bucket' ? 'Cost' : 'Cumulative Cost',
+          data: graphMode === 'bucket' ? bucketed.cost : cumulative.cost,
+          yAxisID: 'y',
+          borderColor: costColor,
+          backgroundColor: costFill,
+          hoverBackgroundColor: costFill,
+          hoverBorderColor: costColor,
+          fill: graphMode !== 'bucket',
+          tension: graphMode === 'bucket' ? 0 : 0.4,
+          borderWidth: 2,
+          hoverBorderWidth: 2,
+          pointRadius: graphMode === 'bucket' ? 0 : (cumulative.cost.length <= 24 ? 2 : 0),
+          pointHoverRadius: graphMode === 'bucket' ? 0 : 4,
+          barPercentage: barSizing.barPercentage,
+          categoryPercentage: barSizing.categoryPercentage,
+          maxBarThickness: barSizing.maxBarThickness,
+          borderRadius: 4,
+          borderSkipped: false,
+        },
+        {
+          type: chartType,
+          label: graphMode === 'bucket' ? 'Tokens' : 'Cumulative Tokens',
+          data: graphMode === 'bucket' ? bucketed.tokens : cumulative.tokens,
+          yAxisID: 'y1',
+          borderColor: tokensColor,
+          backgroundColor: tokensFill,
+          hoverBackgroundColor: tokensFill,
+          hoverBorderColor: tokensColor,
+          fill: graphMode !== 'bucket',
+          tension: graphMode === 'bucket' ? 0 : 0.4,
+          borderWidth: 2,
+          hoverBorderWidth: 2,
+          pointRadius: graphMode === 'bucket' ? 0 : (cumulative.tokens.length <= 24 ? 2 : 0),
+          pointHoverRadius: graphMode === 'bucket' ? 0 : 4,
+          barPercentage: barSizing.barPercentage,
+          categoryPercentage: barSizing.categoryPercentage,
+          maxBarThickness: barSizing.maxBarThickness,
+          borderRadius: 4,
+          borderSkipped: false,
+        },
+      ],
+    };
+  const chartOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      layout: { padding: { top: 4 } },
+      plugins: {
+        legend: {
+          display: true,
+          align: 'center',
+          labels: {
+            color: colors.text,
+            usePointStyle: true,
+            pointStyle: 'circle',
+            boxWidth: 10,
+            boxHeight: 10,
+            padding: 16,
+            font: { size: 12, weight: '500', lineHeight: 1.2 },
+          },
+        },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          backgroundColor: colors.surfaceContainer || '#1E1E1E',
+          titleColor: colors.onSurface || '#E6E1E5',
+          bodyColor: colors.text || '#CAC4D0',
+          borderColor: colors.outline || '#938F99',
+          borderWidth: 1,
+          displayColors: true,
+          usePointStyle: true,
+          callbacks: {
+            title: items => items && items.length > 0 ? formatPeriodTooltipTitle(items[0]) : '',
+            label: ctx => {
+              const value = Number(ctx.parsed.y || 0);
+              return ctx.dataset.yAxisID === 'y'
+                ? `${ctx.dataset.label}: ${formatCurrencyUSD(value)}`
+                : `${ctx.dataset.label}: ${formatNumber(Math.round(value))}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          offset: graphMode === 'bucket',
+          min: graphMode === 'bucket' && bucketed.cost.length > 0 ? bucketed.cost[0].periodStart : undefined,
+          max: graphMode === 'bucket' && bucketed.cost.length > 0 ? bucketed.cost[bucketed.cost.length - 1].periodEnd : undefined,
+          time: timeScale,
+          grid: { color: colors.grid, drawBorder: false },
+          ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' },
+        },
+        y: {
+          min: 0,
+          max: yMaxCost,
+          grid: { color: colors.grid, drawBorder: false },
+          ticks: { color: colors.text, callback: value => formatCurrencyUSD(Number(value || 0)) },
+        },
+        y1: {
+          min: 0,
+          max: yMaxTokens,
+          position: 'right',
+          grid: { drawOnChartArea: false, color: colors.grid, drawBorder: false },
+          ticks: { color: colors.text, callback: value => formatNumber(Math.round(Number(value || 0))) },
+        },
+      },
+    };
+  if (State.platformCostChart) {
+    State.platformCostChart.config.type = chartType;
+    State.platformCostChart.data = chartData;
+    State.platformCostChart.options = chartOptions;
+    State.platformCostChart.update();
+    return;
+  }
+  State.platformCostChart = new Chart(canvas, {
+    type: chartType,
+    data: chartData,
+    options: chartOptions,
+  });
+}
+
+function bindPlatformCostRangeControls(range) {
+  setupPlatformCostChartModeSelector();
+  document.querySelectorAll('.platform-cost-range-btn').forEach((button) => {
+    button.classList.toggle('active', button.dataset.range === range);
+    if (!button.dataset.bound) {
+      button.addEventListener('click', () => {
+        const nextRange = normalizePlatformCostRange(button.dataset.range || '6h');
+        State.platformCostRange = nextRange;
+        fetchPlatformCostHistory(nextRange, getCurrentProvider());
+      });
+      button.dataset.bound = 'true';
+    }
+  });
+}
+
+function normalizePlatformCostRange(range) {
+  return ['1h', '6h', '24h', '7d', '30d', 'all'].includes(range) ? range : '6h';
+}
+
+function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || '6h') {
+  let cost = 0;
+  let tokens = 0;
+  const costPoints = [];
+  const tokenPoints = [];
+  const startTime = platformCostRangeStartTime(range);
+  if (startTime) {
+    costPoints.push({ x: startTime, y: 0 });
+    tokenPoints.push({ x: startTime, y: 0 });
+  }
+  [...rows]
+    .filter(row => row && row.capturedAt)
+    .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
+    .forEach((row) => {
+      if (row.cumulativeCostUsd !== undefined || row.cumulativeTotalTokens !== undefined) {
+        cost = Number(row.cumulativeCostUsd || cost);
+        tokens = Number(row.cumulativeTotalTokens || tokens);
+      } else {
+        cost += Number(row.totalCostUsd || 0);
+        tokens += Number(row.totalTokens || 0);
+      }
+      const x = new Date(row.capturedAt);
+      costPoints.push({ x, y: cost });
+      tokenPoints.push({ x, y: tokens });
+    });
+  return {
+    cost: costPoints,
+    tokens: tokenPoints,
+    maxCost: cost,
+    maxTokens: tokens,
+  };
+}
+
+function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h') {
+  const rowPoints = [...rows]
+    .filter(row => row && row.capturedAt)
+    .map(row => ({ x: new Date(row.capturedAt) }))
+    .filter(point => !Number.isNaN(point.x.getTime()));
+  const buckets = new Map(graphBucketRange(range, rowPoints).map(bucket => [bucket.periodStart.toISOString(), {
+    ...bucket,
+    cost: 0,
+    tokens: 0,
+  }]));
+  [...rows]
+    .filter(row => row && row.capturedAt)
+    .forEach((row) => {
+      const bucketStart = graphBucketStart(row.capturedAt, range);
+      if (!bucketStart) return;
+      const key = bucketStart.toISOString();
+      const intervalMs = graphBucketIntervalMs(range);
+      const bucket = buckets.get(key) || {
+        x: new Date(bucketStart.getTime() + intervalMs / 2),
+        cost: 0,
+        tokens: 0,
+        periodStart: bucketStart,
+        periodEnd: new Date(bucketStart.getTime() + intervalMs),
+      };
+      bucket.cost += Number(row.totalCostUsd || 0);
+      bucket.tokens += Number(row.totalTokens || 0);
+      buckets.set(key, bucket);
+    });
+  const sorted = [...buckets.values()].sort((a, b) => a.x.getTime() - b.x.getTime());
+  const cost = sorted.map(bucket => ({ x: bucket.x, y: bucket.cost, periodStart: bucket.periodStart, periodEnd: bucket.periodEnd }));
+  const tokens = sorted.map(bucket => ({ x: bucket.x, y: bucket.tokens, periodStart: bucket.periodStart, periodEnd: bucket.periodEnd }));
+  return {
+    cost,
+    tokens,
+    maxCost: cost.reduce((max, point) => Math.max(max, Number(point.y || 0)), 0),
+    maxTokens: tokens.reduce((max, point) => Math.max(max, Number(point.y || 0)), 0),
+  };
+}
+
+function platformCostRangeStartTime(range) {
+  const durations = {
+    '1h': 60 * 60 * 1000,
+    '6h': 6 * 60 * 60 * 1000,
+    '24h': 24 * 60 * 60 * 1000,
+    '7d': 7 * 24 * 60 * 60 * 1000,
+    '30d': 30 * 24 * 60 * 60 * 1000,
+  };
+  const duration = durations[range];
+  return duration ? new Date(Date.now() - duration) : null;
+}
+
+function platformCostRangeLabel(range) {
+  const labels = { '1h': '1h', '6h': '6h', '24h': '24h', '7d': '7d', '30d': '30d', all: 'All' };
+  return labels[range] || '6h';
+}
+
+function updatePlatformCostSummaryForRange(provider, range, rows) {
+  const summaryEl = document.getElementById('platform-cost-summary');
+  if (!summaryEl) return;
+  const entry = getPlatformCostEntry(provider);
+  if (!entry) return;
+  const integration = platformCostIntegrationNames[provider] || '';
+  const selectedRange = normalizePlatformCostRange(range);
+  const hasLoadedSelectedRange = State.platformCostHistoryRange === selectedRange;
+  const rangeTotals = hasLoadedSelectedRange ? (State.platformCostSessionTotals || {})[integration] : null;
+  const selectedRows = Array.isArray(rows) ? rows : [];
+  let totals = null;
+  if (rangeTotals) {
+    totals = {
+      cost: Number(rangeTotals.totalCostUsd || 0),
+      tokens: Number(rangeTotals.totalTokens || 0),
+      requests: Number(rangeTotals.requestCount || 0),
+      lastSeen: rangeTotals.lastCapturedAt || null,
+    };
+  } else if (range === 'all') {
+    totals = {
+      cost: Number(entry.totalCostUsd || 0),
+      tokens: Number(entry.totalTokens || 0),
+      requests: Number(entry.requestCount || 0),
+      lastSeen: entry.lastCapturedAt || null,
+    };
+  } else {
+    totals = selectedRows.reduce((acc, row) => {
+      acc.cost += Number(row.totalCostUsd || 0);
+      acc.tokens += Number(row.totalTokens || 0);
+      acc.requests += Number(row.requestCount || 0);
+      acc.lastSeen = laterDateString(acc.lastSeen, row.lastCapturedAt || row.capturedAt);
+      return acc;
+    }, { cost: 0, tokens: 0, requests: 0, lastSeen: null });
+  }
+  const costPerMillion = totals.tokens > 0 ? totals.cost / totals.tokens * 1000000 : null;
+  const label = platformCostRangeLabel(range);
+  summaryEl.innerHTML = `
+    <div class="platform-cost-metric primary">
+      <span class="platform-cost-label">Estimated Cost (${escapeHTML(label)})</span>
+      <strong>${formatCurrencyUSD(totals.cost)}</strong>
+    </div>
+    <div class="platform-cost-metric">
+      <span class="platform-cost-label">Tokens (${escapeHTML(label)})</span>
+      <strong>${formatNumber(totals.tokens)}</strong>
+    </div>
+    <div class="platform-cost-metric">
+      <span class="platform-cost-label">Requests (${escapeHTML(label)})</span>
+      <strong>${formatNumber(totals.requests)}</strong>
+    </div>
+    <div class="platform-cost-metric">
+      <span class="platform-cost-label">Blended Cost / 1M</span>
+      <strong>${formatRatePerMillion(costPerMillion).replace(' / 1M', '')}</strong>
+    </div>
+    <div class="platform-cost-metric">
+      <span class="platform-cost-label">Last Seen</span>
+      <strong>${totals.lastSeen ? escapeHTML(formatDateTime(totals.lastSeen)) : '--'}</strong>
+    </div>
+  `;
+}
+
+function getPlatformCostHistoryRows(integration) {
+  const sessionHistory = State.platformCostSessionHistory || {};
+  if (Array.isArray(sessionHistory[integration])) return sessionHistory[integration];
+  const history = State.apiIntegrationsHistory || {};
+  if (Array.isArray(history[integration])) return history[integration];
+  const normalized = String(integration || '').toLowerCase();
+  const key = Object.keys(history).find(candidate => String(candidate || '').toLowerCase() === normalized);
+  return key && Array.isArray(history[key]) ? history[key] : [];
+}
+
+async function fetchPlatformCostHistory(range, provider) {
+  range = normalizePlatformCostRange(range);
+  const key = `${provider || ''}:${range}`;
+  if (State.platformCostHistoryLoading && State.platformCostHistoryInflightKey === key) {
+    return;
+  }
+  const cached = getCachedPlatformCostHistory(provider, range);
+  if (cached) {
+    applyPlatformCostHistoryPayload(range, cached);
+    if (getCurrentProvider() === provider) {
+      renderPlatformCostPanel(provider);
+    }
+    if (Date.now() - cached.ts < 15000) return;
+  }
+  const providerPrefix = `${provider || ''}:`;
+  State.platformCostPrefetchTimers = (State.platformCostPrefetchTimers || []).filter((timer) => {
+    if (timer.provider !== provider) return true;
+    window.clearTimeout(timer.id);
+    return false;
+  });
+  Object.entries(State.platformCostPrefetchControllers || {}).forEach(([prefetchKey, controller]) => {
+    if (!prefetchKey.startsWith(providerPrefix)) return;
+    try {
+      controller.abort();
+    } catch (e) {
+      // silent - foreground range fetch takes priority
+    }
+    delete State.platformCostPrefetchControllers[prefetchKey];
+  });
+  State.platformCostHistoryLoading = true;
+  State.platformCostHistoryInflightKey = key;
+  State.platformCostHistoryRange = null;
+  if (getCurrentProvider() === provider) {
+    if (State.platformCostChart) {
+      bindPlatformCostRangeControls(range);
+      setPlatformCostChartLoading(true, `Loading ${platformCostRangeLabel(range)} cost history`);
+      setPlatformCostRangeControlsLoading(range, true);
+    } else {
+      renderPlatformCostLoadingPanel(range);
+    }
+  }
+  const controller = new AbortController();
+  State.platformCostPrefetchControllers[key] = controller;
+  try {
+    const payload = await fetchPlatformCostPayload(provider, range, controller.signal);
+    if (controller.signal.aborted || getCurrentProvider() !== provider) return;
+    applyPlatformCostHistoryPayload(range, payload);
+    setCachedPlatformCostHistory(provider, range, payload);
+    if (getCurrentProvider() === provider) {
+      renderPlatformCostPanel(provider);
+    }
+  } catch (e) {
+    // Cost history is optional on provider tabs.
+    if (!controller.signal.aborted && getCurrentProvider() === provider) {
+      renderPlatformCostEmptyPanel('Cost history unavailable.');
+    }
+  } finally {
+    if (State.platformCostPrefetchControllers[key] === controller) {
+      delete State.platformCostPrefetchControllers[key];
+    }
+    if (State.platformCostHistoryInflightKey === key) {
+      State.platformCostHistoryLoading = false;
+      State.platformCostHistoryInflightKey = null;
+      setPlatformCostRangeControlsLoading(range, false);
+    }
+  }
 }
 
 function renderAPIIntegrationsHealth() {
@@ -5462,6 +7082,9 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
       };
     });
     const processed = processDataWithGaps(rawData, range);
+    const barStrategy = metric === 'tokenPerCall'
+      ? 'average'
+      : (metric === 'accumulatedTokens' ? 'delta' : 'sum');
     datasets.push({
       label: integrationName,
       data: processed.data,
@@ -5474,6 +7097,7 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
       pointHoverRadius: 4,
       spanGaps: true,
       segment: getSegmentStyle(processed.gapSegments, color.border),
+      _barStrategy: barStrategy,
     });
     return datasets;
   }, []);
@@ -5486,10 +7110,7 @@ function renderAPIIntegrationsChart(range = State.currentRange || '6h') {
   const metric = normalizeAPIIntegrationsMetric(State.apiIntegrationsSelectedMetric);
   State.apiIntegrationsSelectedMetric = metric;
   const datasets = buildAPIIntegrationsChartDatasets(State.apiIntegrationsHistory || {}, range, metric);
-  State.chart.data.datasets = datasets;
-  updateTimeScale(State.chart, range);
-  State.chartYMax = computeYMax(State.chart.data.datasets, State.chart, { cap: false });
-  State.chart.options.scales.y.max = State.chartYMax;
+  setMainChartDatasets(datasets, range, { cap: false });
   const yAxisTitles = {
     tokenPerCall: 'Tokens per Call',
     requestCount: 'API Calls',
@@ -5544,6 +7165,7 @@ function renderAPIIntegrationsChart(range = State.currentRange || '6h') {
       ...currentTooltip,
       callbacks: {
         ...currentTooltipCallbacks,
+        title: items => items && items.length > 0 ? formatPeriodTooltipTitle(items[0]) : '',
         label: tooltipLabelFormatter,
       },
     },
@@ -5695,12 +7317,6 @@ function renderAllProvidersView() {
       if (Array.isArray(entry.quotas)) {
         entry.quotas.forEach(quota => updateProviderKPICard(quota, entry.cardKey));
       }
-      // Keep promo tag fresh (Anthropic off-peak/peak label)
-      if (entry.promoHtml !== undefined) {
-        const card = container.querySelector(`.provider-card[data-card-key="${entry.cardKey}"]`);
-        const promoEl = card && card.querySelector('.promo-tag-inline');
-        if (promoEl && entry.promoHtml) promoEl.outerHTML = entry.promoHtml;
-      }
     });
     return;
   }
@@ -5712,7 +7328,6 @@ function renderAllProvidersView() {
   container.innerHTML = entries.map((entry) => {
     const collapsed = Boolean(collapsedState[entry.cardKey]);
     const badge = entry.badge ? `<span class="provider-card-badge">${escapeHTML(entry.badge)}</span>` : '';
-    const promo = entry.promoHtml || '';
     if (entry.summaryOnly) {
       return renderAPIIntegrationsSummaryCard(entry, collapsed);
     }
@@ -5720,7 +7335,7 @@ function renderAllProvidersView() {
       <header class="provider-card-header">
         <div class="provider-card-title">
           <span>${escapeHTML(entry.title)}</span>
-          ${badge}${promo}
+          ${badge}
         </div>
         <button class="provider-card-collapse-btn" type="button" data-card-key="${entry.cardKey}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${escapeHTML(entry.title)}">
           <svg class="provider-card-collapse-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -5790,8 +7405,7 @@ function renderAllProvidersView() {
 
 }
 
-// ── "Both" Mode: Dual Charts (legacy fallback) ──
-
+// "Both" Mode: Dual Charts (legacy fallback)
 function updateBothCharts(data, range = '6h') {
   const container = document.querySelector('.chart-container');
   if (!container) return;
@@ -6005,6 +7619,7 @@ function buildChartOptions(colors, yMax, range) {
         borderColor: colors.outline || '#938F99',
         borderWidth: 1, padding: 12, displayColors: true, usePointStyle: true,
         callbacks: {
+          title: items => items && items.length > 0 ? formatPeriodTooltipTitle(items[0]) : '',
           label: ctx => ctx.parsed.y != null ? `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%` : null
         }
       }
@@ -6098,8 +7713,7 @@ function updateTimeScale(chart, range) {
   };
 }
 
-// ── Cycles Table (client-side search/sort/paginate) ──
-
+// Cycles Table (client-side search/sort/paginate)
 async function fetchCycles() {
   if (!shouldShowCyclesTable()) return;
   const requestProvider = getCurrentProvider();
@@ -6478,8 +8092,7 @@ function renderCyclesTable() {
   }
 }
 
-// ── Sessions Table (client-side search/sort/paginate + expandable rows) ──
-
+// Sessions Table (client-side search/sort/paginate + expandable rows)
 async function fetchSessions() {
   if (!shouldShowSessionsTable()) return;
   const requestProvider = getCurrentProvider();
@@ -7048,8 +8661,7 @@ function renderSessionsTable() {
   }
 }
 
-// ── Session Row Expansion ──
-
+// Session Row Expansion
 function handleSessionRowClick(e) {
   const row = e.target.closest('.session-row');
   if (!row) return;
@@ -7065,8 +8677,7 @@ function handleSessionRowClick(e) {
   });
 }
 
-// ── Table Sort ──
-
+// Table Sort
 function handleTableSort(tableId, th) {
   const key = th.dataset.sortKey;
   if (!key) return;
@@ -7096,8 +8707,7 @@ function handleTableSort(tableId, th) {
   }
 }
 
-// ── KPI Card Modal ──
-
+// KPI Card Modal
 function openModal(quotaType, providerOverride) {
   const modal = document.getElementById('detail-modal');
   const titleEl = document.getElementById('modal-title');
@@ -7307,8 +8917,7 @@ function closeModal() {
   }
 }
 
-// ── Event Setup ──
-
+// Event Setup
 function setupRangeSelector() {
   const buttons = document.querySelectorAll('.range-btn');
   buttons.forEach(btn => {
@@ -7335,6 +8944,48 @@ function setupAPIIntegrationsMetricSelector() {
     saveAPIIntegrationsMetric(State.apiIntegrationsSelectedMetric);
     renderAPIIntegrationsChart(State.currentRange || '6h');
   });
+}
+
+function setupChartModeSelector() {
+  const group = document.getElementById('chart-mode-select');
+  if (!group) return;
+  const setActive = () => {
+    group.querySelectorAll('.graph-mode-btn').forEach((button) => {
+      button.classList.toggle('active', button.dataset.graphMode === normalizeGraphMode(State.graphMode));
+    });
+  };
+  setActive();
+  if (group.dataset.bound) return;
+  group.addEventListener('click', (event) => {
+    const button = event.target.closest('.graph-mode-btn');
+    if (!button) return;
+    State.graphMode = normalizeGraphMode(button.dataset.graphMode);
+    setActive();
+    saveGraphMode(State.graphMode);
+    fetchHistory(State.currentRange || '6h');
+  });
+  group.dataset.bound = 'true';
+}
+
+function setupPlatformCostChartModeSelector() {
+  const group = document.getElementById('platform-cost-chart-mode-select');
+  if (!group) return;
+  const setActive = () => {
+    group.querySelectorAll('.graph-mode-btn').forEach((button) => {
+      button.classList.toggle('active', button.dataset.graphMode === normalizeGraphMode(State.platformCostGraphMode));
+    });
+  };
+  setActive();
+  if (group.dataset.bound) return;
+  group.addEventListener('click', (event) => {
+    const button = event.target.closest('.graph-mode-btn');
+    if (!button) return;
+    State.platformCostGraphMode = normalizeGraphMode(button.dataset.graphMode);
+    setActive();
+    savePlatformCostGraphMode(State.platformCostGraphMode);
+    renderPlatformCostChart(getCurrentProvider(), State.platformCostRange || State.currentRange || '6h');
+  });
+  group.dataset.bound = 'true';
 }
 
 function setupCycleFilters() {
@@ -7431,8 +9082,7 @@ function setupPasswordToggle() {
   }
 }
 
-// ── Cycle Overview ──
-
+// Cycle Overview
 function getOverviewCategories() {
   const provider = getCurrentProvider();
   if (provider === 'both') {
@@ -7920,8 +9570,7 @@ function startAutoRefresh() {
   }, REFRESH_INTERVAL);
 }
 
-// ── Pagination Helper ──
-
+// Pagination Helper
 function renderPagination(table, page, totalPages) {
   if (totalPages <= 1) return '';
   const maxVisible = 7; // max page buttons (excluding prev/next)
@@ -7957,12 +9606,8 @@ function renderPagination(table, page, totalPages) {
   return html;
 }
 
-// ── Self-Update ──
-
-// ═══════════════════════════════════════════
+// Self-Update
 // SETTINGS PAGE
-// ═══════════════════════════════════════════
-
 function isSettingsPage() {
   return window.location.pathname === '/settings';
 }
@@ -8733,7 +10378,7 @@ function createProviderToggleRow({ key, name, desc, vis, configured, autoDetecta
     ? '<span class="status-badge deleted" style="background:var(--md-error,#b3261e);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.7rem;margin-left:8px">Deleted</span>'
     : providerStatusBadge(configured, autoDetectable, isPolling);
   const telemetryDisabled = isDeleted ? 'disabled title="Telemetry unavailable - profile deleted"' : '';
-  // Determine base provider key for settings (codex:123 → codex)
+  // Determine base provider key for settings (codex:123 -> codex)
   // Gear icon only on top-level providers, not sub-profile rows (codex:xxx)
   const isSubProfile = key.includes(':');
   const baseKey = isSubProfile ? key.split(':')[0] : key;
@@ -8833,7 +10478,7 @@ function createAPIIntegrationsToggleRow(visibility, health) {
   const statusMeta = getAPIIntegrationsStatusMeta(health);
   row.innerHTML = `
     <div class="settings-toggle-info">
-      <div class="settings-toggle-label">API Integrations <span class="badge">${statusMeta.label}</span></div>
+      <div class="settings-toggle-label">Cost <span class="badge">${statusMeta.label}</span></div>
       <div class="settings-toggle-sublabel">Local JSONL API telemetry tracking for your own automated integrations.</div>
     </div>
     <div class="settings-toggle-group">
@@ -8862,14 +10507,14 @@ function createAPIIntegrationsToggleRow(visibility, health) {
       const data = await res.json();
       if (!res.ok) {
         input.checked = !enabled;
-        showSettingsFeedback(feedback, data.error || 'Failed to update API Integrations visibility.', 'error');
+        showSettingsFeedback(feedback, data.error || 'Failed to update Cost visibility.', 'error');
         return;
       }
       State.apiIntegrationsVisibility = data.api_integrations_visibility || { dashboard: enabled };
-      showSettingsFeedback(feedback, `API Integrations dashboard ${enabled ? 'enabled' : 'disabled'}. Reload dashboard to apply tab visibility changes.`, 'success');
+      showSettingsFeedback(feedback, `Cost dashboard ${enabled ? 'enabled' : 'disabled'}. Reload dashboard to apply tab visibility changes.`, 'success');
     } catch (e) {
       input.checked = !enabled;
-      showSettingsFeedback(feedback, 'API Integrations visibility update failed.', 'error');
+      showSettingsFeedback(feedback, 'Cost visibility update failed.', 'error');
     } finally {
       input.disabled = false;
     }
@@ -8878,8 +10523,7 @@ function createAPIIntegrationsToggleRow(visibility, health) {
   return row;
 }
 
-// ── Provider Settings Modal ──
-
+// Provider Settings Modal
 // Configuration for each provider's settings fields.
 // Each entry defines the form fields shown in the modal.
 const providerSettingsConfig = {
@@ -8909,7 +10553,7 @@ const providerSettingsConfig = {
         { value: '', text: 'Use global default' },
         { value: 'usage', text: 'Usage (show utilization %)' },
         { value: 'available', text: 'Available (show remaining %)' },
-      ], default: '', hint: 'Override the global Quota Display setting (Settings → General) for Codex only. Choose "Use global default" to follow the global setting.' },
+      ], default: '', hint: 'Override the global Quota Display setting (Settings -> General) for Codex only. Choose "Use global default" to follow the global setting.' },
       { id: 'pace_mode', label: 'Weekly Pace Mode', type: 'select', options: [
         { value: 'calendar', text: 'Calendar (7-day)' },
         { value: '6-day', text: '6-day (Mon-Sat)' },
@@ -10092,11 +11736,7 @@ function addOverrideRow(quotaKey, provider, warning, critical, isAbsolute, disab
     quotaSelect.value = quotaKey;
   }
 }
-
-// ═══════════════════════════════════════════
 // NOTIFICATION CENTER
-// ═══════════════════════════════════════════
-
 let _notificationAlerts = [];
 
 async function fetchSystemAlerts() {
@@ -10271,11 +11911,9 @@ function initNotificationCenter() {
   setInterval(updateNotificationCenter, 60000);
 }
 
-// ── Init ──
-
+// Init
 document.addEventListener('DOMContentLoaded', async () => {
   applyForkPreferences({
-    default_provider: loadDefaultProvider(),
     all_dashboard_density: loadAllDashboardDensity(),
   });
 
@@ -10296,12 +11934,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Only when multiple providers are available (tabs exist)
   const urlParams = new URLSearchParams(window.location.search);
   const providerTabs = document.getElementById('provider-tabs');
-  if (!urlParams.has('provider') && providerTabs) {
+  if (!urlParams.has('provider') && providerTabs && !hasDefaultProviderCookie()) {
     const savedProvider = loadDefaultProvider();
     if (savedProvider) {
       const availableProviders = [...providerTabs.querySelectorAll('.provider-tab')].map(t => t.dataset.provider);
       // Only redirect if saved provider is available and different from server default
       if (availableProviders.includes(savedProvider) && savedProvider !== availableProviders[0]) {
+        saveDefaultProvider(savedProvider);
         window.location.href = `${BASE_PATH}/?provider=${savedProvider}`;
         return;
       }
@@ -10326,6 +11965,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   initMiniMaxAccountTabs();
   loadAPIIntegrationsPreferences();
+  loadPlatformCostHistoryCache();
 
   initTheme();
   initLayoutToggle();
@@ -10333,6 +11973,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupProviderSelector();
   setupRangeSelector();
   setupAPIIntegrationsMetricSelector();
+  setupChartModeSelector();
+  setupPlatformCostChartModeSelector();
   setupCycleFilters();
   setupPasswordToggle();
   setupTableControls();

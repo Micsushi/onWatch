@@ -89,7 +89,7 @@ func (sm *SessionManager) ReportPoll(values []float64) bool {
 	// No usage change
 	if sm.sessionID != "" {
 		if now.Sub(sm.lastActivityTime) > sm.idleTimeout {
-			// Idle timeout exceeded → close session
+			// Idle timeout exceeded -> close session
 			sm.closeSession(now)
 		} else {
 			// Still within idle window - count the snapshot

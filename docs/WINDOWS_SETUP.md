@@ -308,10 +308,10 @@ Windows Defender may flag `onwatch.exe` as `Program:Win32/Wacapew.A!ml`. **This 
 **Our status:** We have submitted onwatch.exe to Microsoft for analysis and whitelisting. This process typically takes 1-2 weeks.
 
 **Workaround:** Add an exclusion in Windows Defender:
-1. Open **Windows Security** → **Virus & threat protection**
+1. Open **Windows Security** -> **Virus & threat protection**
 2. Under "Virus & threat protection settings", click **Manage settings**
-3. Scroll to **Exclusions** → **Add or remove exclusions**
-4. Click **Add an exclusion** → **Folder**
+3. Scroll to **Exclusions** -> **Add or remove exclusions**
+4. Click **Add an exclusion** -> **Folder**
 5. Add: `C:\Users\<your-username>\.onwatch`
 
 The source code is fully auditable at [github.com/onllm-dev/onwatch](https://github.com/onllm-dev/onwatch) (GPL-3.0).

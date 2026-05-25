@@ -18,27 +18,94 @@ const (
 
 // APIIntegrationUsageSummaryRow contains grouped usage totals for backend reporting.
 type APIIntegrationUsageSummaryRow struct {
-	IntegrationName  string
-	Provider         string
-	AccountName      string
-	Model            string
-	RequestCount     int
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-	TotalCostUSD     float64
-	LastCapturedAt   time.Time
+	IntegrationName   string
+	Provider          string
+	AccountName       string
+	Model             string
+	RequestCount      int
+	PromptTokens      int
+	CompletionTokens  int
+	TotalTokens       int
+	InputTokens       int
+	CachedTokens      int
+	CacheCreateTokens int
+	OutputTokens      int
+	ReasoningTokens   int
+	TotalCostUSD      float64
+	LastCapturedAt    time.Time
+}
+
+// APIIntegrationUsageEffortSummaryRow groups usage by model plus recorded agent mode metadata.
+type APIIntegrationUsageEffortSummaryRow struct {
+	IntegrationName   string
+	Provider          string
+	AccountName       string
+	Model             string
+	ReasoningEffort   string
+	Mode              string
+	SpeedMode         string
+	RequestCount      int
+	PromptTokens      int
+	CompletionTokens  int
+	TotalTokens       int
+	InputTokens       int
+	CachedTokens      int
+	CacheCreateTokens int
+	OutputTokens      int
+	ReasoningTokens   int
+	TotalCostUSD      float64
+	LastCapturedAt    time.Time
 }
 
 // APIIntegrationUsageBucketRow contains aggregated usage for one integration and time bucket.
 type APIIntegrationUsageBucketRow struct {
-	IntegrationName  string
-	BucketStart      time.Time
-	RequestCount     int
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-	TotalCostUSD     float64
+	IntegrationName   string
+	BucketStart       time.Time
+	RequestCount      int
+	PromptTokens      int
+	CompletionTokens  int
+	TotalTokens       int
+	InputTokens       int
+	CachedTokens      int
+	CacheCreateTokens int
+	OutputTokens      int
+	ReasoningTokens   int
+	TotalCostUSD      float64
+}
+
+// APIIntegrationUsageSessionRow groups usage by chat/session and day.
+type APIIntegrationUsageSessionRow struct {
+	IntegrationName   string
+	SessionID         string
+	ChatDate          string
+	StartedAt         time.Time
+	LastCapturedAt    time.Time
+	RequestCount      int
+	PromptTokens      int
+	CompletionTokens  int
+	TotalTokens       int
+	InputTokens       int
+	CachedTokens      int
+	CacheCreateTokens int
+	OutputTokens      int
+	ReasoningTokens   int
+	TotalCostUSD      float64
+}
+
+// APIIntegrationUsageTotalsRow contains full range totals for one integration.
+type APIIntegrationUsageTotalsRow struct {
+	IntegrationName   string
+	RequestCount      int
+	PromptTokens      int
+	CompletionTokens  int
+	TotalTokens       int
+	InputTokens       int
+	CachedTokens      int
+	CacheCreateTokens int
+	OutputTokens      int
+	ReasoningTokens   int
+	TotalCostUSD      float64
+	LastCapturedAt    time.Time
 }
 
 // APIIntegrationIngestHealthRow contains persisted ingest state with last seen event time.
@@ -82,6 +149,10 @@ func (s *Store) InsertAPIIntegrationUsageEvent(event *apiintegrations.UsageEvent
 	)
 	if err != nil {
 		if isSQLiteUniqueConstraintError(err) {
+			if updateErr := s.updateAPIIntegrationUsageEventMetadata(event); updateErr != nil {
+				return 0, updateErr
+			}
+			s.bumpAPIIntegrationUsageVersion()
 			return 0, ErrDuplicateAPIIntegrationUsageEvent
 		}
 		return 0, fmt.Errorf("failed to insert API integration usage event: %w", err)
@@ -90,7 +161,44 @@ func (s *Store) InsertAPIIntegrationUsageEvent(event *apiintegrations.UsageEvent
 	if err != nil {
 		return 0, fmt.Errorf("failed to get API integration usage event id: %w", err)
 	}
+	s.bumpAPIIntegrationUsageVersion()
 	return id, nil
+}
+
+// APIIntegrationUsageVersion changes whenever stored API integration usage changes.
+func (s *Store) APIIntegrationUsageVersion() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.apiIntegrationUsageVersion.Load()
+}
+
+func (s *Store) bumpAPIIntegrationUsageVersion() {
+	if s != nil {
+		s.apiIntegrationUsageVersion.Add(1)
+	}
+}
+
+func (s *Store) updateAPIIntegrationUsageEventMetadata(event *apiintegrations.UsageEvent) error {
+	if event.MetadataJSON == "" && event.CostUSD == nil && event.LatencyMS == nil {
+		return nil
+	}
+	_, err := s.db.Exec(`
+		UPDATE api_integration_usage_events
+		SET
+			metadata_json = CASE
+				WHEN ? != '' AND (metadata_json = '' OR metadata_json = '{}' OR metadata_json = 'null') THEN ?
+				WHEN ? != '' AND json_valid(metadata_json) AND json_valid(?) THEN json_patch(metadata_json, ?)
+				ELSE metadata_json
+			END,
+			cost_usd = COALESCE(cost_usd, ?),
+			latency_ms = COALESCE(latency_ms, ?)
+		WHERE fingerprint = ?
+	`, event.MetadataJSON, event.MetadataJSON, event.MetadataJSON, event.MetadataJSON, event.MetadataJSON, event.CostUSD, event.LatencyMS, event.Fingerprint)
+	if err != nil {
+		return fmt.Errorf("failed to update duplicate API integration usage event metadata: %w", err)
+	}
+	return nil
 }
 
 // QueryAPIIntegrationUsageRange returns API integration usage events ordered by capture time ascending.
@@ -166,6 +274,9 @@ func (s *Store) DeleteAPIIntegrationUsageEventsOlderThan(cutoff time.Time) (int6
 	if err != nil {
 		return 0, fmt.Errorf("failed to count deleted API integration usage events: %w", err)
 	}
+	if deleted > 0 {
+		s.bumpAPIIntegrationUsageVersion()
+	}
 	return deleted, nil
 }
 
@@ -177,6 +288,11 @@ func (s *Store) QueryAPIIntegrationUsageSummary() ([]APIIntegrationUsageSummaryR
 		       COALESCE(SUM(prompt_tokens), 0),
 		       COALESCE(SUM(completion_tokens), 0),
 		       COALESCE(SUM(total_tokens), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.input_tokens'), prompt_tokens) AS INTEGER) ELSE prompt_tokens END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cached_input_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cache_creation_input_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.output_tokens'), completion_tokens) AS INTEGER) ELSE completion_tokens END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.reasoning_output_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
 		       COALESCE(SUM(cost_usd), 0),
 		       MAX(captured_at)
 		FROM api_integration_usage_events
@@ -202,10 +318,234 @@ func (s *Store) QueryAPIIntegrationUsageSummary() ([]APIIntegrationUsageSummaryR
 			&row.PromptTokens,
 			&row.CompletionTokens,
 			&row.TotalTokens,
+			&row.InputTokens,
+			&row.CachedTokens,
+			&row.CacheCreateTokens,
+			&row.OutputTokens,
+			&row.ReasoningTokens,
 			&row.TotalCostUSD,
 			&lastCapturedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan API integration usage summary: %w", err)
+		}
+		row.LastCapturedAt, _ = time.Parse(time.RFC3339Nano, lastCapturedAt)
+		summary = append(summary, row)
+	}
+	return summary, rows.Err()
+}
+
+// QueryAPIIntegrationUsageEffortSummary groups usage by integration/provider/account/model/effort/mode.
+func (s *Store) QueryAPIIntegrationUsageEffortSummary() ([]APIIntegrationUsageEffortSummaryRow, error) {
+	rows, err := s.db.Query(`
+		WITH annotated AS (
+			SELECT
+				integration_name,
+				provider,
+				account_name,
+				model,
+				CASE
+					WHEN json_valid(metadata_json) THEN COALESCE(NULLIF(json_extract(metadata_json, '$.reasoning_effort'), ''), 'unknown')
+					ELSE 'unknown'
+				END AS reasoning_effort,
+				CASE
+					WHEN json_valid(metadata_json) THEN COALESCE(NULLIF(json_extract(metadata_json, '$.mode'), ''), 'unknown')
+					ELSE 'unknown'
+				END AS mode,
+				CASE
+					WHEN json_valid(metadata_json) AND json_extract(metadata_json, '$.fast_mode') = 1 THEN 'fast'
+					WHEN json_valid(metadata_json) AND json_extract(metadata_json, '$.fast_mode') = 0 THEN 'standard'
+					WHEN json_valid(metadata_json) THEN COALESCE(NULLIF(json_extract(metadata_json, '$.speed_mode'), ''), 'unknown')
+					ELSE 'unknown'
+				END AS speed_mode,
+				prompt_tokens,
+				completion_tokens,
+				total_tokens,
+				CASE
+					WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.input_tokens'), prompt_tokens) AS INTEGER)
+					ELSE prompt_tokens
+				END AS input_tokens,
+				CASE
+					WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cached_input_tokens'), 0) AS INTEGER)
+					ELSE 0
+				END AS cached_input_tokens,
+				CASE
+					WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cache_creation_input_tokens'), 0) AS INTEGER)
+					ELSE 0
+				END AS cache_creation_input_tokens,
+				CASE
+					WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.output_tokens'), completion_tokens) AS INTEGER)
+					ELSE completion_tokens
+				END AS output_tokens,
+				CASE
+					WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.reasoning_output_tokens'), 0) AS INTEGER)
+					ELSE 0
+				END AS reasoning_output_tokens,
+				cost_usd,
+				captured_at
+			FROM api_integration_usage_events
+		)
+		SELECT integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode,
+		       COUNT(*),
+		       COALESCE(SUM(prompt_tokens), 0),
+		       COALESCE(SUM(completion_tokens), 0),
+		       COALESCE(SUM(total_tokens), 0),
+		       COALESCE(SUM(input_tokens), 0),
+		       COALESCE(SUM(cached_input_tokens), 0),
+		       COALESCE(SUM(cache_creation_input_tokens), 0),
+		       COALESCE(SUM(output_tokens), 0),
+		       COALESCE(SUM(reasoning_output_tokens), 0),
+		       COALESCE(SUM(cost_usd), 0),
+		       MAX(captured_at)
+		FROM annotated
+		GROUP BY integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode
+		ORDER BY integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode
+		LIMIT ?
+	`, apiIntegrationUsageSummaryLimit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API integration effort summary: %w", err)
+	}
+	defer rows.Close()
+
+	var summary []APIIntegrationUsageEffortSummaryRow
+	for rows.Next() {
+		var row APIIntegrationUsageEffortSummaryRow
+		var lastCapturedAt string
+		if err := rows.Scan(
+			&row.IntegrationName,
+			&row.Provider,
+			&row.AccountName,
+			&row.Model,
+			&row.ReasoningEffort,
+			&row.Mode,
+			&row.SpeedMode,
+			&row.RequestCount,
+			&row.PromptTokens,
+			&row.CompletionTokens,
+			&row.TotalTokens,
+			&row.InputTokens,
+			&row.CachedTokens,
+			&row.CacheCreateTokens,
+			&row.OutputTokens,
+			&row.ReasoningTokens,
+			&row.TotalCostUSD,
+			&lastCapturedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan API integration effort summary: %w", err)
+		}
+		row.LastCapturedAt, _ = time.Parse(time.RFC3339Nano, lastCapturedAt)
+		summary = append(summary, row)
+	}
+	return summary, rows.Err()
+}
+
+// QueryAPIIntegrationUsageEffortTotals groups usage over a range by integration/provider/account/model/effort/mode.
+func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integrationName string) ([]APIIntegrationUsageEffortSummaryRow, error) {
+	query := `
+		WITH annotated AS (
+			SELECT
+				integration_name,
+				provider,
+				account_name,
+				model,
+				CASE
+					WHEN json_valid(metadata_json) THEN COALESCE(NULLIF(json_extract(metadata_json, '$.reasoning_effort'), ''), 'unknown')
+					ELSE 'unknown'
+				END AS reasoning_effort,
+				CASE
+					WHEN json_valid(metadata_json) THEN COALESCE(NULLIF(json_extract(metadata_json, '$.mode'), ''), 'unknown')
+					ELSE 'unknown'
+				END AS mode,
+				CASE
+					WHEN json_valid(metadata_json) AND json_extract(metadata_json, '$.fast_mode') = 1 THEN 'fast'
+					WHEN json_valid(metadata_json) AND json_extract(metadata_json, '$.fast_mode') = 0 THEN 'standard'
+					WHEN json_valid(metadata_json) THEN COALESCE(NULLIF(json_extract(metadata_json, '$.speed_mode'), ''), 'unknown')
+					ELSE 'unknown'
+				END AS speed_mode,
+				prompt_tokens,
+				completion_tokens,
+				total_tokens,
+				CASE
+					WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.input_tokens'), prompt_tokens) AS INTEGER)
+					ELSE prompt_tokens
+				END AS input_tokens,
+				CASE
+					WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cached_input_tokens'), 0) AS INTEGER)
+					ELSE 0
+				END AS cached_input_tokens,
+				CASE
+					WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cache_creation_input_tokens'), 0) AS INTEGER)
+					ELSE 0
+				END AS cache_creation_input_tokens,
+				CASE
+					WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.output_tokens'), completion_tokens) AS INTEGER)
+					ELSE completion_tokens
+				END AS output_tokens,
+				CASE
+					WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.reasoning_output_tokens'), 0) AS INTEGER)
+					ELSE 0
+				END AS reasoning_output_tokens,
+				cost_usd,
+				captured_at
+			FROM api_integration_usage_events
+			WHERE captured_at BETWEEN ? AND ?
+	`
+	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
+	if integrationName != "" {
+		query += ` AND integration_name = ?`
+		args = append(args, integrationName)
+	}
+	query += `
+		)
+		SELECT integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode,
+		       COUNT(*),
+		       COALESCE(SUM(prompt_tokens), 0),
+		       COALESCE(SUM(completion_tokens), 0),
+		       COALESCE(SUM(total_tokens), 0),
+		       COALESCE(SUM(input_tokens), 0),
+		       COALESCE(SUM(cached_input_tokens), 0),
+		       COALESCE(SUM(cache_creation_input_tokens), 0),
+		       COALESCE(SUM(output_tokens), 0),
+		       COALESCE(SUM(reasoning_output_tokens), 0),
+		       COALESCE(SUM(cost_usd), 0),
+		       MAX(captured_at)
+		FROM annotated
+		GROUP BY integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode
+		ORDER BY integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode
+		LIMIT ?
+	`
+	args = append(args, apiIntegrationUsageSummaryLimit)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API integration effort range totals: %w", err)
+	}
+	defer rows.Close()
+
+	var summary []APIIntegrationUsageEffortSummaryRow
+	for rows.Next() {
+		var row APIIntegrationUsageEffortSummaryRow
+		var lastCapturedAt string
+		if err := rows.Scan(
+			&row.IntegrationName,
+			&row.Provider,
+			&row.AccountName,
+			&row.Model,
+			&row.ReasoningEffort,
+			&row.Mode,
+			&row.SpeedMode,
+			&row.RequestCount,
+			&row.PromptTokens,
+			&row.CompletionTokens,
+			&row.TotalTokens,
+			&row.InputTokens,
+			&row.CachedTokens,
+			&row.CacheCreateTokens,
+			&row.OutputTokens,
+			&row.ReasoningTokens,
+			&row.TotalCostUSD,
+			&lastCapturedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan API integration effort range totals: %w", err)
 		}
 		row.LastCapturedAt, _ = time.Parse(time.RFC3339Nano, lastCapturedAt)
 		summary = append(summary, row)
@@ -227,6 +567,11 @@ func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 		       COALESCE(SUM(prompt_tokens), 0),
 		       COALESCE(SUM(completion_tokens), 0),
 		       COALESCE(SUM(total_tokens), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.input_tokens'), prompt_tokens) AS INTEGER) ELSE prompt_tokens END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cached_input_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cache_creation_input_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.output_tokens'), completion_tokens) AS INTEGER) ELSE completion_tokens END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.reasoning_output_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
 		       COALESCE(SUM(cost_usd), 0)
 		FROM api_integration_usage_events
 		WHERE captured_at BETWEEN ? AND ?
@@ -250,6 +595,11 @@ func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 			&row.PromptTokens,
 			&row.CompletionTokens,
 			&row.TotalTokens,
+			&row.InputTokens,
+			&row.CachedTokens,
+			&row.CacheCreateTokens,
+			&row.OutputTokens,
+			&row.ReasoningTokens,
 			&row.TotalCostUSD,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan API integration usage bucket: %w", err)
@@ -258,6 +608,140 @@ func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 		buckets = append(buckets, row)
 	}
 	return buckets, rows.Err()
+}
+
+// QueryAPIIntegrationUsageSessions groups usage by chat/session and calendar day.
+func (s *Store) QueryAPIIntegrationUsageSessions(start, end time.Time, integrationName string, limit int) ([]APIIntegrationUsageSessionRow, error) {
+	if limit <= 0 {
+		limit = apiIntegrationUsageBucketsLimit
+	}
+	query := `
+		SELECT integration_name,
+		       COALESCE(NULLIF(json_extract(metadata_json, '$.session_id'), ''), source_path, 'unknown') AS session_id,
+		       substr(captured_at, 1, 10) AS chat_date,
+		       MIN(captured_at),
+		       MAX(captured_at),
+		       COUNT(*),
+		       COALESCE(SUM(prompt_tokens), 0),
+		       COALESCE(SUM(completion_tokens), 0),
+		       COALESCE(SUM(total_tokens), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.input_tokens'), prompt_tokens) AS INTEGER) ELSE prompt_tokens END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cached_input_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cache_creation_input_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.output_tokens'), completion_tokens) AS INTEGER) ELSE completion_tokens END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.reasoning_output_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
+		       COALESCE(SUM(cost_usd), 0)
+		FROM api_integration_usage_events
+		WHERE captured_at BETWEEN ? AND ?
+	`
+	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
+	if integrationName != "" {
+		query += ` AND integration_name = ?`
+		args = append(args, integrationName)
+	}
+	query += `
+		GROUP BY integration_name, session_id, chat_date
+		ORDER BY MIN(captured_at) ASC
+		LIMIT ?
+	`
+	args = append(args, limit)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API integration usage sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []APIIntegrationUsageSessionRow
+	for rows.Next() {
+		var row APIIntegrationUsageSessionRow
+		var startedAt, lastCapturedAt string
+		if err := rows.Scan(
+			&row.IntegrationName,
+			&row.SessionID,
+			&row.ChatDate,
+			&startedAt,
+			&lastCapturedAt,
+			&row.RequestCount,
+			&row.PromptTokens,
+			&row.CompletionTokens,
+			&row.TotalTokens,
+			&row.InputTokens,
+			&row.CachedTokens,
+			&row.CacheCreateTokens,
+			&row.OutputTokens,
+			&row.ReasoningTokens,
+			&row.TotalCostUSD,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan API integration usage session: %w", err)
+		}
+		row.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
+		row.LastCapturedAt, _ = time.Parse(time.RFC3339Nano, lastCapturedAt)
+		sessions = append(sessions, row)
+	}
+	return sessions, rows.Err()
+}
+
+// QueryAPIIntegrationUsageTotals groups usage into unsampled range totals by integration.
+func (s *Store) QueryAPIIntegrationUsageTotals(start, end time.Time, integrationName string) ([]APIIntegrationUsageTotalsRow, error) {
+	query := `
+		SELECT integration_name,
+		       COUNT(*),
+		       COALESCE(SUM(prompt_tokens), 0),
+		       COALESCE(SUM(completion_tokens), 0),
+		       COALESCE(SUM(total_tokens), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.input_tokens'), prompt_tokens) AS INTEGER) ELSE prompt_tokens END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cached_input_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cache_creation_input_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.output_tokens'), completion_tokens) AS INTEGER) ELSE completion_tokens END), 0),
+		       COALESCE(SUM(CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.reasoning_output_tokens'), 0) AS INTEGER) ELSE 0 END), 0),
+		       COALESCE(SUM(cost_usd), 0),
+		       MAX(captured_at)
+		FROM api_integration_usage_events
+		WHERE captured_at BETWEEN ? AND ?
+	`
+	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
+	if integrationName != "" {
+		query += ` AND integration_name = ?`
+		args = append(args, integrationName)
+	}
+	query += `
+		GROUP BY integration_name
+		ORDER BY integration_name
+	`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API integration usage totals: %w", err)
+	}
+	defer rows.Close()
+
+	var totals []APIIntegrationUsageTotalsRow
+	for rows.Next() {
+		var row APIIntegrationUsageTotalsRow
+		var lastCapturedAt sql.NullString
+		if err := rows.Scan(
+			&row.IntegrationName,
+			&row.RequestCount,
+			&row.PromptTokens,
+			&row.CompletionTokens,
+			&row.TotalTokens,
+			&row.InputTokens,
+			&row.CachedTokens,
+			&row.CacheCreateTokens,
+			&row.OutputTokens,
+			&row.ReasoningTokens,
+			&row.TotalCostUSD,
+			&lastCapturedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan API integration usage totals: %w", err)
+		}
+		if lastCapturedAt.Valid {
+			row.LastCapturedAt, _ = time.Parse(time.RFC3339Nano, lastCapturedAt.String)
+		}
+		totals = append(totals, row)
+	}
+	return totals, rows.Err()
 }
 
 // GetAPIIntegrationIngestState returns the persisted tail cursor for a source file.

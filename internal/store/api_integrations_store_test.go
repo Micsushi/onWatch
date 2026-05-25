@@ -10,6 +10,17 @@ import (
 	apiintegrations "github.com/onllm-dev/onwatch/v2/internal/api_integrations"
 )
 
+func insertAPIIntegrationUsageEventForTest(t *testing.T, s *Store, line, sourcePath string) {
+	t.Helper()
+	event, err := apiintegrations.ParseUsageEventLine([]byte(line), sourcePath)
+	if err != nil {
+		t.Fatalf("ParseUsageEventLine: %v", err)
+	}
+	if _, err := s.InsertAPIIntegrationUsageEvent(event); err != nil {
+		t.Fatalf("InsertAPIIntegrationUsageEvent: %v", err)
+	}
+}
+
 func TestStore_InsertAPIIntegrationUsageEvent_Dedup(t *testing.T) {
 	t.Parallel()
 	s, err := New(":memory:")
@@ -31,6 +42,43 @@ func TestStore_InsertAPIIntegrationUsageEvent_Dedup(t *testing.T) {
 	}
 }
 
+func TestStore_InsertAPIIntegrationUsageEvent_DuplicateUpdatesMetadata(t *testing.T) {
+	t.Parallel()
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	sourcePath := "/tmp/api-integrations/codex.jsonl"
+	plain, err := apiintegrations.ParseUsageEventLine([]byte(`{"ts":"2026-04-03T12:00:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":10,"completion_tokens":5}`), sourcePath)
+	if err != nil {
+		t.Fatalf("ParseUsageEventLine(plain): %v", err)
+	}
+	if _, err := s.InsertAPIIntegrationUsageEvent(plain); err != nil {
+		t.Fatalf("InsertAPIIntegrationUsageEvent(plain): %v", err)
+	}
+
+	rich, err := apiintegrations.ParseUsageEventLine([]byte(`{"ts":"2026-04-03T12:00:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":10,"completion_tokens":5,"metadata":{"reasoning_effort":"xhigh","fast_mode":true}}`), sourcePath)
+	if err != nil {
+		t.Fatalf("ParseUsageEventLine(rich): %v", err)
+	}
+	if _, err := s.InsertAPIIntegrationUsageEvent(rich); !errors.Is(err, ErrDuplicateAPIIntegrationUsageEvent) {
+		t.Fatalf("expected ErrDuplicateAPIIntegrationUsageEvent, got %v", err)
+	}
+
+	events, err := s.QueryAPIIntegrationUsageRange(time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC), time.Date(2026, 4, 4, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("QueryAPIIntegrationUsageRange: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events len=%d want 1", len(events))
+	}
+	if !strings.Contains(events[0].MetadataJSON, `"reasoning_effort":"xhigh"`) || !strings.Contains(events[0].MetadataJSON, `"fast_mode":true`) {
+		t.Fatalf("metadata was not updated: %q", events[0].MetadataJSON)
+	}
+}
+
 func TestStore_QueryAPIIntegrationUsageSummary(t *testing.T) {
 	t.Parallel()
 	s, err := New(":memory:")
@@ -40,8 +88,8 @@ func TestStore_QueryAPIIntegrationUsageSummary(t *testing.T) {
 	defer s.Close()
 
 	lines := []string{
-		`{"ts":"2026-04-03T12:00:00Z","integration":"notes","provider":"anthropic","model":"claude-3-7-sonnet","prompt_tokens":10,"completion_tokens":5,"cost_usd":0.1}`,
-		`{"ts":"2026-04-03T12:01:00Z","integration":"notes","provider":"anthropic","model":"claude-3-7-sonnet","prompt_tokens":2,"completion_tokens":3,"cost_usd":0.2}`,
+		`{"ts":"2026-04-03T12:00:00Z","integration":"notes","provider":"anthropic","model":"claude-3-7-sonnet","prompt_tokens":10,"completion_tokens":5,"cost_usd":0.1,"metadata":{"input_tokens":6,"cached_input_tokens":4,"cache_creation_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}`,
+		`{"ts":"2026-04-03T12:01:00Z","integration":"notes","provider":"anthropic","model":"claude-3-7-sonnet","prompt_tokens":2,"completion_tokens":3,"cost_usd":0.2,"metadata":{"input_tokens":2,"cached_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2,"reasoning_output_tokens":1}}`,
 		`{"ts":"2026-04-03T12:02:00Z","integration":"notes","provider":"mistral","model":"mistral-small-latest","prompt_tokens":4,"completion_tokens":1}`,
 	}
 	for i, line := range lines {
@@ -64,8 +112,77 @@ func TestStore_QueryAPIIntegrationUsageSummary(t *testing.T) {
 	if summary[0].Provider != "anthropic" || summary[0].RequestCount != 2 || summary[0].TotalTokens != 20 {
 		t.Fatalf("anthropic summary=%+v", summary[0])
 	}
+	if summary[0].InputTokens != 8 || summary[0].CachedTokens != 4 || summary[0].OutputTokens != 7 || summary[0].ReasoningTokens != 1 {
+		t.Fatalf("anthropic split tokens=%+v", summary[0])
+	}
 	if summary[0].TotalCostUSD != 0.30000000000000004 && summary[0].TotalCostUSD != 0.3 {
 		t.Fatalf("anthropic cost=%v", summary[0].TotalCostUSD)
+	}
+}
+
+func TestStore_QueryAPIIntegrationUsageTotals_RangeAndIntegration(t *testing.T) {
+	t.Parallel()
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	insertAPIIntegrationUsageEventForTest(t, s, `{"ts":"2026-04-03T12:00:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":100,"completion_tokens":20,"cost_usd":1.2,"metadata":{"input_tokens":40,"cached_input_tokens":60,"cache_creation_input_tokens":5,"output_tokens":15,"reasoning_output_tokens":5}}`, "/tmp/codex-a.jsonl")
+	insertAPIIntegrationUsageEventForTest(t, s, `{"ts":"2026-04-03T12:10:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":50,"completion_tokens":10,"cost_usd":0.6,"metadata":{"input_tokens":20,"cached_input_tokens":30,"output_tokens":8,"reasoning_output_tokens":2}}`, "/tmp/codex-b.jsonl")
+	insertAPIIntegrationUsageEventForTest(t, s, `{"ts":"2026-04-02T12:00:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":999,"completion_tokens":1,"cost_usd":9.99}`, "/tmp/codex-old.jsonl")
+	insertAPIIntegrationUsageEventForTest(t, s, `{"ts":"2026-04-03T12:15:00Z","integration":"Claude Code","provider":"anthropic","model":"claude-sonnet-4-6","prompt_tokens":1000,"completion_tokens":100,"cost_usd":2.0}`, "/tmp/claude.jsonl")
+
+	rows, err := s.QueryAPIIntegrationUsageTotals(
+		time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 4, 4, 0, 0, 0, 0, time.UTC),
+		"Codex CLI",
+	)
+	if err != nil {
+		t.Fatalf("QueryAPIIntegrationUsageTotals: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows len=%d want 1: %+v", len(rows), rows)
+	}
+	row := rows[0]
+	if row.IntegrationName != "Codex CLI" || row.RequestCount != 2 || row.TotalTokens != 180 {
+		t.Fatalf("row totals=%+v", row)
+	}
+	if row.InputTokens != 60 || row.CachedTokens != 90 || row.CacheCreateTokens != 5 || row.OutputTokens != 23 || row.ReasoningTokens != 7 {
+		t.Fatalf("row split tokens=%+v", row)
+	}
+	if row.TotalCostUSD != 1.7999999999999998 && row.TotalCostUSD != 1.8 {
+		t.Fatalf("row cost=%v", row.TotalCostUSD)
+	}
+}
+
+func TestStore_QueryAPIIntegrationUsageEffortSummary(t *testing.T) {
+	t.Parallel()
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	insertAPIIntegrationUsageEventForTest(t, s, `{"ts":"2026-04-03T12:00:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":10,"completion_tokens":5,"cost_usd":0.1,"metadata":{"reasoning_effort":"high","mode":"default","fast_mode":true,"input_tokens":6,"cached_input_tokens":4,"output_tokens":4,"reasoning_output_tokens":1}}`, "/tmp/codex.jsonl")
+	insertAPIIntegrationUsageEventForTest(t, s, `{"ts":"2026-04-03T12:01:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":7,"completion_tokens":3,"cost_usd":0.05,"metadata":{"reasoning_effort":"high","mode":"default","fast_mode":true,"input_tokens":5,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":0}}`, "/tmp/codex.jsonl")
+	insertAPIIntegrationUsageEventForTest(t, s, `{"ts":"2026-04-03T12:02:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":4,"completion_tokens":2,"metadata":{"reasoning_effort":"medium","mode":"default","fast_mode":false}}`, "/tmp/codex.jsonl")
+
+	rows, err := s.QueryAPIIntegrationUsageEffortSummary()
+	if err != nil {
+		t.Fatalf("QueryAPIIntegrationUsageEffortSummary: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows len=%d want 2: %+v", len(rows), rows)
+	}
+	if rows[0].ReasoningEffort != "high" || rows[0].SpeedMode != "fast" || rows[0].RequestCount != 2 || rows[0].TotalTokens != 25 {
+		t.Fatalf("high row=%+v", rows[0])
+	}
+	if rows[0].InputTokens != 11 || rows[0].CachedTokens != 6 || rows[0].OutputTokens != 7 || rows[0].ReasoningTokens != 1 {
+		t.Fatalf("high row split tokens=%+v", rows[0])
+	}
+	if rows[1].ReasoningEffort != "medium" || rows[1].SpeedMode != "standard" || rows[1].RequestCount != 1 || rows[1].TotalTokens != 6 {
+		t.Fatalf("medium row=%+v", rows[1])
 	}
 }
 

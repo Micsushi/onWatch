@@ -84,36 +84,37 @@ type MiniMaxAccountReloader interface {
 
 // Handler handles HTTP requests for the web dashboard
 type Handler struct {
-	store               *store.Store
-	tracker             *tracker.Tracker
-	zaiTracker          *tracker.ZaiTracker
-	anthropicTracker    *tracker.AnthropicTracker
-	copilotTracker      *tracker.CopilotTracker
-	codexTracker        *tracker.CodexTracker
-	antigravityTracker  *tracker.AntigravityTracker
-	minimaxTracker      *tracker.MiniMaxTracker
-	geminiTracker       *tracker.GeminiTracker
-	openrouterTracker   *tracker.OpenRouterTracker
-	cursorTracker       *tracker.CursorTracker
-	updater             *update.Updater
-	notifier            Notifier
-	agentManager        ProviderAgentController
-	minimaxAgentMgr     MiniMaxAccountReloader
-	logger              *slog.Logger
-	dashboardTmpl       *template.Template
-	loginTmpl           *template.Template
-	settingsTmpl        *template.Template
-	sessions            *SessionStore
-	config              *config.Config
-	metrics             *metrics.Metrics
-	version             string
-	smtpTestMu          sync.Mutex
-	smtpTestLastSent    time.Time
-	pushTestMu          sync.Mutex
-	pushTestLastSent    time.Time
-	discordTestMu       sync.Mutex
-	discordTestLastSent time.Time
-	rateLimiter         *LoginRateLimiter // Per-IP rate limiting for login attempts
+	store                *store.Store
+	tracker              *tracker.Tracker
+	zaiTracker           *tracker.ZaiTracker
+	anthropicTracker     *tracker.AnthropicTracker
+	copilotTracker       *tracker.CopilotTracker
+	codexTracker         *tracker.CodexTracker
+	antigravityTracker   *tracker.AntigravityTracker
+	minimaxTracker       *tracker.MiniMaxTracker
+	geminiTracker        *tracker.GeminiTracker
+	openrouterTracker    *tracker.OpenRouterTracker
+	cursorTracker        *tracker.CursorTracker
+	updater              *update.Updater
+	notifier             Notifier
+	agentManager         ProviderAgentController
+	minimaxAgentMgr      MiniMaxAccountReloader
+	logger               *slog.Logger
+	dashboardTmpl        *template.Template
+	loginTmpl            *template.Template
+	settingsTmpl         *template.Template
+	sessions             *SessionStore
+	config               *config.Config
+	metrics              *metrics.Metrics
+	version              string
+	smtpTestMu           sync.Mutex
+	smtpTestLastSent     time.Time
+	pushTestMu           sync.Mutex
+	pushTestLastSent     time.Time
+	discordTestMu        sync.Mutex
+	discordTestLastSent  time.Time
+	rateLimiter          *LoginRateLimiter // Per-IP rate limiting for login attempts
+	apiIntegrationsCache apiIntegrationResponseCache
 }
 
 // DefaultCodexAccountID is the default account ID for single-account setups.
@@ -1164,11 +1165,19 @@ func (h *Handler) forkPreferences() map[string]interface{} {
 	return sanitizeForkPreferences(prefs)
 }
 
-func (h *Handler) forkDefaultProvider(providers []string) string {
+func (h *Handler) forkDefaultProvider(r *http.Request, providers []string) string {
 	prefs := h.forkPreferences()
 	provider, _ := prefs["default_provider"].(string)
 	if provider == "" {
 		provider = "both"
+	}
+	if r != nil {
+		if cookie, err := r.Cookie("onwatch-default-provider"); err == nil {
+			cookieProvider := strings.ToLower(strings.TrimSpace(cookie.Value))
+			if regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(cookieProvider) {
+				provider = cookieProvider
+			}
+		}
 	}
 	for _, p := range providers {
 		if p == provider {
@@ -1849,7 +1858,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		if h.config.HasMultipleProviders() {
 			providers = append(providers, "both")
 		}
-		currentProvider = h.forkDefaultProvider(providers)
+		currentProvider = h.forkDefaultProvider(r, providers)
 		// Allow overriding via query param
 		if reqProvider := r.URL.Query().Get("provider"); reqProvider != "" {
 			reqProvider = strings.ToLower(reqProvider)
@@ -4287,8 +4296,7 @@ func (h *Handler) queryCodexSessionsByAccount(accountID int64) ([]*store.Session
 	return merged, nil
 }
 
-// ── Deep Insights ──
-
+// Deep Insights
 type insightStat struct {
 	Value    string `json:"value"`
 	Label    string `json:"label"`
@@ -4533,14 +4541,13 @@ func (h *Handler) buildSyntheticInsights(hidden map[string]bool, rangeDur time.D
 	subAvg := billingPeriodAvg(subCycles)
 	subPeak := billingPeriodPeak(subCycles)
 
-	// ═══ Stats Cards (exactly 4, range-aware) ═══
+	// Stats Cards (exactly 4, range-aware)
 	resp.Stats = append(resp.Stats, insightStat{Value: compactNum(subRange), Label: fmt.Sprintf("Requests (%s)", rangeLabel)})
 	resp.Stats = append(resp.Stats, insightStat{Value: compactNum(totalRange), Label: fmt.Sprintf("Total API Calls (%s)", rangeLabel)})
 	resp.Stats = append(resp.Stats, insightStat{Value: compactNum(toolRange), Label: fmt.Sprintf("Tool Calls (%s)", rangeLabel)})
 	resp.Stats = append(resp.Stats, insightStat{Value: fmt.Sprintf("%d", sessionsInRange), Label: "Sessions"})
 
-	// ═══ Deep Insights (analytical cards only - no session avg, no live quota duplicates) ═══
-
+	// Deep Insights (analytical cards only - no session avg, no live quota duplicates)
 	// 1. Avg Cycle Utilization %
 	if !hidden["cycle_utilization"] && subAvg > 0 && subLimit > 0 {
 		util := (subAvg / subLimit) * 100
@@ -4751,7 +4758,7 @@ func (h *Handler) buildZaiInsights(hidden map[string]bool) insightsResponse {
 		avgTokensPerCall = tokensUsed / totalToolCalls
 	}
 
-	// ═══ Stats Cards (quick KPI numbers - no duplicates with insights below) ═══
+	// Stats Cards (quick KPI numbers - no duplicates with insights below)
 	resp.Stats = append(resp.Stats, insightStat{
 		Value: fmt.Sprintf("%d%%", latest.TokensPercentage),
 		Label: "Tokens Used",
@@ -4769,8 +4776,7 @@ func (h *Handler) buildZaiInsights(hidden map[string]bool) insightsResponse {
 		Label: "Time Budget",
 	})
 
-	// ═══ Deep Insights ═══
-
+	// Deep Insights
 	// 1. Token Consumption Rate (computed from historical snapshots)
 	if !hidden["token_rate"] && len(snapshots24h) >= 2 {
 		oldest := snapshots24h[0]
@@ -4989,80 +4995,7 @@ func (h *Handler) buildZaiInsights(hidden map[string]bool) insightsResponse {
 	return resp
 }
 
-// ── Anthropic Promo Definitions ──
-
-type anthropicPromo struct {
-	ID               string `json:"id"`
-	Title            string `json:"title"`
-	Description      string `json:"description"`
-	StartsAt         string `json:"startsAt"`
-	EndsAt           string `json:"endsAt"`
-	PeakStartHourET  int    `json:"peakStartHourET"`
-	PeakEndHourET    int    `json:"peakEndHourET"`
-	PeakWeekdaysOnly bool   `json:"peakWeekdaysOnly"`
-}
-
-var anthropicPromos = []anthropicPromo{
-	{
-		ID:               "peak-hours-2026",
-		Title:            "Peak Hours",
-		Description:      "During peak hours (weekdays 5am-11am PT / 8am-2pm ET) you move through 5-hour session limits faster. Weekly limits are unchanged.",
-		StartsAt:         "2026-03-28T00:00:00-07:00",
-		EndsAt:           "",
-		PeakStartHourET:  8,
-		PeakEndHourET:    14,
-		PeakWeekdaysOnly: true,
-	},
-}
-
-// activeAnthropicPromo returns the promo entry currently in effect, or nil.
-// An empty EndsAt means the entry is ongoing (no end date).
-func activeAnthropicPromo(now time.Time) *anthropicPromo {
-	for i := range anthropicPromos {
-		start, err := time.Parse(time.RFC3339, anthropicPromos[i].StartsAt)
-		if err != nil {
-			continue
-		}
-		if now.Before(start) {
-			continue
-		}
-		if anthropicPromos[i].EndsAt != "" {
-			end, err := time.Parse(time.RFC3339, anthropicPromos[i].EndsAt)
-			if err != nil {
-				continue
-			}
-			if !now.Before(end) {
-				continue
-			}
-		}
-		return &anthropicPromos[i]
-	}
-	return nil
-}
-
-// isAnthropicPeakHours reports whether the given time falls inside the promo's
-// peak-hours window. Timezone for PeakStartHourET/PeakEndHourET is America/New_York.
-func isAnthropicPeakHours(p *anthropicPromo, now time.Time) bool {
-	if p == nil {
-		return false
-	}
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		return false
-	}
-	et := now.In(loc)
-	if p.PeakWeekdaysOnly {
-		wd := et.Weekday()
-		if wd == time.Saturday || wd == time.Sunday {
-			return false
-		}
-	}
-	hour := et.Hour()
-	return hour >= p.PeakStartHourET && hour < p.PeakEndHourET
-}
-
-// ── Anthropic Provider Handlers ──
-
+// Anthropic Provider Handlers
 // currentAnthropic returns Anthropic quota status.
 func (h *Handler) currentAnthropic(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.buildAnthropicCurrent())
@@ -5076,9 +5009,6 @@ func (h *Handler) buildAnthropicCurrent() map[string]interface{} {
 	response := map[string]interface{}{
 		"capturedAt": now.Format(time.RFC3339),
 		"quotas":     []interface{}{},
-	}
-	if promo := activeAnthropicPromo(now); promo != nil {
-		response["promo"] = promo
 	}
 
 	if h.store == nil {
@@ -5464,7 +5394,7 @@ func (h *Handler) buildAnthropicInsights(hidden map[string]bool, rangeDur time.D
 		}
 	}
 
-	// ═══ Stats Cards ═══
+	// Stats Cards
 	// Show avg window utilization per quota (current % already shown in KPI cards)
 	for _, q := range latest.Quotas {
 		if avg, ok := quotaBillingAvg[q.Name]; ok && quotaBillingCount[q.Name] > 0 {
@@ -5487,8 +5417,7 @@ func (h *Handler) buildAnthropicInsights(hidden map[string]bool, rangeDur time.D
 		}
 	}
 
-	// ═══ Deep Insights ═══
-
+	// Deep Insights
 	// Collect rates for cross-quota analysis
 	quotaRates := map[string]anthropicQuotaRate{}
 
@@ -5761,8 +5690,7 @@ func severityFromPercent(pct float64) string {
 	}
 }
 
-// ── Insight helpers ──
-
+// Insight helpers
 // billingPeriod represents an actual billing period (may span many mini-cycles
 // created by renewsAt jitter). A real reset boundary is detected when
 // peak_requests drops by >50%, indicating the quota counter went back to ~0.
@@ -7245,8 +7173,7 @@ func cycleOverviewRowsToJSON(rows []store.CycleOverviewRow) []map[string]interfa
 	return result
 }
 
-// ── Copilot Handlers ──
-
+// Copilot Handlers
 // currentCopilot returns current Copilot quota status.
 func (h *Handler) currentCopilot(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.buildCopilotCurrent())
@@ -7532,7 +7459,7 @@ func (h *Handler) buildCopilotInsights(hidden map[string]bool, rangeDur time.Dur
 		}
 	}
 
-	// ═══ Stats Cards ═══
+	// Stats Cards
 	for _, q := range latest.Quotas {
 		if q.Unlimited {
 			resp.Stats = append(resp.Stats, insightStat{
@@ -7552,8 +7479,7 @@ func (h *Handler) buildCopilotInsights(hidden map[string]bool, rangeDur time.Dur
 		})
 	}
 
-	// ═══ Deep Insights ═══
-
+	// Deep Insights
 	// 1. Burn Rate & Forecast per non-unlimited quota
 	for _, q := range latest.Quotas {
 		if q.Unlimited || q.Entitlement == 0 {
@@ -7634,8 +7560,7 @@ func codexInsightSeverity(util float64) string {
 	return codexUtilStatus(util)
 }
 
-// ── Codex Handlers ──
-
+// Codex Handlers
 func (h *Handler) currentCodex(w http.ResponseWriter, r *http.Request) {
 	accountID := parseCodexAccountID(r)
 	respondJSON(w, http.StatusOK, h.buildCodexCurrent(accountID))

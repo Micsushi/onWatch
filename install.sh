@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# ═══════════════════════════════════════════════════════════════════════
 # onWatch Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/Micsushi/onWatch/main/install.sh | bash
-# ═══════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
 INSTALL_DIR="${ONWATCH_INSTALL_DIR:-$HOME/.onwatch}"
 BIN_DIR="${INSTALL_DIR}/bin"
 REPO="Micsushi/onWatch"
 SERVICE_NAME="onwatch"
-SYSTEMD_MODE="user"  # "user" or "system" — auto-detected at runtime
+SYSTEMD_MODE="user"  # "user" or "system" - auto-detected at runtime
 INSTALL_VERSION="latest"
 
 # Collected during interactive setup, used by start_service
@@ -17,7 +15,7 @@ SETUP_USERNAME=""
 SETUP_PASSWORD=""
 SETUP_PORT=""
 
-# ─── Colors ───────────────────────────────────────────────────────────
+# Colors
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
 BLUE=$'\033[0;34m'; CYAN=$'\033[0;36m'; BOLD=$'\033[1m'
 DIM=$'\033[2m'; NC=$'\033[0m'
@@ -27,7 +25,7 @@ ok()      { printf "  ${GREEN} ok ${NC}  %s\n" "$*"; }
 warn()    { printf "  ${YELLOW}warn${NC}  %s\n" "$*"; }
 fail()    { printf "  ${RED}fail${NC}  %b\n" "$*" >&2; exit 1; }
 
-# ─── systemd Helpers ────────────────────────────────────────────────
+# systemd Helpers
 # Wrappers that use --user or system-wide mode based on SYSTEMD_MODE
 _systemctl() {
     if [[ "$SYSTEMD_MODE" == "system" ]]; then
@@ -61,8 +59,7 @@ _jctl_cmd() {
     fi
 }
 
-# ─── Input Helpers ──────────────────────────────────────────────────
-
+# Input Helpers
 # Generate a random 12-char alphanumeric password
 generate_password() {
     local bytes
@@ -131,8 +128,7 @@ prompt_with_default() {
     fi
 }
 
-# ─── Validation Helpers ─────────────────────────────────────────────
-
+# Validation Helpers
 validate_synthetic_key() {
     local val="$1"
     if [[ "$val" == syn_* ]]; then
@@ -207,7 +203,7 @@ parse_args() {
     done
 }
 
-# ─── Detect Platform ─────────────────────────────────────────────────
+# Detect Platform
 detect_platform() {
     local os arch
     os="$(uname -s)"
@@ -235,7 +231,7 @@ resolve_asset_name() {
     ASSET_NAME="onwatch-${PLATFORM}"
 }
 
-# ─── Migrate from SynTrack ──────────────────────────────────────────
+# Migrate from SynTrack
 migrate_from_syntrack() {
     local old_dir="$HOME/.syntrack"
     if [[ ! -d "$old_dir" ]]; then
@@ -310,7 +306,7 @@ migrate_from_syntrack() {
     echo ""
 }
 
-# ─── Stop Existing Instance ──────────────────────────────────────────
+# Stop Existing Instance
 stop_existing() {
     if [[ -f "${BIN_DIR}/onwatch" ]]; then
         if [[ "$OS" == "linux" ]] && command -v systemctl &>/dev/null; then
@@ -333,7 +329,7 @@ stop_existing() {
     fi
 }
 
-# ─── Download Binary ─────────────────────────────────────────────────
+# Download Binary
 # Downloads to /tmp first (avoids ETXTBSY and filesystem issues),
 # then moves into place.
 download() {
@@ -353,7 +349,7 @@ download() {
         curl -fSL --progress-bar -o "$tmp_dest" "$url" 2>&1 || dl_exit=$?
         if [[ $dl_exit -ne 0 ]]; then
             local msg="curl failed with exit code $dl_exit."
-            [[ $dl_exit -eq 23 ]] && msg="$msg (Write error — check disk space and permissions)"
+            [[ $dl_exit -eq 23 ]] && msg="$msg (Write error - check disk space and permissions)"
             [[ $dl_exit -eq 22 ]] && msg="$msg (HTTP error from server)"
             [[ $dl_exit -eq 6 ]]  && msg="$msg (Could not resolve host)"
             [[ $dl_exit -eq 7 ]]  && msg="$msg (Connection refused)"
@@ -397,7 +393,7 @@ download() {
     ok "Installed ${BOLD}onwatch ${ver}${NC}"
 }
 
-# ─── Create Wrapper Script ───────────────────────────────────────────
+# Create Wrapper Script
 # The binary loads .env from the working directory. This wrapper ensures
 # we always cd to ~/.onwatch before running, so .env is always found.
 create_wrapper() {
@@ -410,8 +406,7 @@ WRAPPER
     chmod +x "$wrapper"
 }
 
-# ─── .env Helpers ───────────────────────────────────────────────────
-
+# .env Helpers
 # Read a value from the existing .env file
 # Usage: val=$(env_get "SYNTHETIC_API_KEY")
 env_get() {
@@ -448,7 +443,7 @@ append_codex_to_env() {
     printf '\n# Codex OAuth token\nCODEX_TOKEN=%s\n' "$token" >> "$env_file"
 }
 
-# ─── Collect Z.ai Key + Base URL ────────────────────────────────────
+# Collect Z.ai Key + Base URL
 # Shared between fresh setup and add-provider flow
 collect_zai_config() {
     local _zai_key _zai_base_url
@@ -658,7 +653,7 @@ append_anthropic_to_env() {
     local env_file="${INSTALL_DIR}/.env"
     {
         echo ""
-        echo "# Anthropic token (Claude Code — auto-detected or manual)"
+        echo "# Anthropic token (Claude Code - auto-detected or manual)"
         echo "ANTHROPIC_TOKEN=${key}"
     } >> "$env_file"
 }
@@ -683,7 +678,7 @@ append_gemini_to_env() {
     } >> "$env_file"
 }
 
-# ─── Interactive Setup ──────────────────────────────────────────────
+# Interactive Setup
 # Fully interactive .env configuration for fresh installs.
 # On upgrade: checks for missing providers and offers to add them.
 # Reads from /dev/tty (fd 3) for piped install compatibility.
@@ -708,20 +703,20 @@ interactive_setup() {
         has_gemini_enabled && has_gemini=true
 
         if $has_syn && $has_zai && $has_anth && $has_codex && $has_anti && $has_gemini; then
-            # All providers configured — nothing to do
-            info "Existing .env found — all providers configured"
+            # All providers configured - nothing to do
+            info "Existing .env found - all providers configured"
             return
         fi
 
         if ! $has_syn && ! $has_zai && ! $has_anth && ! $has_codex && ! $has_anti && ! $has_gemini; then
-            # .env exists but no keys at all — run full setup
+            # .env exists but no keys at all - run full setup
             warn "Existing .env found but no API keys configured"
             info "Running interactive setup..."
             # Remove the empty .env so the fresh setup flow creates a new one
             rm -f "$env_file"
             # Fall through to fresh setup below
         else
-            # Some providers configured — offer to add missing ones
+            # Some providers configured - offer to add missing ones
             if ! { true <&3; } 2>/dev/null; then
                 exec 3</dev/tty || fail "Cannot read from terminal. Run the script directly instead of piping."
                 _opened_fd3=true
@@ -734,7 +729,7 @@ interactive_setup() {
             $has_codex && configured="${configured}Codex "
             $has_anti && configured="${configured}Antigravity "
             $has_gemini && configured="${configured}Gemini "
-            info "Existing .env found — configured: ${configured}"
+            info "Existing .env found - configured: ${configured}"
             printf "\n"
 
             if ! $has_syn; then
@@ -856,9 +851,8 @@ interactive_setup() {
         fi
     fi
 
-    # ── Fresh setup (no .env or empty keys) ──
-
-    # Open /dev/tty for reading — works even when script is piped via curl | bash
+    # Fresh setup (no .env or empty keys)
+    # Open /dev/tty for reading - works even when script is piped via curl | bash
     # Skip if fd 3 is already open (e.g., during testing)
     if ! { true <&3; } 2>/dev/null; then
         exec 3</dev/tty || fail "Cannot read from terminal. Run the script directly instead of piping."
@@ -868,7 +862,7 @@ interactive_setup() {
     printf "\n"
     printf "  ${BOLD}━━━ Configuration ━━━${NC}\n"
 
-    # ── Provider Selection ──
+    # Provider Selection
     local provider_choice
     provider_choice=$(prompt_choice "Which providers do you want to track?" \
         "Synthetic only" \
@@ -883,7 +877,7 @@ interactive_setup() {
     local synthetic_key="" zai_key="" zai_base_url="" anthropic_token="" codex_token="" antigravity_enabled="" gemini_enabled=""
 
     if [[ "$provider_choice" == "7" ]]; then
-        # ── Multiple: ask for each provider individually ──
+        # Multiple: ask for each provider individually
         local add_it
         add_it=$(prompt_with_default "Add Synthetic provider? (y/N)" "N")
         if [[ "$add_it" =~ ^[Yy] ]]; then
@@ -969,15 +963,14 @@ interactive_setup() {
             fi
         fi
     else
-        # ── Single provider or All ──
-
-        # ── Synthetic API Key ──
+        # Single provider or All
+        # Synthetic API Key
         if [[ "$provider_choice" == "1" || "$provider_choice" == "8" ]]; then
             printf "\n  ${DIM}Get your key: https://synthetic.new/settings/api${NC}\n"
             synthetic_key=$(prompt_secret "Synthetic API key (syn_...)" validate_synthetic_key)
         fi
 
-        # ── Z.ai API Key ──
+        # Z.ai API Key
         if [[ "$provider_choice" == "2" || "$provider_choice" == "8" ]]; then
             local zai_result
             zai_result=$(collect_zai_config)
@@ -985,30 +978,30 @@ interactive_setup() {
             zai_base_url=$(echo "$zai_result" | tail -1)
         fi
 
-        # ── Anthropic Token ──
+        # Anthropic Token
         if [[ "$provider_choice" == "3" || "$provider_choice" == "8" ]]; then
             anthropic_token=$(collect_anthropic_config)
         fi
 
-        # ── Codex Token ──
+        # Codex Token
         if [[ "$provider_choice" == "4" || "$provider_choice" == "8" ]]; then
             codex_token=$(collect_codex_config)
         fi
 
-        # ── Antigravity (Windsurf) ──
+        # Antigravity (Windsurf)
         if [[ "$provider_choice" == "5" || "$provider_choice" == "8" ]]; then
             antigravity_enabled="true"
             printf "\n  ${GREEN}✓${NC} Antigravity enabled (auto-detects running Windsurf process)\n"
         fi
 
-        # ── Gemini CLI ──
+        # Gemini CLI
         if [[ "$provider_choice" == "6" || "$provider_choice" == "8" ]]; then
             gemini_enabled="true"
             printf "\n  ${GREEN}✓${NC} Gemini enabled (auto-detects from ~/.gemini/oauth_creds.json)\n"
         fi
     fi
 
-    # ── Dashboard Credentials ──
+    # Dashboard Credentials
     printf "\n  ${BOLD}━━━ Dashboard Credentials ━━━${NC}\n\n"
 
     SETUP_USERNAME=$(prompt_with_default "Dashboard username" "admin")
@@ -1021,13 +1014,13 @@ interactive_setup() {
     if [[ -z "$pass_input" ]]; then
         SETUP_PASSWORD="$generated_pass"
         printf "  ${GREEN}✓${NC} Generated password: ${BOLD}${SETUP_PASSWORD}${NC}\n"
-        printf "  ${YELLOW}Save this password — it won't be shown again${NC}\n"
+        printf "  ${YELLOW}Save this password - it won't be shown again${NC}\n"
     else
         SETUP_PASSWORD="$pass_input"
         printf "  ${GREEN}✓${NC} Password set\n"
     fi
 
-    # ── Optional Settings ──
+    # Optional Settings
     printf "\n  ${BOLD}━━━ Optional Settings ━━━${NC}\n\n"
 
     while true; do
@@ -1050,12 +1043,10 @@ interactive_setup() {
     # Close the tty fd (only if we opened it)
     $_opened_fd3 && exec 3<&- || true
 
-    # ── Write .env ──
+    # Write .env
     {
-        echo "# ═══════════════════════════════════════════════════════════════"
         echo "# onWatch Configuration"
-        echo "# Generated by installer on $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-        echo "# ═══════════════════════════════════════════════════════════════"
+        echo "# Created by installer on $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
         echo ""
 
         if [[ -n "$synthetic_key" ]]; then
@@ -1110,7 +1101,7 @@ interactive_setup() {
 
     ok "Created ${env_file}"
 
-    # ── Summary ──
+    # Summary
     local provider_label
     case "$provider_choice" in
         1) provider_label="Synthetic" ;;
@@ -1120,7 +1111,7 @@ interactive_setup() {
         5) provider_label="Antigravity" ;;
         6) provider_label="Gemini" ;;
         7)
-            # Multiple — build label from selected providers
+            # Multiple - build label from selected providers
             local parts=()
             [[ -n "$synthetic_key" ]] && parts+=("Synthetic")
             [[ -n "$zai_key" ]] && parts+=("Z.ai")
@@ -1146,18 +1137,18 @@ interactive_setup() {
     printf "  ${BOLD}└───────────────────────────────────────────┘${NC}\n"
 }
 
-# ─── systemd Service (Linux) ─────────────────────────────────────────
+# systemd Service (Linux)
 setup_systemd() {
     if [[ "$OS" != "linux" ]]; then return 1; fi
     if ! command -v systemctl &>/dev/null; then
-        warn "systemd not found — skipping service setup"
+        warn "systemd not found - skipping service setup"
         return 1
     fi
 
     local svc_dir svc_file
 
     if [[ "$SYSTEMD_MODE" == "system" ]]; then
-        # ── System-wide service (running as root/sudo) ──
+        # System-wide service (running as root/sudo)
         svc_dir="/etc/systemd/system"
         svc_file="${svc_dir}/${SERVICE_NAME}.service"
 
@@ -1189,7 +1180,7 @@ EOF
 
         ok "Created system-wide systemd service"
     else
-        # ── User service (running without root) ──
+        # User service (running without root)
         svc_dir="$HOME/.config/systemd/user"
         svc_file="${svc_dir}/${SERVICE_NAME}.service"
 
@@ -1243,12 +1234,12 @@ EOF
     return 0
 }
 
-# ─── launchd (macOS) ─────────────────────────────────────────────────
+# launchd (macOS)
 setup_launchd() {
     if [[ "$OS" != "darwin" ]]; then return 1; fi
 
     echo ""
-    ok "macOS detected — onWatch self-daemonizes"
+    ok "macOS detected - onWatch self-daemonizes"
     printf "  ${DIM}Manage with:${NC}\n"
     printf "    ${CYAN}onwatch${NC}           # Start (runs in background)\n"
     printf "    ${CYAN}onwatch stop${NC}      # Stop\n"
@@ -1257,7 +1248,7 @@ setup_launchd() {
     return 0
 }
 
-# ─── PATH Setup ──────────────────────────────────────────────────────
+# PATH Setup
 setup_path() {
     local path_line="export PATH=\"\$HOME/.onwatch:\$PATH\""
     local shell_rc=""
@@ -1291,7 +1282,7 @@ setup_path() {
     export PATH="${INSTALL_DIR}:$PATH"
 }
 
-# ─── Start Service ───────────────────────────────────────────────────
+# Start Service
 start_service() {
     local port="${SETUP_PORT:-9211}"
     local username="${SETUP_USERNAME:-admin}"
@@ -1300,7 +1291,7 @@ start_service() {
     info "Starting onWatch..."
 
     if [[ "$OS" == "linux" ]] && command -v systemctl &>/dev/null; then
-        # ── systemd start ──
+        # systemd start
         if ! _systemctl start onwatch 2>/dev/null; then
             print_errors "$port"
             return 1
@@ -1315,7 +1306,7 @@ start_service() {
             return 1
         fi
     else
-        # ── Direct start (macOS / Linux without systemd) ──
+        # Direct start (macOS / Linux without systemd)
         cd "$INSTALL_DIR"
         if "${BIN_DIR}/onwatch" 2>&1; then
             sleep 1
@@ -1336,7 +1327,7 @@ start_service() {
     return 0
 }
 
-# ─── Print Errors ────────────────────────────────────────────────────
+# Print Errors
 print_errors() {
     local port="${1:-9211}"
 
@@ -1374,7 +1365,7 @@ print_errors() {
     fi
 }
 
-# ─── Main ─────────────────────────────────────────────────────────────
+# Main
 main() {
     parse_args "$@"
 
@@ -1390,10 +1381,10 @@ main() {
     # Migrate from SynTrack if old installation exists
     migrate_from_syntrack
 
-    # Detect root/sudo — determines system-wide vs user systemd service
+    # Detect root/sudo - determines system-wide vs user systemd service
     if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
         SYSTEMD_MODE="system"
-        info "Running as root — will create system-wide service"
+        info "Running as root - will create system-wide service"
     fi
 
     # Create directories

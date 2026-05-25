@@ -255,11 +255,11 @@ func addBridgeSnippet(userCommand string) string {
 // removeBridgeSnippet strips our snippet from the command, returning the
 // user's original command. Returns empty string if nothing remains.
 func removeBridgeSnippet(command string) string {
-	// Remove "snippet | user-cmd" → "user-cmd"
+	// Remove "snippet | user-cmd" -> "user-cmd"
 	if idx := strings.Index(command, bridgeSnippet+" | "); idx == 0 {
 		return strings.TrimSpace(command[len(bridgeSnippet+" | "):])
 	}
-	// Remove "snippet > /dev/null" → "" (standalone mode)
+	// Remove "snippet > /dev/null" -> "" (standalone mode)
 	if command == bridgeSnippet+" > /dev/null" {
 		return ""
 	}

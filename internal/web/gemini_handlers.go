@@ -337,7 +337,7 @@ func (h *Handler) buildGeminiInsights(hidden map[string]bool, _ time.Duration) i
 		familyData[fid] = fs
 	}
 
-	// ═══ Stats Cards: per-family current usage (like Anthropic's per-quota avg) ═══
+	// Stats Cards: per-family current usage (like Anthropic's per-quota avg)
 	for _, fq := range families {
 		fid := fq.FamilyID
 		fs := familyData[fid]
@@ -359,7 +359,7 @@ func (h *Handler) buildGeminiInsights(hidden map[string]bool, _ time.Duration) i
 		}
 	}
 
-	// ═══ Insights: per-family burn rate & forecast (like Anthropic's forecast cards) ═══
+	// Insights: per-family burn rate & forecast (like Anthropic's forecast cards)
 	for _, fq := range families {
 		fid := fq.FamilyID
 		key := fmt.Sprintf("forecast_%s", fid)

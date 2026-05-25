@@ -459,8 +459,7 @@ func TestHistoryBoth_MiniMaxSharedQuotaSeries(t *testing.T) {
 	}
 }
 
-// ── Account CRUD Handler Tests ──
-
+// Account CRUD Handler Tests
 func TestMiniMaxAccounts_ListEmpty(t *testing.T) {
 	t.Parallel()
 	s, err := store.New(":memory:")

@@ -47,6 +47,8 @@ Optional environment variables:
 ONWATCH_API_INTEGRATIONS_ENABLED=true
 ONWATCH_API_INTEGRATIONS_DIR=~/.onwatch/api-integrations
 ONWATCH_API_INTEGRATIONS_RETENTION=1440h
+ONWATCH_AGENT_USAGE_PRICING_JSON=
+ONWATCH_CURSOR_USAGE_CSV=
 ```
 
 If you change `ONWATCH_API_INTEGRATIONS_DIR`, point your scripts and onWatch at the same directory.
@@ -57,6 +59,71 @@ Retention notes:
 - default retention is `1440h` which is 60 days
 - set `ONWATCH_API_INTEGRATIONS_RETENTION=0` to disable database pruning
 - pruning applies only to the SQLite table, not to the source `.jsonl` files
+- `ONWATCH_AGENT_USAGE_PRICING_JSON` can point to a LiteLLM-compatible pricing JSON file to override built-in model prices
+- `ONWATCH_CURSOR_USAGE_CSV` can point to a Cursor usage export CSV for local Cursor token/cost ingestion
+
+## Local Agent Usage Collector
+
+onWatch also includes a local collector for agent log files. It runs beside API Integrations and writes normalized rows to `agent-usage.jsonl` in the same ingest directory.
+
+Default local sources:
+
+- Claude Code: `~/.claude/projects`
+- Codex CLI: `~/.codex/sessions`
+- Gemini CLI: `~/.gemini/tmp` or `GEMINI_DATA_DIR`
+- Antigravity/Gemini: `~/.factory/sessions` or `DROID_SESSIONS_DIR`
+- Cursor: a CSV file supplied with `ONWATCH_CURSOR_USAGE_CSV`
+
+This keeps local Windows mode and server mode aligned. On a local Windows install, onWatch reads local logs directly. On a hosted server, run the Windows collector mode or sync/mount the API Integrations ingest directory so the server tails the same normalized JSONL.
+
+### Windows Runner With A Linux Dashboard
+
+Use this when the dashboard and SQLite database live on a Linux server, but Codex, Claude Code, Cursor, or other desktop tools run on Windows.
+
+The Linux server should run the normal onWatch daemon with API Integrations enabled. Its ingest directory is usually `/data/api-integrations` in Docker or `~/.onwatch/api-integrations` on a native install. The Windows machine should run only the local agent usage collector and write to a directory that the Linux server can read.
+
+Recommended layouts:
+
+- SMB share: export the Linux ingest directory, then run the Windows runner with `--out \\server\onwatch-api-integrations`
+- Sync tool: run the Windows runner into `C:\Users\<you>\.onwatch\api-integrations`, then sync that folder to the Linux ingest directory with Syncthing, Resilio, rclone, or another file sync tool
+- Mounted volume: if the Linux server can mount a Windows share, keep the Windows runner local and point Linux `ONWATCH_API_INTEGRATIONS_DIR` at the mounted folder
+
+Run the Windows collector once:
+
+```powershell
+onwatch agent-usage --once --out "\\server\onwatch-api-integrations"
+```
+
+Run it continuously:
+
+```powershell
+onwatch agent-usage --out "\\server\onwatch-api-integrations" --interval 15
+```
+
+The runner does not start the dashboard, does not need provider API keys, and does not open the SQLite database. It only reads local agent logs and writes normalized `agent-usage.jsonl` rows. The Linux onWatch daemon remains responsible for ingesting those rows, storing them, and serving the dashboard.
+
+If you need to scan a different Windows profile or portable Codex home:
+
+```powershell
+onwatch agent-usage --home "D:\Users\agent" --out "\\server\onwatch-api-integrations"
+```
+
+### Reasoning Effort And Fast Mode
+
+Codex session logs expose model and effort context in `turn_context` records. onWatch records that data into usage metadata when present:
+
+- `reasoning_effort`: values such as `low`, `medium`, `high`, or `xhigh`
+- `mode`: the Codex collaboration mode, when logged
+- `fast_mode` and `speed_mode`: whether the turn was recorded as fast or standard, when logged
+- `speed_multiplier`: best-effort multiplier, currently `1.5` when Codex Desktop global state reports the fast service tier
+
+The Cost tab groups model usage by effort, mode, and speed. Older rows or providers that do not expose this context appear as `unknown`. When the collector re-sees a duplicate event with richer metadata, onWatch updates the stored metadata instead of creating a duplicate row.
+
+Codex logs do not currently include the x1.5 speed tier in each `turn_context`. onWatch therefore reads `~/.codex/.codex-global-state.json` as a best-effort side channel when parsing Codex sessions under `~/.codex/sessions`. This is accurate for the normal case where the service tier is set before the turn is collected. If you toggle speed while a chat is already running, old rows may inherit the current global setting because Codex does not timestamp that setting per token event.
+
+### Timestamped Graphs
+
+Every normalized usage event stores a timestamp in `ts`. onWatch persists that timestamp as `captured_at`, then the dashboard history API buckets it into time windows for graphs. The Cost tab can graph estimated cost, token volume, requests, and accumulated token use. Platform-specific tabs can graph estimated cost, total tokens, input tokens, and output tokens over time when timestamped usage rows exist.
 
 ## Event Format
 

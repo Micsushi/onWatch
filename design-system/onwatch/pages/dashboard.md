@@ -11,9 +11,9 @@
 
 ## Layout Override
 
-- **Max Width:** `1400px` (wider than typical — dashboard needs horizontal space)
-- **Layout:** CSS Grid — 3-column for quota cards, full-width chart below
-- **Content Density:** Medium — balance between information density and readability
+- **Max Width:** `1400px` (wider than typical - dashboard needs horizontal space)
+- **Layout:** CSS Grid - 3-column for quota cards, full-width chart below
+- **Content Density:** Medium - balance between information density and readability
 - **Padding:** `px-4 md:px-6 lg:px-8` (responsive padding from Tailwind guidelines)
 
 ```
@@ -49,24 +49,24 @@
 
 ## Component Overrides
 
-### Quota Cards — Enhanced for Visual Urgency
+### Quota Cards - Visual Urgency
 
 Each quota card MUST show ALL of the following. This is the core value proposition:
 
-1. **Quota type name** — e.g., "Subscription Quota"
-2. **What this quota means** — one-line plain English description
+1. **Quota type name** - e.g., "Subscription Quota"
+2. **What this quota means** - one-line plain English description
    - Subscription: "Main API request quota for your plan"
    - Search Hourly: "Search endpoint calls, resets every hour"
    - Tool Call Discounts: "Discounted tool call requests"
-3. **Progress bar** — color-coded by threshold
-4. **Usage fraction** — `154.3 / 1,350` (monospace, keep decimal for subscription)
-5. **Usage percentage** — `11.4%` (large, bold, color-coded)
-6. **Reset countdown** — "Resets in 2h 14m" (live countdown, monospace)
-7. **Absolute reset time** — "Feb 6, 4:16 PM" (for planning ahead)
-8. **Status badge** — "Healthy" / "Warning" / "Danger" / "Critical" with icon
-9. **Cycle stats** (if tracking data exists) — avg per cycle, current rate
+3. **Progress bar** - color-coded by threshold
+4. **Usage fraction** - `154.3 / 1,350` (monospace, keep decimal for subscription)
+5. **Usage percentage** - `11.4%` (large, bold, color-coded)
+6. **Reset countdown** - "Resets in 2h 14m" (live countdown, monospace)
+7. **Absolute reset time** - "Feb 6, 4:16 PM" (for planning ahead)
+8. **Status badge** - "Healthy" / "Warning" / "Danger" / "Critical" with icon
+9. **Cycle stats** (if tracking data exists) - avg per cycle, current rate
 
-### Tool Call Discounts — Special Attention
+### Tool Call Discounts - Special Attention
 
 The Tool Call Discounts quota has its own `renewsAt` that is **different** from subscription.
 This MUST be shown clearly:
@@ -92,7 +92,7 @@ Plain English insights that help users **understand** their consumption:
  reset cycles. Average usage per cycle: 312 requests (23.1% of limit)."
 ```
 
-### Chart — Time Series Area Chart
+### Chart - Time Series Area Chart
 
 - **Default view:** Last 6 hours
 - **Series:** All 3 quota types shown as percentage of their limit (normalized 0-100%)

@@ -51,7 +51,7 @@ func TestSessionManager_CloseSession_StoreError(t *testing.T) {
 
 	// Establish baseline then trigger session start
 	sm.ReportPoll([]float64{100, 50, 500})
-	sm.ReportPoll([]float64{110, 50, 500}) // usage change → session created
+	sm.ReportPoll([]float64{110, 50, 500}) // usage change -> session created
 
 	// Verify session was created
 	if sm.sessionID == "" {
@@ -90,7 +90,7 @@ func TestSessionManager_IncrementAndUpdate_StoreClosedError(t *testing.T) {
 
 	// Establish baseline then trigger session start
 	sm.ReportPoll([]float64{100, 50, 500})
-	sm.ReportPoll([]float64{110, 50, 500}) // usage change → session created
+	sm.ReportPoll([]float64{110, 50, 500}) // usage change -> session created
 
 	if sm.sessionID == "" {
 		t.Fatal("expected active session after usage change")
@@ -123,7 +123,7 @@ func TestSessionManager_IncrementAndUpdate_ShortValueSlice(t *testing.T) {
 
 	// Establish baseline then trigger session start
 	sm.ReportPoll([]float64{100})
-	sm.ReportPoll([]float64{110}) // usage change → session created
+	sm.ReportPoll([]float64{110}) // usage change -> session created
 
 	if sm.sessionID == "" {
 		t.Fatal("expected active session")
@@ -175,7 +175,7 @@ func TestSessionManager_IncrementAndUpdate_UpdateMaxError(t *testing.T) {
 	}
 }
 
-// ---- AnthropicAgent.poll(): auth error → pause → retry paths ----
+// ---- AnthropicAgent.poll(): auth error -> pause -> retry paths ----
 
 // TestAnthropicAgent_Poll_AuthFailurePause verifies that after maxAuthFailures
 // consecutive 401 failures, polling is paused (authPaused=true).
@@ -452,7 +452,7 @@ func TestAnthropicAgent_Poll_CredsRefresh_ExpiringToken_OAuthFails(t *testing.T)
 	api.SetOAuthURLForTest(oauthMock.URL)
 	defer api.SetOAuthURLForTest(api.AnthropicOAuthTokenURL)
 
-	// Credentials are expiring in 1 minute (< 10 minute threshold → IsExpiringSoon = true)
+	// Credentials are expiring in 1 minute (< 10 minute threshold -> IsExpiringSoon = true)
 	// RefreshToken is set so the refresh path is triggered
 	// The refresh will fail because the mock returns an error
 	agent.SetCredentialsRefresh(func() *api.AnthropicCredentials {
@@ -519,11 +519,11 @@ func TestAnthropicAgent_Poll_CredsRefresh_ExpiringButNoRefreshToken(t *testing.T
 
 	agent := NewAnthropicAgent(client, str, tr, 5*time.Second, logger, nil)
 
-	// Expiring credentials but no refresh token → skip OAuth refresh
+	// Expiring credentials but no refresh token -> skip OAuth refresh
 	agent.SetCredentialsRefresh(func() *api.AnthropicCredentials {
 		return &api.AnthropicCredentials{
 			AccessToken:  "test-token",
-			RefreshToken: "", // empty → no refresh attempted
+			RefreshToken: "", // empty -> no refresh attempted
 			ExpiresIn:    1 * time.Minute,
 			ExpiresAt:    time.Now().Add(1 * time.Minute),
 		}
@@ -577,7 +577,7 @@ func TestAnthropicAgent_Poll_CredsRefresh_NilCreds(t *testing.T) {
 
 	agent := NewAnthropicAgent(client, str, tr, 5*time.Second, logger, nil)
 
-	// credsRefresh returns nil → should skip refresh path
+	// credsRefresh returns nil -> should skip refresh path
 	agent.SetCredentialsRefresh(func() *api.AnthropicCredentials {
 		return nil
 	})
@@ -632,7 +632,7 @@ func TestAnthropicAgent_Poll_AuthPaused_PollingSkipped(t *testing.T) {
 
 	agent := NewAnthropicAgent(client, str, tr, 20*time.Millisecond, logger, nil)
 
-	// Always return same bad token → never changes → pause is never lifted
+	// Always return same bad token -> never changes -> pause is never lifted
 	agent.SetTokenRefresh(func() string {
 		return "bad-token"
 	})

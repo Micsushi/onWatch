@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/agent"
+	"github.com/onllm-dev/onwatch/v2/internal/agentusage"
 	"github.com/onllm-dev/onwatch/v2/internal/api"
 	"github.com/onllm-dev/onwatch/v2/internal/config"
 	"github.com/onllm-dev/onwatch/v2/internal/menubar"
@@ -449,6 +450,117 @@ func runWithCrashCapture() (err error) {
 	return run()
 }
 
+type agentUsageCommandOptions struct {
+	outDir   string
+	homeDir  string
+	interval time.Duration
+	once     bool
+}
+
+func runAgentUsageCommand(args []string) error {
+	opts := agentUsageCommandOptions{
+		outDir:   defaultAPIIntegrationsDir(),
+		interval: 15 * time.Second,
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "agent-usage":
+			continue
+		case arg == "--help" || arg == "-h":
+			printAgentUsageHelp()
+			return nil
+		case arg == "--once":
+			opts.once = true
+		case arg == "--out" || arg == "--dir":
+			if i+1 >= len(args) {
+				return fmt.Errorf("%s requires a path", arg)
+			}
+			opts.outDir = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--out="):
+			opts.outDir = strings.TrimPrefix(arg, "--out=")
+		case strings.HasPrefix(arg, "--dir="):
+			opts.outDir = strings.TrimPrefix(arg, "--dir=")
+		case arg == "--home":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--home requires a path")
+			}
+			opts.homeDir = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--home="):
+			opts.homeDir = strings.TrimPrefix(arg, "--home=")
+		case arg == "--interval":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--interval requires seconds")
+			}
+			seconds, err := strconv.Atoi(args[i+1])
+			if err != nil || seconds <= 0 {
+				return fmt.Errorf("--interval must be a positive number of seconds")
+			}
+			opts.interval = time.Duration(seconds) * time.Second
+			i++
+		case strings.HasPrefix(arg, "--interval="):
+			seconds, err := strconv.Atoi(strings.TrimPrefix(arg, "--interval="))
+			if err != nil || seconds <= 0 {
+				return fmt.Errorf("--interval must be a positive number of seconds")
+			}
+			opts.interval = time.Duration(seconds) * time.Second
+		default:
+			return fmt.Errorf("unknown agent-usage option %q", arg)
+		}
+	}
+
+	pricing, err := agentusage.LoadPricingMapFromEnv()
+	if err != nil {
+		return fmt.Errorf("load agent usage pricing: %w", err)
+	}
+	sources := agentusage.DefaultSources(opts.homeDir)
+	if len(sources) == 0 {
+		return fmt.Errorf("no local agent usage sources found")
+	}
+	if opts.once {
+		collector := agentusage.NewCollector(opts.outDir, pricing, sources, slog.Default())
+		if err := collector.CollectOnce(); err != nil {
+			return err
+		}
+		fmt.Printf("Agent usage collection completed: %s\n", opts.outDir)
+		return nil
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	runner := agent.NewAgentUsageCollectorAgent(opts.outDir, pricing, sources, opts.interval, slog.Default())
+	fmt.Printf("Agent usage runner started, writing to %s\n", opts.outDir)
+	return runner.Run(ctx)
+}
+
+func defaultAPIIntegrationsDir() string {
+	if dir := strings.TrimSpace(os.Getenv("ONWATCH_API_INTEGRATIONS_DIR")); dir != "" {
+		return dir
+	}
+	if (&config.Config{}).IsDockerEnvironment() {
+		return "/data/api-integrations"
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".onwatch", "api-integrations")
+	}
+	return "./api-integrations"
+}
+
+func printAgentUsageHelp() {
+	fmt.Println("onWatch Agent Usage Runner")
+	fmt.Println()
+	fmt.Println("Usage: onwatch agent-usage [OPTIONS]")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  --out PATH       Directory to write agent-usage.jsonl (default: ~/.onwatch/api-integrations)")
+	fmt.Println("  --home PATH      Home directory to scan for agent logs (default: current user home)")
+	fmt.Println("  --interval SEC   Collection interval in seconds (default: 15)")
+	fmt.Println("  --once           Collect once and exit")
+	fmt.Println("  --help           Print this help message")
+}
+
 func run() error {
 	// Phase 1: Detect test mode early and configure PID file for isolation
 	testMode := hasFlag("--test")
@@ -467,6 +579,9 @@ func run() error {
 			return nil
 		}
 		return runMenubarCommand()
+	}
+	if hasCommand("agent-usage") {
+		return runAgentUsageCommand(os.Args[1:])
 	}
 	if hasCommand("stop", "--stop") {
 		return runStop(testMode)
@@ -1053,8 +1168,18 @@ func run() error {
 	}
 
 	var apiIntegrationsAg *agent.APIIntegrationsIngestAgent
+	var agentUsageAg *agent.AgentUsageCollectorAgent
 	if cfg.APIIntegrationsEnabled {
 		apiIntegrationsAg = agent.NewAPIIntegrationsIngestAgent(db, cfg.APIIntegrationsDir, cfg.APIIntegrationsRetention, logger)
+		sources := agentusage.DefaultSources("")
+		if len(sources) > 0 {
+			pricing, err := agentusage.LoadPricingMapFromEnv()
+			if err != nil {
+				logger.Warn("Agent usage pricing load failed, using built-in defaults", "error", err)
+				pricing, _ = agentusage.DefaultPricingMap()
+			}
+			agentUsageAg = agent.NewAgentUsageCollectorAgent(cfg.APIIntegrationsDir, pricing, sources, cfg.PollInterval, logger)
+		}
 	}
 
 	// Create notification engine
@@ -1314,6 +1439,9 @@ func run() error {
 	if apiIntegrationsAg != nil {
 		agentMgr.RegisterFactory("api_integrations", func() (agent.AgentRunner, error) { return apiIntegrationsAg, nil })
 	}
+	if agentUsageAg != nil {
+		agentMgr.RegisterFactory("agent_usage", func() (agent.AgentRunner, error) { return agentUsageAg, nil })
+	}
 	handler.SetAgentManager(agentMgr)
 	if minimaxMgr != nil {
 		handler.SetMiniMaxAgentManager(minimaxMgr)
@@ -1347,6 +1475,11 @@ func run() error {
 	}
 	if apiIntegrationsAg != nil {
 		if err := agentMgr.Start("api_integrations"); err == nil {
+			startedAny = true
+		}
+	}
+	if agentUsageAg != nil {
+		if err := agentMgr.Start("agent_usage"); err == nil {
 			startedAny = true
 		}
 	}
@@ -1741,7 +1874,7 @@ func runUpdate() error {
 		return nil
 	}
 
-	fmt.Printf("Update available: v%s → v%s\n", info.CurrentVersion, info.LatestVersion)
+	fmt.Printf("Update available: v%s -> v%s\n", info.CurrentVersion, info.LatestVersion)
 	fmt.Printf("Downloading from %s\n", info.DownloadURL)
 
 	if err := u.Apply(); err != nil {
@@ -1896,6 +2029,7 @@ func printHelp() {
 	fmt.Println("  stop, --stop       Stop the running onwatch instance")
 	fmt.Println("  status, --status   Show status of the running instance")
 	fmt.Println("  update, --update   Check for updates and self-update")
+	fmt.Println("  agent-usage        Run only the local agent usage collector")
 	fmt.Println()
 	fmt.Println("Codex Profile Management:")
 	fmt.Println("  codex profile save <name>    Save current Codex credentials as a named profile")
@@ -1945,6 +2079,7 @@ func printHelp() {
 	fmt.Println("  onwatch status                    # Check if running")
 	fmt.Println("  onwatch --status                  # Same as 'status'")
 	fmt.Println("  onwatch update                    # Check for updates and self-update")
+	fmt.Println("  onwatch agent-usage --out \\\\server\\share\\api-integrations")
 	fmt.Println("  onwatch --test --debug            # Run test instance (isolated)")
 	fmt.Println("  onwatch --test stop               # Stop only test instance")
 	fmt.Println("  onwatch --test status             # Check test instance status")

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/api"
@@ -19,7 +20,8 @@ import (
 
 // Store provides SQLite storage for onWatch
 type Store struct {
-	db *sql.DB
+	db                         *sql.DB
+	apiIntegrationUsageVersion atomic.Uint64
 }
 
 // Session represents an agent session

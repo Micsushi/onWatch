@@ -14,8 +14,8 @@ import (
 type CopilotTracker struct {
 	store         *store.Store
 	logger        *slog.Logger
-	lastValues    map[string]int    // quota_name → last remaining count
-	lastResets    map[string]string // quota_name → last reset date string
+	lastValues    map[string]int    // quota_name -> last remaining count
+	lastResets    map[string]string // quota_name -> last reset date string
 	hasLastValues bool
 
 	onReset func(quotaName string) // called when a quota reset is detected

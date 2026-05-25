@@ -169,7 +169,7 @@ go test ./...              # Run all tests
 go test -race ./...        # With race detection (run before every commit)
 go test -cover ./...       # With coverage
 go test ./internal/store/  # Single package
-make coverage              # Generate HTML coverage report → coverage.html
+make coverage              # Generate HTML coverage report -> coverage.html
 ```
 
 ---
@@ -288,7 +288,7 @@ onWatch provides Docker support via `app.sh --docker` and a multi-stage Dockerfi
 ### How It Works
 
 - **Build stage:** `golang:1.25-alpine` compiles a static binary (`CGO_ENABLED=0`) with `-trimpath` and stripped debug symbols
-- **Runtime stage:** `gcr.io/distroless/static-debian12:nonroot` — no shell, no package manager, minimal attack surface
+- **Runtime stage:** `gcr.io/distroless/static-debian12:nonroot` - no shell, no package manager, minimal attack surface
 - **Docker detection:** `config.IsDockerEnvironment()` checks for `/.dockerenv` or `DOCKER=true` env var. When detected, onWatch skips daemonization and logs to stdout
 - **Data persistence:** SQLite database stored at `/data/onwatch.db` via volume mount
 - **Non-root:** Container runs as UID 65532 (distroless `nonroot` user)
@@ -298,7 +298,7 @@ onWatch provides Docker support via `app.sh --docker` and a multi-stage Dockerfi
 ```bash
 # 1. Create .env from Docker template
 cp .env.docker.example .env
-# Edit .env — add at least one API key
+# Edit .env - add at least one API key
 
 # 2. Build and run
 ./app.sh --docker --run
@@ -457,7 +457,7 @@ Under systemd, onWatch auto-detects its service name from `/proc/self/cgroup` an
 |-------|------|---------|
 | `Apply()` | After binary replacement | Fixes unit file before any restart attempt |
 | `Restart()` | After apply | Runs `systemctl restart <service>` |
-| Startup | Every boot | Safety net — re-checks unit file settings |
+| Startup | Every boot | Safety net - re-checks unit file settings |
 
 The startup migration runs before `stopPreviousInstance()`. This is critical for upgrades from older versions: when an old binary spawns the new binary as a post-update child, the child fixes the unit file while the parent is still alive, then kills the parent. systemd sees the main PID die, and `Restart=always` triggers an automatic restart with the new binary.
 

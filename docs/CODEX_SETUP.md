@@ -235,5 +235,5 @@ Refresh your Codex login so `auth.json` has a new access token, then restart onW
 
 ## See Also
 
-- [README](../README.md) — Quick start and provider overview
-- [Development Guide](DEVELOPMENT.md) — Build and internals
+- [README](../README.md) - Quick start and provider overview
+- [Development Guide](DEVELOPMENT.md) - Build and internals

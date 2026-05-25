@@ -221,7 +221,7 @@ func TestCopilotDisplayName(t *testing.T) {
 }
 
 func TestCopilotRoundTrip(t *testing.T) {
-	// Test JSON round-trip: parse → ToSnapshot → verify raw JSON re-parses
+	// Test JSON round-trip: parse -> ToSnapshot -> verify raw JSON re-parses
 	raw := `{"login":"test","copilot_plan":"pro","quota_reset_date_utc":"2026-03-01T00:00:00.000Z","quota_snapshots":{"premium_interactions":{"entitlement":1500,"remaining":1000,"percent_remaining":66.667,"unlimited":false,"overage_count":0,"overage_permitted":false}}}`
 
 	resp, err := ParseCopilotResponse([]byte(raw))

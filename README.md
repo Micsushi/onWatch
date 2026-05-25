@@ -314,6 +314,8 @@ Additional environment variables:
 | `ONWATCH_API_INTEGRATIONS_ENABLED` | Enable or disable API Integrations ingestion (default: `true`) |
 | `ONWATCH_API_INTEGRATIONS_DIR`     | Directory onWatch tails for API Integrations JSONL events |
 | `ONWATCH_API_INTEGRATIONS_RETENTION` | How long API Integrations rows are kept in SQLite (default: `1440h` = 60 days, `0` disables pruning) |
+| `ONWATCH_AGENT_USAGE_PRICING_JSON` | Optional LiteLLM-compatible pricing JSON for local agent token cost math |
+| `ONWATCH_CURSOR_USAGE_CSV` | Optional Cursor usage export CSV to ingest token usage into API Integrations |
 
 CLI flags override environment variables.
 

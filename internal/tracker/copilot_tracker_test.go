@@ -117,7 +117,7 @@ func TestCopilotTracker_Process_ResetDetection(t *testing.T) {
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Second snapshot with different reset date → quota reset
+	// Second snapshot with different reset date -> quota reset
 	resetDate2 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	snap2 := &api.CopilotSnapshot{
 		CapturedAt: now.Add(time.Minute),

@@ -14,11 +14,7 @@ import (
 	"github.com/onllm-dev/onwatch/v2/internal/tracker"
 	"github.com/onllm-dev/onwatch/v2/internal/update"
 )
-
-// ═══════════════════════════════════════════════════════════════════
-// ── CheckUpdate Tests (targeting 50% → higher coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// CheckUpdate Tests (targeting 50% -> higher coverage)
 // TestHandler_CheckUpdate_WithDevUpdater verifies 200 when updater exists
 // and returns no error (dev version returns immediately with no update).
 func TestHandler_CheckUpdate_WithDevUpdater(t *testing.T) {
@@ -106,11 +102,7 @@ func TestHandler_CheckUpdate_WithServerError(t *testing.T) {
 		t.Errorf("expected status 503, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── ApplyUpdate Tests (targeting 40% → higher coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// ApplyUpdate Tests (targeting 40% -> higher coverage)
 // TestHandler_ApplyUpdate_WithDevUpdaterFails verifies that applying update
 // on dev version returns an error (Apply returns error for dev builds).
 func TestHandler_ApplyUpdate_WithDevUpdaterFails(t *testing.T) {
@@ -139,11 +131,7 @@ func TestHandler_ApplyUpdate_WithDevUpdaterFails(t *testing.T) {
 		t.Errorf("expected generic error message, got %q", response["error"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── SettingsPage Tests (targeting 66.7% → higher coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// SettingsPage Tests (targeting 66.7% -> higher coverage)
 // TestHandler_SettingsPage_ReturnsHTMLWithCacheControl verifies cache-control header is set.
 func TestHandler_SettingsPage_ReturnsHTMLWithCacheControl(t *testing.T) {
 	t.Parallel()
@@ -189,11 +177,7 @@ func TestHandler_SettingsPage_WithVersion(t *testing.T) {
 		t.Errorf("expected version 1.2.3 in response body")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── ChangePassword Tests (targeting 70% → higher coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// ChangePassword Tests (targeting 70% -> higher coverage)
 // TestHandler_ChangePassword_NilSessions returns 500 when sessions is nil.
 func TestHandler_ChangePassword_NilSessions(t *testing.T) {
 	t.Parallel()
@@ -293,11 +277,7 @@ func TestHandler_ChangePassword_InvalidJSON(t *testing.T) {
 		t.Errorf("expected status 400, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Sessions Tests (targeting 68.2% → higher coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Sessions Tests (targeting 68.2% -> higher coverage)
 // TestHandler_Sessions_WithZaiProvider returns sessions for zai provider.
 func TestHandler_Sessions_WithZaiProvider(t *testing.T) {
 	t.Parallel()
@@ -511,11 +491,7 @@ func TestHandler_Sessions_NilStore(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildZaiSummaryMap Tests (targeting 56.2% → higher coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildZaiSummaryMap Tests (targeting 56.2% -> higher coverage)
 // TestHandler_buildZaiSummaryMap_NilSnapshot exercises the fallback path when
 // store has no snapshot.
 func TestHandler_Summary_ZaiWithNilSnapshot(t *testing.T) {
@@ -590,11 +566,7 @@ func TestHandler_Summary_ZaiWithSnapshotAndNoTracker(t *testing.T) {
 		t.Errorf("expected currentLimit 100000000, got %v", tokensLimit["currentLimit"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildSyntheticInsights Tests (targeting 62.9% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildSyntheticInsights Tests (targeting 62.9% -> higher)
 // TestHandler_Insights_Synthetic_WithCycles exercises cycle-based insight paths.
 func TestHandler_Insights_Synthetic_WithCycles(t *testing.T) {
 	t.Parallel()
@@ -681,11 +653,7 @@ func TestHandler_Insights_Synthetic_WithDifferentRanges(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildAnthropicInsights Tests (targeting 50.7% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildAnthropicInsights Tests (targeting 50.7% -> higher)
 // TestHandler_Insights_Anthropic_WithLatestSnapshot exercises the full insights path.
 func TestHandler_Insights_Anthropic_WithLatestSnapshot(t *testing.T) {
 	t.Parallel()
@@ -808,11 +776,7 @@ func TestHandler_Insights_Anthropic_WithMultipleQuotas(t *testing.T) {
 		t.Errorf("expected 3 stats (one per quota), got %d", len(stats))
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cycleOverview* Tests (targeting 57-65% → higher coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cycleOverview* Tests (targeting 57-65% -> higher coverage)
 // TestHandler_CycleOverview_Synthetic_WithGroupBy exercises non-default groupBy.
 func TestHandler_CycleOverview_Synthetic_WithGroupBy(t *testing.T) {
 	t.Parallel()
@@ -1161,11 +1125,7 @@ func TestHandler_CycleOverview_Both_NilStore(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesAntigravity Tests (targeting 56.5% → higher coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesAntigravity Tests (targeting 56.5% -> higher coverage)
 // TestHandler_Cycles_Antigravity_WithType exercises the Antigravity cycles path.
 func TestHandler_Cycles_Antigravity_WithType(t *testing.T) {
 	t.Parallel()
@@ -1235,11 +1195,7 @@ func TestHandler_Cycles_Antigravity_NilStore(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Additional buildZaiCurrent Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Additional buildZaiCurrent Tests
 // TestHandler_Current_Zai_NilResetTime exercises the path where TokensNextResetTime is nil.
 func TestHandler_Current_Zai_NilResetTime(t *testing.T) {
 	t.Parallel()
@@ -1284,11 +1240,7 @@ func TestHandler_Current_Zai_NilResetTime(t *testing.T) {
 		t.Errorf("expected timeUntilReset N/A when no reset time, got %v", tokensLimit["timeUntilReset"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Anthropic Current Tests with Rate ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Anthropic Current Tests with Rate
 // TestHandler_Current_Anthropic_WithHighUtilization exercises critical status path.
 func TestHandler_Current_Anthropic_WithHighUtilization(t *testing.T) {
 	t.Parallel()
@@ -1370,11 +1322,7 @@ func TestHandler_Current_Anthropic_WithNoResetsAt(t *testing.T) {
 		t.Error("expected no resetsAt when ResetsAt is nil")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── parseCycleOverviewLimit Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// parseCycleOverviewLimit Tests
 // TestParseCycleOverviewLimit_WithLimitParam exercises the limit param parsing.
 func TestParseCycleOverviewLimit_WithLimitParam(t *testing.T) {
 	t.Parallel()
@@ -1383,11 +1331,11 @@ func TestParseCycleOverviewLimit_WithLimitParam(t *testing.T) {
 		expected int
 	}{
 		{"/api/cycle-overview?limit=10", 10},
-		{"/api/cycle-overview?limit=0", 50},    // invalid → default
-		{"/api/cycle-overview?limit=-1", 50},   // invalid → default
-		{"/api/cycle-overview?limit=abc", 50},  // invalid → default
-		{"/api/cycle-overview?limit=600", 500}, // exceeds max → capped
-		{"/api/cycle-overview", 50},            // no param → default
+		{"/api/cycle-overview?limit=0", 50},    // invalid -> default
+		{"/api/cycle-overview?limit=-1", 50},   // invalid -> default
+		{"/api/cycle-overview?limit=abc", 50},  // invalid -> default
+		{"/api/cycle-overview?limit=600", 500}, // exceeds max -> capped
+		{"/api/cycle-overview", 50},            // no param -> default
 	}
 
 	for _, tt := range tests {
@@ -1400,11 +1348,7 @@ func TestParseCycleOverviewLimit_WithLimitParam(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── historyZai Tests (targeting 66.7% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// historyZai Tests (targeting 66.7% -> higher)
 // TestHandler_History_Zai_WithSnapshotHavingNoResetTime exercises the nil-reset-time path.
 func TestHandler_History_Zai_WithSnapshotHavingNoResetTime(t *testing.T) {
 	t.Parallel()
@@ -1470,11 +1414,7 @@ func TestHandler_History_Zai_EmptyDB(t *testing.T) {
 		t.Error("expected empty array, not null")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesSynthetic Tests (targeting 65.4% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesSynthetic Tests (targeting 65.4% -> higher)
 // TestHandler_Cycles_Synthetic_WithLimitParam exercises the limit param.
 func TestHandler_Cycles_Synthetic_WithLimitParam(t *testing.T) {
 	t.Parallel()
@@ -1523,11 +1463,7 @@ func TestHandler_Cycles_Zai_EmptyDB(t *testing.T) {
 		t.Error("expected empty array, not null")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── historyAnthropic Tests (targeting 69.2% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// historyAnthropic Tests (targeting 69.2% -> higher)
 // TestHandler_History_Anthropic_EmptyDB returns empty array.
 func TestHandler_History_Anthropic_EmptyDB(t *testing.T) {
 	t.Parallel()
@@ -1591,11 +1527,7 @@ func TestHandler_History_Anthropic_WithData(t *testing.T) {
 		t.Error("expected at least one history entry")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── historyBoth Tests (targeting 71.6% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// historyBoth Tests (targeting 71.6% -> higher)
 // TestHandler_History_Both_WithData exercises the both history path.
 func TestHandler_History_Both_WithData(t *testing.T) {
 	t.Parallel()
@@ -1648,11 +1580,7 @@ func TestHandler_History_Both_WithData(t *testing.T) {
 		t.Error("expected zai key in both history response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── parseInsightsRange Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// parseInsightsRange Tests
 // TestParseInsightsRange exercises all supported range values.
 func TestParseInsightsRange(t *testing.T) {
 	t.Parallel()
@@ -1676,11 +1604,7 @@ func TestParseInsightsRange(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesAnthropic Tests (targeting 77.8% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesAnthropic Tests (targeting 77.8% -> higher)
 // TestHandler_Cycles_Anthropic_EmptyDB returns empty array.
 func TestHandler_Cycles_Anthropic_EmptyDB(t *testing.T) {
 	t.Parallel()
@@ -1730,11 +1654,7 @@ func TestHandler_Cycles_Anthropic_WithAllQuotaTypes(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildInsight Tests (targeting 71.4% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildInsight Tests (targeting 71.4% -> higher)
 // TestBuildInsight_WithNoData exercises the no-data path.
 func TestBuildInsight_WithNoData(t *testing.T) {
 	t.Parallel()
@@ -1764,11 +1684,7 @@ func TestBuildInsight_WithUsageAndNoSummary(t *testing.T) {
 		t.Errorf("expected percent in result, got %q", result)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Server utility function Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Server utility function Tests
 // TestGetEmbeddedTemplates verifies the function returns a non-empty filesystem.
 func TestGetEmbeddedTemplates(t *testing.T) {
 	t.Parallel()
@@ -1825,11 +1741,7 @@ func TestServer_GetSessionStore_NilHandler(t *testing.T) {
 		t.Error("expected nil session store for nil handler")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── LoginRateLimiter evictOldestEntry Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// LoginRateLimiter evictOldestEntry Tests
 // TestLoginRateLimiter_EvictsOldestEntry verifies eviction when at capacity.
 func TestLoginRateLimiter_EvictsOldestEntry(t *testing.T) {
 	t.Parallel()
@@ -1862,11 +1774,7 @@ func TestLoginRateLimiter_NewWithZeroMax(t *testing.T) {
 		t.Error("expected maxIPs to be set to default")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── historyCodex Tests (targeting 68% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// historyCodex Tests (targeting 68% -> higher)
 // TestHandler_History_Codex_EmptyDB returns empty array.
 func TestHandler_History_Codex_EmptyDB(t *testing.T) {
 	t.Parallel()
@@ -1926,11 +1834,7 @@ func TestHandler_History_Codex_InvalidRange(t *testing.T) {
 		t.Errorf("expected status 400, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesCodex Tests (targeting 61.5% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesCodex Tests (targeting 61.5% -> higher)
 // TestHandler_Cycles_Codex_EmptyDB returns empty array for valid type.
 func TestHandler_Cycles_Codex_EmptyDB(t *testing.T) {
 	t.Parallel()
@@ -2015,11 +1919,7 @@ func TestHandler_Cycles_Codex_DefaultType(t *testing.T) {
 		t.Errorf("expected status 200 with default type, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── historyZai Additional Tests (targeting 66.7% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// historyZai Additional Tests (targeting 66.7% -> higher)
 // TestHandler_History_Zai_InvalidRange returns 400.
 func TestHandler_History_Zai_InvalidRange(t *testing.T) {
 	t.Parallel()
@@ -2052,11 +1952,7 @@ func TestHandler_History_Zai_NilStore(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── historyBoth Additional Tests (targeting 74.1% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// historyBoth Additional Tests (targeting 74.1% -> higher)
 // TestHandler_History_Both_AllProviders exercises all-provider both history.
 func TestHandler_History_Both_AllProviders(t *testing.T) {
 	t.Parallel()
@@ -2101,11 +1997,7 @@ func TestHandler_History_Both_InvalidRange(t *testing.T) {
 		t.Errorf("expected status 400, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesBoth Additional Tests (targeting 79% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesBoth Additional Tests (targeting 79% -> higher)
 // TestHandler_Cycles_Both_WithAllProviders exercises all providers in cyclesBoth.
 func TestHandler_Cycles_Both_WithAllProviders(t *testing.T) {
 	t.Parallel()
@@ -2132,11 +2024,7 @@ func TestHandler_Cycles_Both_WithAllProviders(t *testing.T) {
 		t.Error("expected synthetic key in both cycles response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesZai Additional Tests (targeting 61.5% → higher) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesZai Additional Tests (targeting 61.5% -> higher)
 // TestHandler_Cycles_Zai_InvalidType returns 400.
 func TestHandler_Cycles_Zai_InvalidType(t *testing.T) {
 	t.Parallel()
@@ -2172,11 +2060,7 @@ func TestHandler_Cycles_Zai_DefaultType(t *testing.T) {
 		t.Errorf("expected status 200 with default type, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cycleOverviewAnthropic Additional Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cycleOverviewAnthropic Additional Tests
 // TestHandler_CycleOverview_Anthropic_WithLimitParam exercises the limit param.
 func TestHandler_CycleOverview_Anthropic_WithLimitParam(t *testing.T) {
 	t.Parallel()
@@ -2194,11 +2078,7 @@ func TestHandler_CycleOverview_Anthropic_WithLimitParam(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cycleOverviewBoth Additional Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cycleOverviewBoth Additional Tests
 // TestHandler_CycleOverview_Both_WithAllProviders_Full exercises all providers in cycleOverviewBoth.
 func TestHandler_CycleOverview_Both_WithAllProviders_Full(t *testing.T) {
 	t.Parallel()
@@ -2227,11 +2107,7 @@ func TestHandler_CycleOverview_Both_WithAllProviders_Full(t *testing.T) {
 		t.Error("expected copilot key in all-provider both response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cycleOverviewCopilot Additional Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cycleOverviewCopilot Additional Tests
 // TestHandler_CycleOverview_Copilot_WithGroupBy exercises non-default groupBy.
 func TestHandler_CycleOverview_Copilot_WithGroupBy(t *testing.T) {
 	t.Parallel()
@@ -2256,11 +2132,7 @@ func TestHandler_CycleOverview_Copilot_WithGroupBy(t *testing.T) {
 		t.Errorf("expected groupBy chat, got %v", response["groupBy"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cycleOverviewCodex Additional Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cycleOverviewCodex Additional Tests
 // TestHandler_CycleOverview_Codex_WithGroupBy exercises non-default groupBy.
 func TestHandler_CycleOverview_Codex_WithGroupBy(t *testing.T) {
 	t.Parallel()
@@ -2285,11 +2157,7 @@ func TestHandler_CycleOverview_Codex_WithGroupBy(t *testing.T) {
 		t.Errorf("expected groupBy seven_day, got %v", response["groupBy"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Summary Additional Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Summary Additional Tests
 // TestHandler_Summary_WithCodexProvider_Extra returns summary for codex with empty DB.
 func TestHandler_Summary_WithCodexProvider_Extra(t *testing.T) {
 	t.Parallel()
@@ -2343,11 +2211,7 @@ func TestHandler_Summary_WithCopilotProvider(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── LoggingHistory Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// LoggingHistory Tests
 // TestHandler_LoggingHistory_Synthetic returns logging history for synthetic.
 func TestHandler_LoggingHistory_Synthetic(t *testing.T) {
 	t.Parallel()
@@ -2528,11 +2392,7 @@ func TestHandler_LoggingHistory_NilStoreSynthetic(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── History Additional Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// History Additional Tests
 // TestHandler_History_Copilot_EmptyDB returns empty array.
 func TestHandler_History_Copilot_EmptyDB(t *testing.T) {
 	t.Parallel()
@@ -2590,11 +2450,7 @@ func TestHandler_History_Antigravity_EmptyDB(t *testing.T) {
 		t.Error("expected datasets key in antigravity history response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Current Additional Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Current Additional Tests
 // TestHandler_Current_Copilot_WithEmptyDB returns empty quotas.
 func TestHandler_Current_Copilot_WithEmptyDB(t *testing.T) {
 	t.Parallel()
@@ -2657,11 +2513,7 @@ func TestHandler_Current_Antigravity_WithEmptyDB(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Insights Additional Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Insights Additional Tests
 // TestHandler_Insights_Copilot_EmptyDB returns empty insights.
 func TestHandler_Insights_Copilot_EmptyDB(t *testing.T) {
 	t.Parallel()
@@ -2742,11 +2594,7 @@ func TestHandler_Insights_Both_WithAllProviders(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Dashboard Additional Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Dashboard Additional Tests
 // TestHandler_Dashboard_WithCopilotProvider renders HTML for copilot.
 func TestHandler_Dashboard_WithCopilotProvider(t *testing.T) {
 	t.Parallel()
@@ -2806,11 +2654,7 @@ func TestHandler_Dashboard_NonRootPath(t *testing.T) {
 		t.Errorf("expected status 404, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Active Cycle Coverage Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Active Cycle Coverage Tests
 // TestHandler_Cycles_Synthetic_WithActiveCycle exercises the active != nil path.
 func TestHandler_Cycles_Synthetic_WithActiveCycle(t *testing.T) {
 	t.Parallel()
@@ -2872,11 +2716,7 @@ func TestHandler_Cycles_Zai_WithActiveCycle(t *testing.T) {
 		t.Error("expected at least one cycle (the active one)")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── loggingHistory with Data Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// loggingHistory with Data Tests
 // TestHandler_LoggingHistory_Zai_WithData exercises the snapshot loop.
 func TestHandler_LoggingHistory_Zai_WithData(t *testing.T) {
 	t.Parallel()
@@ -3000,11 +2840,7 @@ func TestHandler_LoggingHistory_Synthetic_WithData(t *testing.T) {
 		t.Error("expected non-empty logs")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildAnthropicInsights with Tracker Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildAnthropicInsights with Tracker Tests
 // TestHandler_Insights_Anthropic_WithTrackerAndCycles exercises deeper paths.
 func TestHandler_Insights_Anthropic_WithTrackerAndCycles(t *testing.T) {
 	t.Parallel()
@@ -3050,11 +2886,7 @@ func TestHandler_Insights_Anthropic_WithTrackerAndCycles(t *testing.T) {
 		t.Error("expected insights field")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildZaiSummaryMap with Tracker Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildZaiSummaryMap with Tracker Tests
 // TestHandler_Summary_Zai_WithTracker exercises the tracker-based summary path.
 func TestHandler_Summary_Zai_WithTracker(t *testing.T) {
 	t.Parallel()
@@ -3099,11 +2931,7 @@ func TestHandler_Summary_Zai_WithTracker(t *testing.T) {
 		t.Error("expected tokensLimit field")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildSyntheticInsights with Tracker Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildSyntheticInsights with Tracker Tests
 // TestHandler_Insights_Synthetic_WithManyDataPoints exercises more insight paths.
 func TestHandler_Insights_Synthetic_WithManyDataPoints(t *testing.T) {
 	t.Parallel()
@@ -3149,11 +2977,7 @@ func TestHandler_Insights_Synthetic_WithManyDataPoints(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── History with data for all providers ──
-// ═══════════════════════════════════════════════════════════════════
-
+// History with data for all providers
 // TestHandler_History_Anthropic_WithMultipleSnapshots exercises the downsampling path.
 func TestHandler_History_Anthropic_WithMultipleSnapshots(t *testing.T) {
 	t.Parallel()
@@ -3192,11 +3016,7 @@ func TestHandler_History_Anthropic_WithMultipleSnapshots(t *testing.T) {
 		t.Error("expected non-empty history")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── UpdateSettings Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// UpdateSettings Tests
 // TestHandler_UpdateSettings_InvalidJSON returns 400.
 func TestHandler_UpdateSettings_InvalidJSON(t *testing.T) {
 	t.Parallel()
@@ -3233,11 +3053,7 @@ func TestHandler_UpdateSettings_NilStore(t *testing.T) {
 		t.Errorf("expected status 500, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── GetSettings Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// GetSettings Tests
 // TestHandler_GetSettings_NilStore returns 200 with empty data (nil store is tolerated).
 func TestHandler_GetSettings_NilStore(t *testing.T) {
 	t.Parallel()
@@ -3261,11 +3077,7 @@ func TestHandler_GetSettings_NilStore(t *testing.T) {
 		t.Error("expected timezone field in settings response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── PushSubscribe Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// PushSubscribe Tests
 // TestHandler_PushSubscribe_MissingFields returns 400 when keys are missing.
 func TestHandler_PushSubscribe_MissingFields(t *testing.T) {
 	t.Parallel()
@@ -3348,11 +3160,7 @@ func TestHandler_PushSubscribe_Delete_MissingEndpointExtra(t *testing.T) {
 		t.Errorf("expected status 400, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesSynthetic null-store coverage Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesSynthetic null-store coverage Tests
 // TestHandler_Cycles_Synthetic_NilStore returns empty array.
 func TestHandler_Cycles_Synthetic_NilStore(t *testing.T) {
 	t.Parallel()
@@ -3382,11 +3190,7 @@ func TestHandler_Cycles_Zai_NilStore(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesBoth with larger config Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesBoth with larger config Tests
 // TestHandler_Cycles_Both_WithCodexAndAntigravity exercises codex+antigravity paths.
 func TestHandler_Cycles_Both_WithCodexAndAntigravity(t *testing.T) {
 	t.Parallel()
@@ -3413,11 +3217,7 @@ func TestHandler_Cycles_Both_WithCodexAndAntigravity(t *testing.T) {
 		t.Error("expected codex key in both cycles response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildSummaryResponse Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildSummaryResponse Tests
 // TestHandler_Summary_Synthetic_WithTracker exercises tracker-based summary.
 func TestHandler_Summary_Synthetic_WithTracker(t *testing.T) {
 	t.Parallel()
@@ -3461,12 +3261,8 @@ func TestHandler_Summary_Synthetic_WithTracker(t *testing.T) {
 		t.Error("expected toolCalls key in summary response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesSynthetic / cyclesZai / cyclesCodex / cyclesAntigravity
+// cyclesSynthetic / cyclesZai / cyclesCodex / cyclesAntigravity
 //    with real store data (covers active+history branches)
-// ═══════════════════════════════════════════════════════════════════
-
 // TestHandler_Cycles_Synthetic_WithTypeSearch covers the search quota type path.
 func TestHandler_Cycles_Synthetic_WithTypeSearch(t *testing.T) {
 	t.Parallel()
@@ -3594,11 +3390,7 @@ func TestHandler_Cycles_Antigravity_WithModelID(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cycleOverview* with real store (covers the data-query paths)
-// ═══════════════════════════════════════════════════════════════════
-
+// cycleOverview* with real store (covers the data-query paths)
 // TestHandler_CycleOverview_Anthropic_WithStore tests the full query path.
 func TestHandler_CycleOverview_Anthropic_WithStore(t *testing.T) {
 	t.Parallel()
@@ -3730,11 +3522,7 @@ func TestHandler_CycleOverview_Zai_WithStore(t *testing.T) {
 		t.Errorf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── loggingHistory* with real store and snapshots (data branch)
-// ═══════════════════════════════════════════════════════════════════
-
+// loggingHistory* with real store and snapshots (data branch)
 // TestHandler_LoggingHistory_Zai_WithSnapshots exercises the snapshot loop.
 func TestHandler_LoggingHistory_Zai_WithSnapshots(t *testing.T) {
 	t.Parallel()
@@ -3906,11 +3694,7 @@ func TestHandler_LoggingHistory_Antigravity_WithSnapshots(t *testing.T) {
 		t.Error("expected logs key in response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildAntigravityCurrent with data (covers email/plan/quotas)
-// ═══════════════════════════════════════════════════════════════════
-
+// buildAntigravityCurrent with data (covers email/plan/quotas)
 // TestHandler_Current_Antigravity_WithData2 exercises the full data path (second variant).
 func TestHandler_Current_Antigravity_WithData2(t *testing.T) {
 	t.Parallel()
@@ -3954,11 +3738,7 @@ func TestHandler_Current_Antigravity_WithData2(t *testing.T) {
 		t.Errorf("expected email field, got: %v", response["email"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── History endpoints with real data
-// ═══════════════════════════════════════════════════════════════════
-
+// History endpoints with real data
 // TestHandler_History_Copilot_WithData2 exercises the copilot history path (second variant).
 func TestHandler_History_Copilot_WithData2(t *testing.T) {
 	t.Parallel()
@@ -4065,11 +3845,7 @@ func TestHandler_History_Both_WithAllProviders(t *testing.T) {
 		t.Error("expected synthetic key in both history response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildAnthropicInsights with data (covers quota rate paths)
-// ═══════════════════════════════════════════════════════════════════
-
+// buildAnthropicInsights with data (covers quota rate paths)
 // TestHandler_Insights_Anthropic_WithData2 exercises buildAnthropicInsights fully (second variant).
 func TestHandler_Insights_Anthropic_WithData2(t *testing.T) {
 	t.Parallel()
@@ -4119,11 +3895,7 @@ func TestHandler_Insights_Anthropic_WithData2(t *testing.T) {
 		t.Error("expected stats field")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildSyntheticInsights with cycle data (covers deep branches)
-// ═══════════════════════════════════════════════════════════════════
-
+// buildSyntheticInsights with cycle data (covers deep branches)
 // TestHandler_Insights_Synthetic_WithCycleData exercises the cycle branches.
 func TestHandler_Insights_Synthetic_WithCycleData(t *testing.T) {
 	t.Parallel()
@@ -4160,11 +3932,7 @@ func TestHandler_Insights_Synthetic_WithCycleData(t *testing.T) {
 		t.Error("expected stats field")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Sessions with real data
-// ═══════════════════════════════════════════════════════════════════
-
+// Sessions with real data
 // TestHandler_Sessions_Anthropic_WithData exercises the anthropic session path.
 func TestHandler_Sessions_Anthropic_WithData(t *testing.T) {
 	t.Parallel()
@@ -4209,11 +3977,7 @@ func TestHandler_Sessions_Both_AllProviders(t *testing.T) {
 		t.Error("expected synthetic key in sessions both response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Summary endpoints with real store (covers missing paths)
-// ═══════════════════════════════════════════════════════════════════
-
+// Summary endpoints with real store (covers missing paths)
 // TestHandler_Summary_Both_WithAllProviders exercises summaryBoth.
 func TestHandler_Summary_Both_WithAllProviders(t *testing.T) {
 	t.Parallel()
@@ -4275,11 +4039,7 @@ func TestHandler_Summary_Codex_WithStore(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── UpdateSettings covering missing paths
-// ═══════════════════════════════════════════════════════════════════
-
+// UpdateSettings covering missing paths
 // TestHandler_UpdateSettings_NilStoreExtra covers nil store returns 500.
 func TestHandler_UpdateSettings_NilStoreExtra(t *testing.T) {
 	t.Parallel()
@@ -4334,11 +4094,7 @@ func TestHandler_UpdateSettings_MethodNotAllowedExtra(t *testing.T) {
 		t.Errorf("expected 405, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── ChangePassword additional coverage
-// ═══════════════════════════════════════════════════════════════════
-
+// ChangePassword additional coverage
 // TestHandler_ChangePassword_ShortNewPassword covers the short-password 400 path.
 func TestHandler_ChangePassword_ShortNewPassword(t *testing.T) {
 	t.Parallel()
@@ -4407,11 +4163,7 @@ func TestHandler_ChangePassword_EmptyFields2(t *testing.T) {
 		t.Errorf("expected 400, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildZaiCurrent with tracker data path
-// ═══════════════════════════════════════════════════════════════════
-
+// buildZaiCurrent with tracker data path
 // TestHandler_Current_Zai_WithSnapshot exercises buildZaiCurrent full data path.
 func TestHandler_Current_Zai_WithSnapshot(t *testing.T) {
 	t.Parallel()
@@ -4479,11 +4231,7 @@ func TestHandler_Current_Both_WithAllProviders(t *testing.T) {
 		t.Error("expected synthetic key in both current response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Insights for other providers
-// ═══════════════════════════════════════════════════════════════════
-
+// Insights for other providers
 // TestHandler_Insights_Copilot_WithData2 exercises buildCopilotInsights (second variant).
 func TestHandler_Insights_Copilot_WithData2(t *testing.T) {
 	t.Parallel()
@@ -4610,11 +4358,7 @@ func TestHandler_Insights_Both_WithAllData(t *testing.T) {
 		t.Errorf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Dashboard endpoint for all providers
-// ═══════════════════════════════════════════════════════════════════
-
+// Dashboard endpoint for all providers
 // TestHandler_Dashboard_CopilotProvider tests the dashboard handler for copilot.
 func TestHandler_Dashboard_CopilotProvider(t *testing.T) {
 	t.Parallel()
@@ -4666,11 +4410,7 @@ func TestHandler_Dashboard_AntigravityProvider(t *testing.T) {
 		t.Errorf("provider=antigravity: expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── SMTPTest coverage
-// ═══════════════════════════════════════════════════════════════════
-
+// SMTPTest coverage
 // TestHandler_SMTPTest_NilNotifier returns 503.
 func TestHandler_SMTPTest_NilNotifier(t *testing.T) {
 	t.Parallel()
@@ -4682,7 +4422,7 @@ func TestHandler_SMTPTest_NilNotifier(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.SMTPTest(rr, req)
 
-	// No notifier → 503
+	// No notifier -> 503
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d; body: %s", rr.Code, rr.Body.String())
 	}
@@ -4702,12 +4442,8 @@ func TestHandler_SMTPTest_MethodNotAllowedExtra(t *testing.T) {
 		t.Errorf("expected 405, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesSynthetic / cyclesZai with actual cycle data
+// cyclesSynthetic / cyclesZai with actual cycle data
 //    (covers the active cycle and history loop branches)
-// ═══════════════════════════════════════════════════════════════════
-
 // TestHandler_Cycles_Synthetic_WithCompletedCycles covers the history loop.
 func TestHandler_Cycles_Synthetic_WithCompletedCycles(t *testing.T) {
 	t.Parallel()
@@ -4802,12 +4538,8 @@ func TestHandler_Cycles_Synthetic_ToolcallType(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildSyntheticInsights with completed cycle data
+// buildSyntheticInsights with completed cycle data
 //    (covers the cycle_utilization, weekly_pace, top_session branches)
-// ═══════════════════════════════════════════════════════════════════
-
 // TestHandler_Insights_Synthetic_WithCompletedCycles2 exercises the cycle insight branches with completed cycles.
 func TestHandler_Insights_Synthetic_WithCompletedCycles2(t *testing.T) {
 	t.Parallel()
@@ -4858,11 +4590,7 @@ func TestHandler_Insights_Synthetic_WithCompletedCycles2(t *testing.T) {
 		t.Error("expected insights field")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildAnthropicInsights with full cycle data
-// ═══════════════════════════════════════════════════════════════════
-
+// buildAnthropicInsights with full cycle data
 // TestHandler_Insights_Anthropic_WithCycleHistory exercises the quota billing path.
 func TestHandler_Insights_Anthropic_WithCycleHistory(t *testing.T) {
 	t.Parallel()
@@ -4910,11 +4638,7 @@ func TestHandler_Insights_Anthropic_WithCycleHistory(t *testing.T) {
 		t.Error("expected insights field")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cycleOverview* with groupBy parameter (covers non-default groupBy)
-// ═══════════════════════════════════════════════════════════════════
-
+// cycleOverview* with groupBy parameter (covers non-default groupBy)
 // TestHandler_CycleOverview_Anthropic_WithGroupBy2 exercises the groupBy path (second variant).
 func TestHandler_CycleOverview_Anthropic_WithGroupBy2(t *testing.T) {
 	t.Parallel()
@@ -4986,11 +4710,7 @@ func TestHandler_CycleOverview_Both_WithGroupBy(t *testing.T) {
 		t.Errorf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── historyAnthropic with actual data
-// ═══════════════════════════════════════════════════════════════════
-
+// historyAnthropic with actual data
 // TestHandler_History_Anthropic_WithData2 exercises historyAnthropic data path (second variant).
 func TestHandler_History_Anthropic_WithData2(t *testing.T) {
 	t.Parallel()
@@ -5028,11 +4748,7 @@ func TestHandler_History_Anthropic_WithData2(t *testing.T) {
 		t.Error("expected non-empty anthropic history")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── historyBoth with all providers configured
-// ═══════════════════════════════════════════════════════════════════
-
+// historyBoth with all providers configured
 // TestHandler_History_Both_WithMultipleProviders exercises historyBoth with many providers.
 func TestHandler_History_Both_WithMultipleProviders(t *testing.T) {
 	t.Parallel()
@@ -5085,11 +4801,7 @@ func TestHandler_History_Both_WithMultipleProviders(t *testing.T) {
 		t.Error("expected zai key in both history response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildZaiCurrent with tracker (covers rate/projection branch)
-// ═══════════════════════════════════════════════════════════════════
-
+// buildZaiCurrent with tracker (covers rate/projection branch)
 // TestHandler_Current_Zai_WithTrackerAndData exercises the tracker rate path.
 func TestHandler_Current_Zai_WithTrackerAndData(t *testing.T) {
 	t.Parallel()
@@ -5131,11 +4843,7 @@ func TestHandler_Current_Zai_WithTrackerAndData(t *testing.T) {
 		t.Error("expected tokensLimit field")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Sessions with more coverage
-// ═══════════════════════════════════════════════════════════════════
-
+// Sessions with more coverage
 // TestHandler_Sessions_Copilot exercises the copilot sessions path.
 func TestHandler_Sessions_Copilot(t *testing.T) {
 	t.Parallel()
@@ -5189,11 +4897,7 @@ func TestHandler_Sessions_Antigravity(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Summary endpoints with data
-// ═══════════════════════════════════════════════════════════════════
-
+// Summary endpoints with data
 // TestHandler_Summary_Anthropic_WithData exercises the anthropic summary data path.
 func TestHandler_Summary_Anthropic_WithData(t *testing.T) {
 	t.Parallel()
@@ -5254,11 +4958,7 @@ func TestHandler_Summary_Zai_WithSnapshot(t *testing.T) {
 		t.Errorf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── ChangePassword success path
-// ═══════════════════════════════════════════════════════════════════
-
+// ChangePassword success path
 // TestHandler_ChangePassword_SuccessPath2 exercises the password change success path.
 func TestHandler_ChangePassword_SuccessPath2(t *testing.T) {
 	t.Parallel()
@@ -5284,11 +4984,7 @@ func TestHandler_ChangePassword_SuccessPath2(t *testing.T) {
 		t.Errorf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── GetSettings with actual data
-// ═══════════════════════════════════════════════════════════════════
-
+// GetSettings with actual data
 // TestHandler_GetSettings_WithData exercises the full path with real settings.
 func TestHandler_GetSettings_WithData(t *testing.T) {
 	t.Parallel()
@@ -5331,11 +5027,7 @@ func TestHandler_GetSettings_WithData(t *testing.T) {
 		t.Error("expected password_set to be true")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── historyBoth with codex/copilot/antigravity
-// ═══════════════════════════════════════════════════════════════════
-
+// historyBoth with codex/copilot/antigravity
 // TestHandler_History_Both_WithCodexAndCopilot exercises historyBoth codex+copilot branches.
 func TestHandler_History_Both_WithCodexAndCopilot(t *testing.T) {
 	t.Parallel()
@@ -5395,11 +5087,7 @@ func TestHandler_CycleOverview_Both_WithStore(t *testing.T) {
 		t.Errorf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── NewHandler with various non-nil fields (61.1% → higher)
-// ═══════════════════════════════════════════════════════════════════
-
+// NewHandler with various non-nil fields (61.1% -> higher)
 // TestNewHandler_WithAllFields exercises NewHandler with more optional fields set.
 func TestNewHandler_WithAllFields(t *testing.T) {
 	t.Parallel()
@@ -5430,11 +5118,7 @@ func TestNewHandler_WithAllFields(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesCodex with active + history data (covers uncovered branches)
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesCodex with active + history data (covers uncovered branches)
 // TestHandler_Cycles_Codex_WithActiveCycle covers the active cycle branch.
 func TestHandler_Cycles_Codex_WithActiveCycle(t *testing.T) {
 	t.Parallel()
@@ -5524,11 +5208,7 @@ func TestHandler_Cycles_Codex_CodeReviewType(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesAntigravity with active + history data
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesAntigravity with active + history data
 // TestHandler_Cycles_Antigravity_WithActiveCycle covers the active cycle branch.
 func TestHandler_Cycles_Antigravity_WithActiveCycle(t *testing.T) {
 	t.Parallel()
@@ -5602,12 +5282,8 @@ func TestHandler_Cycles_Antigravity_WithHistory(t *testing.T) {
 		t.Error("expected non-empty cycles (history should be present)")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cycleOverviewCodex / cycleOverviewCopilot with valid store
+// cycleOverviewCodex / cycleOverviewCopilot with valid store
 //    (covers the data query path - already tested but at 65%)
-// ═══════════════════════════════════════════════════════════════════
-
 // TestHandler_CycleOverview_Codex_WithLimit exercises the limit parameter.
 func TestHandler_CycleOverview_Codex_WithLimit(t *testing.T) {
 	t.Parallel()
@@ -5669,11 +5345,7 @@ func TestHandler_CycleOverview_Anthropic_WithLimit(t *testing.T) {
 		t.Errorf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Summary with tracker data paths
-// ═══════════════════════════════════════════════════════════════════
-
+// Summary with tracker data paths
 // TestHandler_Summary_Zai_WithTracker2 exercises the tracker-based zai summary path.
 func TestHandler_Summary_Zai_WithTracker2(t *testing.T) {
 	t.Parallel()
@@ -5715,11 +5387,7 @@ func TestHandler_Summary_Zai_WithTracker2(t *testing.T) {
 		t.Error("expected tokensLimit key in zai summary response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── SettingsPage exercises (covers template rendering)
-// ═══════════════════════════════════════════════════════════════════
-
+// SettingsPage exercises (covers template rendering)
 // TestHandler_SettingsPage_WithStore exercises the settings page with a store.
 func TestHandler_SettingsPage_WithStore(t *testing.T) {
 	t.Parallel()
@@ -5737,11 +5405,7 @@ func TestHandler_SettingsPage_WithStore(t *testing.T) {
 		t.Errorf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── ApplyUpdate with dev updater (covers success+error paths)
-// ═══════════════════════════════════════════════════════════════════
-
+// ApplyUpdate with dev updater (covers success+error paths)
 // TestHandler_ApplyUpdate_WithDevUpdater covers the error path (dev builds can't update).
 func TestHandler_ApplyUpdate_WithDevUpdater(t *testing.T) {
 	t.Parallel()
@@ -5761,11 +5425,7 @@ func TestHandler_ApplyUpdate_WithDevUpdater(t *testing.T) {
 		t.Errorf("expected 500, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── PushSubscribe additional paths
-// ═══════════════════════════════════════════════════════════════════
-
+// PushSubscribe additional paths
 // TestHandler_PushSubscribe_GET returns 405.
 func TestHandler_PushSubscribe_GET(t *testing.T) {
 	t.Parallel()
@@ -5803,11 +5463,7 @@ func TestHandler_PushSubscribe_Delete_InvalidJSON2(t *testing.T) {
 		t.Errorf("expected 400, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── NewHandler variadic arg paths
-// ═══════════════════════════════════════════════════════════════════
-
+// NewHandler variadic arg paths
 // TestNewHandler_WithMultipleZaiTrackers exercises NewHandler with multiple zai tracker args.
 func TestNewHandler_WithMultipleZaiTrackers(t *testing.T) {
 	t.Parallel()
@@ -5825,11 +5481,7 @@ func TestNewHandler_WithMultipleZaiTrackers(t *testing.T) {
 		t.Fatal("expected non-nil handler")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── parseTimeRange error path coverage
-// ═══════════════════════════════════════════════════════════════════
-
+// parseTimeRange error path coverage
 // TestHandler_History_Anthropic_InvalidRange covers the parseTimeRange error path.
 func TestHandler_History_Anthropic_InvalidRange(t *testing.T) {
 	t.Parallel()
@@ -5883,11 +5535,7 @@ func TestHandler_History_Anthropic_WithRangeParam(t *testing.T) {
 		t.Error("expected non-empty history")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesSynthetic / cyclesZai error-path coverage with invalid range
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesSynthetic / cyclesZai error-path coverage with invalid range
 // TestHandler_History_Synthetic_InvalidRange covers the bad range path for synthetic.
 func TestHandler_History_Synthetic_InvalidRange(t *testing.T) {
 	t.Parallel()
@@ -5905,11 +5553,7 @@ func TestHandler_History_Synthetic_InvalidRange(t *testing.T) {
 		t.Errorf("expected 400, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Cycles with all providers exhaustively
-// ═══════════════════════════════════════════════════════════════════
-
+// Cycles with all providers exhaustively
 // TestHandler_Cycles_Anthropic_WithCompletedCycles exercises the anthropic cycle history.
 func TestHandler_Cycles_Anthropic_WithCompletedCycles(t *testing.T) {
 	t.Parallel()
@@ -5953,11 +5597,7 @@ func TestHandler_Cycles_Both_AllProviders(t *testing.T) {
 		t.Errorf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Summary with all providers - summaryBoth with codex
-// ═══════════════════════════════════════════════════════════════════
-
+// Summary with all providers - summaryBoth with codex
 // TestHandler_Summary_Both_WithCodexAndCopilot exercises summaryBoth with codex/copilot.
 func TestHandler_Summary_Both_WithCodexAndCopilot(t *testing.T) {
 	t.Parallel()
@@ -5983,11 +5623,7 @@ func TestHandler_Summary_Both_WithCodexAndCopilot(t *testing.T) {
 		t.Error("expected codex key in summaryBoth all-providers response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Current endpoints with data - all providers
-// ═══════════════════════════════════════════════════════════════════
-
+// Current endpoints with data - all providers
 // TestHandler_Current_Codex_WithData exercises buildCodexCurrent with data.
 func TestHandler_Current_Codex_WithData(t *testing.T) {
 	t.Parallel()
@@ -6024,11 +5660,7 @@ func TestHandler_Current_Codex_WithData(t *testing.T) {
 		t.Error("expected quotas field in Codex current response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── loggingHistory with range param (covers branch variations)
-// ═══════════════════════════════════════════════════════════════════
-
+// loggingHistory with range param (covers branch variations)
 // TestHandler_LoggingHistory_Zai_WithRange exercises the range param parsing.
 func TestHandler_LoggingHistory_Zai_WithRange(t *testing.T) {
 	t.Parallel()
@@ -6121,11 +5753,7 @@ func TestHandler_LoggingHistory_Anthropic_WithRange(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── CheckUpdate error path (via bad server)
-// ═══════════════════════════════════════════════════════════════════
-
+// CheckUpdate error path (via bad server)
 // TestHandler_CheckUpdate_DevUpdater2 covers the dev updater check path again.
 func TestHandler_CheckUpdate_DevUpdater2(t *testing.T) {
 	t.Parallel()
@@ -6142,11 +5770,7 @@ func TestHandler_CheckUpdate_DevUpdater2(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Sessions with more specific providers
-// ═══════════════════════════════════════════════════════════════════
-
+// Sessions with more specific providers
 // TestHandler_Sessions_Zai exercises the zai session path.
 func TestHandler_Sessions_Zai(t *testing.T) {
 	t.Parallel()
@@ -6182,11 +5806,7 @@ func TestHandler_Sessions_Unknown(t *testing.T) {
 		t.Errorf("expected 400, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Dashboard for more providers with store data
-// ═══════════════════════════════════════════════════════════════════
-
+// Dashboard for more providers with store data
 // TestHandler_Dashboard_WithZaiProvider exercises the zai dashboard path.
 func TestHandler_Dashboard_WithZaiProvider(t *testing.T) {
 	t.Parallel()
@@ -6220,11 +5840,7 @@ func TestHandler_Dashboard_WithAnthropicProvider(t *testing.T) {
 		t.Errorf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Coverage boost tests (84.7% -> 90%+) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Coverage boost tests (84.7% -> 90%+)
 // --- buildSyntheticInsights deep paths ---
 
 // TestHandler_Insights_Synthetic_CycleUtilization exercises the cycle_utilization insight
@@ -8074,11 +7690,7 @@ func TestHandler_SettingsPage_WithAllFields(t *testing.T) {
 		t.Errorf("expected Cache-Control no-store, got %s", cc)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── CycleOverview Tests (targeting cycleOverview* coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// CycleOverview Tests (targeting cycleOverview* coverage)
 // TestHandler_CycleOverview_SyntheticWithStore exercises cycleOverviewSynthetic happy path.
 func TestHandler_CycleOverview_SyntheticWithStore(t *testing.T) {
 	t.Parallel()
@@ -8353,11 +7965,7 @@ func TestHandler_CycleOverview_UnknownProvider(t *testing.T) {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── LoggingHistory Tests (targeting loggingHistory* coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// LoggingHistory Tests (targeting loggingHistory* coverage)
 // TestHandler_LoggingHistory_SyntheticWithData exercises loggingHistorySynthetic with snapshots.
 func TestHandler_LoggingHistory_SyntheticWithData(t *testing.T) {
 	t.Parallel()
@@ -8663,11 +8271,7 @@ func TestHandler_LoggingHistory_DefaultProvider(t *testing.T) {
 		t.Fatalf("unexpected error message: %q", response["error"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Anthropic Insights Variance + Trend Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Anthropic Insights Variance + Trend Tests
 // TestHandler_Insights_Anthropic_VarianceHighSpread creates enough cycles for
 // the variance insight to trigger the "High Variance" (diff>50) path.
 func TestHandler_Insights_Anthropic_VarianceHighSpread(t *testing.T) {
@@ -8859,11 +8463,7 @@ func TestHandler_Insights_Anthropic_VarianceLow(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Synthetic Insights Variance + Trend Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Synthetic Insights Variance + Trend Tests
 // TestHandler_Insights_Synthetic_VarianceHighSpread creates enough subscription cycles
 // for the synthetic variance insight to trigger the "High Variance" (diff>50) path.
 func TestHandler_Insights_Synthetic_VarianceHighSpread(t *testing.T) {
@@ -9052,11 +8652,7 @@ func TestHandler_Insights_Synthetic_TrendStable(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Codex / Antigravity Cycles Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Codex / Antigravity Cycles Tests
 // TestHandler_Cycles_Codex_WithDataCov exercises cyclesCodex with active and historical data.
 func TestHandler_Cycles_Codex_WithDataCov(t *testing.T) {
 	t.Parallel()
@@ -9177,11 +8773,7 @@ func TestHandler_Cycles_Antigravity_NoTypeCov(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildAntigravityCurrent Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildAntigravityCurrent Tests
 // TestHandler_Current_Antigravity_WithSnapshotData exercises buildAntigravityCurrent
 // with a real snapshot containing model quota data.
 func TestHandler_Current_Antigravity_WithSnapshotData(t *testing.T) {
@@ -9241,11 +8833,7 @@ func TestHandler_Current_Antigravity_NilStoreCov(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildCodexCurrent Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildCodexCurrent Tests
 // TestHandler_Current_Codex_WithSnapshotData exercises buildCodexCurrent
 // with a snapshot containing quotas and credits.
 func TestHandler_Current_Codex_WithSnapshotData(t *testing.T) {
@@ -9305,11 +8893,7 @@ func TestHandler_Current_Codex_NilStoreCov(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Copilot History + Cycles Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Copilot History + Cycles Tests
 // TestHandler_History_Copilot_WithDataCov exercises historyCopilot with snapshots.
 func TestHandler_History_Copilot_WithDataCov(t *testing.T) {
 	t.Parallel()
@@ -9404,11 +8988,7 @@ func TestHandler_Cycles_Copilot_NilStoreCov(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── History for Codex + Antigravity Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// History for Codex + Antigravity Tests
 // TestHandler_History_Codex_WithDataCov exercises historyCodex with snapshot data.
 func TestHandler_History_Codex_WithDataCov(t *testing.T) {
 	t.Parallel()
@@ -9495,11 +9075,7 @@ func TestHandler_History_Antigravity_NilStoreCov(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Dashboard Provider Visibility Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Dashboard Provider Visibility Tests
 // TestHandler_Dashboard_ProviderVisibility exercises the provider_visibility
 // filtering branch in Dashboard.
 func TestHandler_Dashboard_ProviderVisibility(t *testing.T) {
@@ -9558,11 +9134,7 @@ func TestHandler_Dashboard_NotFoundPath(t *testing.T) {
 		t.Fatalf("expected 404, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildSummaryResponse with TrackingSince Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildSummaryResponse with TrackingSince Tests
 // TestHandler_Summary_Synthetic_WithTrackingSince exercises the non-zero TrackingSince branch.
 func TestHandler_Summary_Synthetic_WithTrackingSince(t *testing.T) {
 	t.Parallel()
@@ -9608,11 +9180,7 @@ func TestHandler_Summary_Synthetic_WithTrackingSince(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── CheckUpdate / ApplyUpdate Edge Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// CheckUpdate / ApplyUpdate Edge Tests
 // TestHandler_CheckUpdate_NilUpdater exercises the nil updater branch.
 func TestHandler_CheckUpdate_NilUpdater(t *testing.T) {
 	t.Parallel()
@@ -9685,11 +9253,7 @@ func TestHandler_ApplyUpdate_WithDevUpdaterCov(t *testing.T) {
 		t.Fatalf("expected 500, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesBoth with All Providers Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesBoth with All Providers Tests
 // TestHandler_Cycles_Both_AllProvidersWithData exercises all branches of cyclesBoth
 // by creating cycles for synthetic, zai, anthropic, codex, and antigravity.
 func TestHandler_Cycles_Both_AllProvidersWithData(t *testing.T) {
@@ -9736,11 +9300,7 @@ func TestHandler_Cycles_Both_AllProvidersWithData(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildCopilotCurrent with Data Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildCopilotCurrent with Data Tests
 // TestHandler_Current_Copilot_WithSnapshotDataCov exercises buildCopilotCurrent
 // with a snapshot containing quotas, reset date, and plan.
 func TestHandler_Current_Copilot_WithSnapshotDataCov(t *testing.T) {
@@ -9778,11 +9338,7 @@ func TestHandler_Current_Copilot_WithSnapshotDataCov(t *testing.T) {
 		t.Error("expected non-empty quotas")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Sessions Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Sessions Tests
 // TestHandler_Sessions_NilStoreCov exercises the nil store branch.
 func TestHandler_Sessions_NilStoreCov(t *testing.T) {
 	t.Parallel()
@@ -9810,11 +9366,7 @@ func TestHandler_Sessions_BothNilStore(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── History Both with more providers Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// History Both with more providers Tests
 // TestHandler_History_Both_WithAllProvidersCov exercises historyBoth with all provider data.
 func TestHandler_History_Both_WithAllProvidersCov(t *testing.T) {
 	t.Parallel()
@@ -9904,11 +9456,7 @@ func TestHandler_History_BothNilStore(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Insights Nil Store + Edge Cases ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Insights Nil Store + Edge Cases
 // TestHandler_Insights_Anthropic_NilStore exercises nil store in buildAnthropicInsights.
 func TestHandler_Insights_Anthropic_NilStoreCov(t *testing.T) {
 	t.Parallel()
@@ -9964,11 +9512,7 @@ func TestHandler_GetSettings_NilStoreCov(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Zai History + Cycles Edge Cases ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Zai History + Cycles Edge Cases
 // TestHandler_History_Zai_WithData exercises historyZai with snapshot data.
 func TestHandler_History_Zai_WithDataCov(t *testing.T) {
 	t.Parallel()
@@ -10039,11 +9583,7 @@ func TestHandler_Cycles_Zai_WithDataCov(t *testing.T) {
 		t.Error("expected at least one cycle")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Current Both with All Providers ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Current Both with All Providers
 // TestHandler_Current_Both_WithAllProviderData exercises Current with provider=both
 // and data for all providers.
 func TestHandler_Current_Both_WithAllProviderData(t *testing.T) {
@@ -10112,11 +9652,7 @@ func TestHandler_Current_Both_WithAllProviderData(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Summary Both + Zai Provider Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Summary Both + Zai Provider Tests
 // TestHandler_Summary_BothNilStore exercises nil store summary for both provider.
 func TestHandler_Summary_BothNilStore(t *testing.T) {
 	t.Parallel()
@@ -10165,11 +9701,7 @@ func TestHandler_SettingsPage_Render(t *testing.T) {
 		t.Errorf("expected text/html content type, got %s", ct)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── UpdateSettings Save Paths ──
-// ═══════════════════════════════════════════════════════════════════
-
+// UpdateSettings Save Paths
 // TestHandler_UpdateSettings_TimezoneSave exercises the timezone SetSetting success path.
 func TestHandler_UpdateSettings_TimezoneSave(t *testing.T) {
 	t.Parallel()
@@ -10320,11 +9852,7 @@ func TestHandler_UpdateSettings_MultipleFields(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Synthetic Insights with Enough Billing Periods for Trend ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Synthetic Insights with Enough Billing Periods for Trend
 // TestHandler_Insights_Synthetic_TrendWithManyPeriods creates 8 cycles that form distinct billing periods.
 // Uses dramatically different peaks to force billing period boundaries.
 func TestHandler_Insights_Synthetic_TrendWithManyPeriods(t *testing.T) {
@@ -10363,11 +9891,7 @@ func TestHandler_Insights_Synthetic_TrendWithManyPeriods(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Anthropic Insights with Many Billing Periods ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Anthropic Insights with Many Billing Periods
 // TestHandler_Insights_Anthropic_FullVarianceAndTrend creates 8 anthropic cycles
 // with alternating peaks to generate enough billing periods for both variance and trend.
 func TestHandler_Insights_Anthropic_FullVarianceAndTrend(t *testing.T) {
@@ -10401,11 +9925,7 @@ func TestHandler_Insights_Anthropic_FullVarianceAndTrend(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Codex + Antigravity Insights ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Codex + Antigravity Insights
 // TestHandler_Insights_Codex_WithDataCov exercises buildCodexInsights with snapshot + cycles.
 func TestHandler_Insights_Codex_WithDataCov(t *testing.T) {
 	t.Parallel()
@@ -10516,11 +10036,7 @@ func TestHandler_Insights_Copilot_WithDataCov(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Login + History Edge Cases ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Login + History Edge Cases
 // TestHandler_Login_NilSessions exercises nil sessions branch.
 func TestHandler_Login_NilSessionsCov(t *testing.T) {
 	t.Parallel()
@@ -10620,11 +10136,7 @@ func TestHandler_Sessions_UnknownProviderCov(t *testing.T) {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildSyntheticCurrent + buildZaiCurrent nil store branches ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildSyntheticCurrent + buildZaiCurrent nil store branches
 // TestHandler_Current_Synthetic_NilStoreCov exercises nil store in buildSyntheticCurrent.
 func TestHandler_Current_Synthetic_NilStoreCov(t *testing.T) {
 	t.Parallel()
@@ -10666,11 +10178,7 @@ func TestHandler_Current_Copilot_NilStoreCov(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Zai Insights with 24h Trend Data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Zai Insights with 24h Trend Data
 // TestHandler_Insights_Zai_WithTrendData exercises buildZaiInsights 24h trend
 // with enough snapshots for acceleration detection.
 func TestHandler_Insights_Zai_WithTrendData(t *testing.T) {
@@ -10751,11 +10259,7 @@ func TestHandler_Insights_Zai_NoDataCov(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Codex Insights with Weekly Pace ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Codex Insights with Weekly Pace
 // TestHandler_Insights_Codex_WithWeeklyPace exercises buildCodexWeeklyPaceInsight.
 func TestHandler_Insights_Codex_WithWeeklyPace(t *testing.T) {
 	t.Parallel()
@@ -10796,11 +10300,7 @@ func TestHandler_Insights_Codex_WithWeeklyPace(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Sessions Both with Data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Sessions Both with Data
 // TestHandler_Sessions_BothWithData exercises sessionsBoth with actual snapshots.
 func TestHandler_Sessions_BothWithData(t *testing.T) {
 	t.Parallel()
@@ -10836,11 +10336,7 @@ func TestHandler_Sessions_BothWithData(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── More Copilot Current with Unlimited Quota ──
-// ═══════════════════════════════════════════════════════════════════
-
+// More Copilot Current with Unlimited Quota
 // TestHandler_Current_Copilot_WithUnlimitedQuota exercises buildCopilotCurrent
 // with an unlimited quota that hits different branches.
 func TestHandler_Current_Copilot_WithUnlimitedQuota(t *testing.T) {
@@ -10878,11 +10374,7 @@ func TestHandler_Current_Copilot_WithUnlimitedQuota(t *testing.T) {
 		t.Errorf("expected at least 3 quotas, got %d", len(quotas))
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Antigravity Insights with More Models ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Antigravity Insights with More Models
 // TestHandler_Insights_Antigravity_MultipleGroups exercises buildAntigravityInsights
 // with models spanning multiple quota groups.
 func TestHandler_Insights_Antigravity_MultipleGroups(t *testing.T) {
@@ -10917,11 +10409,7 @@ func TestHandler_Insights_Antigravity_MultipleGroups(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildInsight edge case ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildInsight edge case
 // TestHandler_Insights_Synthetic_HiddenInsights exercises insights with hidden keys.
 func TestHandler_Insights_Synthetic_HiddenInsightsCov(t *testing.T) {
 	t.Parallel()
@@ -10949,11 +10437,7 @@ func TestHandler_Insights_Synthetic_HiddenInsightsCov(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── cyclesSynthetic / cyclesZai with actual data for coverage
-// ═══════════════════════════════════════════════════════════════════
-
+// cyclesSynthetic / cyclesZai with actual data for coverage
 func TestHandler_CyclesSynthetic_WithActiveCycle(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11251,11 +10735,7 @@ func TestHandler_SettingsPage_NoAuth(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Closed-store error path tests for cycle overview + logging history ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Closed-store error path tests for cycle overview + logging history
 func TestHandler_CycleOverviewSynthetic_StoreError(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11424,8 +10904,7 @@ func TestHandler_LoggingHistoryAntigravity_StoreError(t *testing.T) {
 	}
 }
 
-// ── Cycles error paths with closed store ──
-
+// Cycles error paths with closed store
 func TestHandler_CyclesSynthetic_StoreQueryError(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11482,8 +10961,7 @@ func TestHandler_CyclesAntigravity_StoreQueryError(t *testing.T) {
 	}
 }
 
-// ── History error paths with closed store ──
-
+// History error paths with closed store
 func TestHandler_HistorySynthetic_StoreError(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11569,8 +11047,7 @@ func TestHandler_HistoryAntigravity_StoreError(t *testing.T) {
 	}
 }
 
-// ── UpdateSettings store error paths ──
-
+// UpdateSettings store error paths
 func TestHandler_UpdateSettings_TimezoneStoreError(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11648,8 +11125,7 @@ func TestHandler_UpdateSettings_ProviderVisibilityStoreError(t *testing.T) {
 	}
 }
 
-// ── ChangePassword store error paths ──
-
+// ChangePassword store error paths
 func TestHandler_ChangePassword_HashErrorPath(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11672,8 +11148,7 @@ func TestHandler_ChangePassword_HashErrorPath(t *testing.T) {
 	}
 }
 
-// ── CheckUpdate error path ──
-
+// CheckUpdate error path
 func TestHandler_CheckUpdate_UpdaterError(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11691,8 +11166,7 @@ func TestHandler_CheckUpdate_UpdaterError(t *testing.T) {
 	}
 }
 
-// ── PushSubscribe store error paths ──
-
+// PushSubscribe store error paths
 func TestHandler_PushSubscribe_Post_StoreError(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11723,8 +11197,7 @@ func TestHandler_PushSubscribe_Delete_StoreError(t *testing.T) {
 	}
 }
 
-// ── GetSettings store error path ──
-
+// GetSettings store error path
 func TestHandler_GetSettings_StoreError(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11740,8 +11213,7 @@ func TestHandler_GetSettings_StoreError(t *testing.T) {
 	}
 }
 
-// ── Sessions store error ──
-
+// Sessions store error
 func TestHandler_Sessions_StoreError(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11757,8 +11229,7 @@ func TestHandler_Sessions_StoreError(t *testing.T) {
 	}
 }
 
-// ── Login GET with valid session redirect ──
-
+// Login GET with valid session redirect
 func TestHandler_Login_AlreadyLoggedIn(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11778,8 +11249,7 @@ func TestHandler_Login_AlreadyLoggedIn(t *testing.T) {
 	}
 }
 
-// ── Login POST invalid JSON ──
-
+// Login POST invalid JSON
 func TestHandler_Login_PostInvalidJSON(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -11798,11 +11268,7 @@ func TestHandler_Login_PostInvalidJSON(t *testing.T) {
 		t.Error("expected non-zero status")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Codex display mode tests
-// ═══════════════════════════════════════════════════════════════════
-
+// Codex display mode tests
 func TestHandler_GetCodexDisplayMode_DefaultUsage(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -12032,11 +11498,7 @@ func TestHandler_BuildCodexCurrent_CodeReviewAlwaysRemaining(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── sanitizeProviderSettings tests
-// ═══════════════════════════════════════════════════════════════════
-
+// sanitizeProviderSettings tests
 func TestSanitizeProviderSettings_ValidValues(t *testing.T) {
 	t.Parallel()
 	settings := map[string]interface{}{
@@ -12161,11 +11623,7 @@ func TestSanitizeProviderSettings_EmptyAndMissing(t *testing.T) {
 	}
 	sanitizeProviderSettings(settings3) // should not panic
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── countWorkTime unit tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// countWorkTime unit tests
 func TestCountWorkTime(t *testing.T) {
 	t.Parallel()
 	// Apr 6, 2026 = Monday, Apr 13 = Monday (full 7-day window)
@@ -12238,11 +11696,7 @@ func TestIsWorkDay(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Codex pace mode insight tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Codex pace mode insight tests
 func TestHandler_Insights_Codex_5DayPace(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -12369,11 +11823,7 @@ func TestHandler_Insights_Codex_6DayPace(t *testing.T) {
 		t.Error("expected weekly_pace insight in 6-day mode")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Codex pace mode settings validation ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Codex pace mode settings validation
 func TestProviderSettings_CodexPaceMode(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")

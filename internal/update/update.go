@@ -370,12 +370,12 @@ func replaceBinary(exePath, tmpPath string, logger *slog.Logger) error {
 	// Strategy 2: Backup rename (required on Windows where running binaries can't be deleted)
 	logger.Info("Remove failed, trying backup-rename strategy", "path", exePath)
 	if err := os.Rename(exePath, backupPath); err != nil {
-		return fmt.Errorf("backup rename %s → %s: %w", exePath, backupPath, err)
+		return fmt.Errorf("backup rename %s -> %s: %w", exePath, backupPath, err)
 	}
 	if err := os.Rename(tmpPath, exePath); err != nil {
 		// Try to restore backup
 		os.Rename(backupPath, exePath)
-		return fmt.Errorf("swap rename %s → %s: %w", tmpPath, exePath, err)
+		return fmt.Errorf("swap rename %s -> %s: %w", tmpPath, exePath, err)
 	}
 	// Best-effort cleanup
 	os.Remove(backupPath)
@@ -461,11 +461,11 @@ func MigrateSystemdUnit(logger *slog.Logger) {
 	original := string(content)
 	updated := original
 
-	// Migration 1: Restart=on-failure → Restart=always
+	// Migration 1: Restart=on-failure -> Restart=always
 	// Ensures service restarts after self-update (old code exited with 0)
 	updated = strings.Replace(updated, "Restart=on-failure", "Restart=always", 1)
 
-	// Migration 2: RestartSec=10 → RestartSec=5
+	// Migration 2: RestartSec=10 -> RestartSec=5
 	// Faster restart after update
 	updated = strings.Replace(updated, "RestartSec=10", "RestartSec=5", 1)
 
@@ -622,7 +622,7 @@ func compareVersions(a, b string) int {
 	return 0
 }
 
-// extractLeadingInt parses the leading integer from a string like "5-test" → 5.
+// extractLeadingInt parses the leading integer from a string like "5-test" -> 5.
 func extractLeadingInt(s string) int {
 	// Split on hyphen first (pre-release suffix)
 	if idx := strings.IndexByte(s, '-'); idx >= 0 {

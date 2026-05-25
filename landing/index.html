@@ -13,7 +13,7 @@
     </script>
     <title>onWatch - Know your AI quota before it runs out</title>
     <meta name="description" content="Track quota usage and reset windows across Anthropic, Codex, Synthetic, Z.ai, Copilot, MiniMax, Gemini CLI, and Antigravity. Detect anomalies, monitor burn rates, route work before limits hit. Open source Go binary, zero telemetry, all data local.">
-    <meta name="keywords" content="onWatch, AI API intelligence, multi-provider API tracking, Synthetic API monitor, Z.ai API tracker, Anthropic API monitoring, Codex API monitoring, GitHub Copilot quota tracker, MiniMax quota tracker, Gemini CLI quota tracker, Antigravity quota tracker, cross-provider insights, AI coding API usage, quota monitoring tool, open source API monitor, Cline quota tracker, Claude Code API usage, intelligent provider switching, API budget tracker, self-hosted API monitoring, reset cycle detection, rate projection, Go CLI tool, API quota dashboard">
+    <meta name="keywords" content="onWatch, AI API usage tracking, multi-provider API tracking, Synthetic API monitor, Z.ai API tracker, Anthropic API monitoring, Codex API monitoring, GitHub Copilot quota tracker, MiniMax quota tracker, Gemini CLI quota tracker, Antigravity quota tracker, cross-provider usage, AI coding API usage, quota monitoring tool, open source API monitor, Cline quota tracker, Claude Code API usage, provider switching, API budget tracker, self-hosted API monitoring, reset cycle detection, rate projection, Go CLI tool, API quota dashboard">
     <link rel="canonical" href="https://onwatch.onllm.dev">
 
     <!-- Open Graph -->
@@ -44,7 +44,7 @@
       "@context": "https://schema.org",
       "@type": "SoftwareApplication",
       "name": "onWatch",
-      "description": "Coding plan quota intelligence for Anthropic, Codex, Synthetic, Z.ai, GitHub Copilot, MiniMax, Gemini CLI, and Antigravity. onWatch tracks usage and reset windows, keeps local history, and surfaces actionable headroom so you can route coding work before limits hit. ~15 MB Go binary, <50 MB RAM, zero telemetry.",
+      "description": "Coding plan quota tracking for Anthropic, Codex, Synthetic, Z.ai, GitHub Copilot, MiniMax, Gemini CLI, and Antigravity. onWatch tracks usage and reset windows, keeps local history, and surfaces actionable headroom so you can route coding work before limits hit. ~15 MB Go binary, <50 MB RAM, zero telemetry.",
       "url": "https://onwatch.onllm.dev",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Linux, Windows",
@@ -66,9 +66,9 @@
       "downloadUrl": "https://github.com/onllm-dev/onwatch/releases",
       "screenshot": "https://raw.githubusercontent.com/onllm-dev/onwatch/main/docs/screenshots/anthropic-dark.png",
       "featureList": [
-        "Cross-provider usage intelligence",
+        "Cross-provider usage context",
         "Anthropic API monitoring",
-        "Intelligent provider switching insights",
+        "Provider switching context",
         "Historical API usage trends with Chart.js time-series",
         "Automatic quota reset cycle detection",
         "Consumption rate projections and time-to-exhaustion",
@@ -92,7 +92,7 @@
         "Configurable delivery channels: email, push, or both",
         "Built-in self-update via CLI or dashboard"
       ],
-      "keywords": "AI API intelligence, multi-provider API tracking, Synthetic API, Z.ai, Anthropic, Codex, GitHub Copilot, MiniMax, Gemini CLI, Antigravity, AI coding tools, usage monitoring, open source, Cline, Claude Code, cross-provider insights, API budget tracker, self-hosted"
+      "keywords": "AI API usage tracking, multi-provider API tracking, Synthetic API, Z.ai, Anthropic, Codex, GitHub Copilot, MiniMax, Gemini CLI, Antigravity, AI coding tools, usage monitoring, open source, Cline, Claude Code, cross-provider usage, API budget tracker, self-hosted"
     }
     </script>
 
@@ -131,7 +131,7 @@
           "name": "What is the Both view and why does it matter?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The All Providers view is onWatch's cross-provider unified dashboard that shows Synthetic, Z.ai, Anthropic, Codex, GitHub Copilot, MiniMax, Gemini CLI, and Antigravity quotas side-by-side in a single view. It lets you compare headroom across providers at a glance - for example, if your Synthetic search quota is at 95% but Z.ai tokens are at 34%, you know to route work to Z.ai. No other tool provides this cross-provider intelligence."
+            "text": "The All Providers view is onWatch's cross-provider dashboard that shows Synthetic, Z.ai, Anthropic, Codex, GitHub Copilot, MiniMax, Gemini CLI, and Antigravity quotas side-by-side in a single view. It lets you compare headroom across providers at a glance - for example, if your Synthetic search quota is at 95% but Z.ai tokens are at 34%, you know to route work to Z.ai."
           }
         },
         {
@@ -174,9 +174,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-/* ═══════════════════════════════════════════
-   DESIGN TOKENS - Matches onWatch Dashboard
-   ═══════════════════════════════════════════ */
+/* DESIGN TOKENS - Matches onWatch Dashboard */
 :root {
   --surface-page: #F0F2F5;
   --surface-card: #FFFFFF;
@@ -261,9 +259,7 @@
   --shadow-card-hover: 0 4px 16px rgba(0,0,0,0.3);
 }
 
-/* ═══════════════════════════════════════════
-   RESET & BASE
-   ═══════════════════════════════════════════ */
+/* RESET & BASE */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 html {
@@ -292,9 +288,7 @@ a:hover { text-decoration: underline; }
   outline-offset: 2px;
 }
 
-/* ═══════════════════════════════════════════
-   NAVIGATION
-   ═══════════════════════════════════════════ */
+/* NAVIGATION */
 .nav {
   position: fixed;
   top: 0;
@@ -483,18 +477,14 @@ a:hover { text-decoration: underline; }
 [data-theme="light"] .theme-toggle .icon-sun { display: none; }
 [data-theme="light"] .theme-toggle .icon-moon { display: block; }
 
-/* ═══════════════════════════════════════════
-   CONTAINER
-   ═══════════════════════════════════════════ */
+/* CONTAINER */
 .container {
   max-width: min(1320px, 100%);
   margin: 0 auto;
   padding: 0 32px;
 }
 
-/* ═══════════════════════════════════════════
-   HERO SECTION
-   ═══════════════════════════════════════════ */
+/* HERO SECTION */
 .hero {
   padding: 140px 0 80px;
   text-align: center;
@@ -744,9 +734,7 @@ a:hover { text-decoration: underline; }
   font-family: var(--font-mono);
 }
 
-/* ═══════════════════════════════════════════
-   DASHBOARD MOCKUP
-   ═══════════════════════════════════════════ */
+/* DASHBOARD MOCKUP */
 .mockup-wrapper {
   max-width: 960px;
   margin: 48px auto 0;
@@ -1080,9 +1068,7 @@ a:hover { text-decoration: underline; }
   opacity: 1;
 }
 
-/* ═══════════════════════════════════════════
-   PROVIDERS STRIP
-   ═══════════════════════════════════════════ */
+/* PROVIDERS STRIP */
 .providers {
   padding: 48px 0;
   text-align: center;
@@ -1160,9 +1146,7 @@ a:hover { text-decoration: underline; }
   vertical-align: middle;
 }
 
-/* ═══════════════════════════════════════════
-   PROVIDERS SHOWCASE
-   ═══════════════════════════════════════════ */
+/* PROVIDERS SHOWCASE */
 .providers-showcase {
   padding: 80px 0;
   border-top: 1px solid var(--border-light);
@@ -1313,9 +1297,7 @@ a:hover { text-decoration: underline; }
   flex-shrink: 0;
 }
 
-/* ═══════════════════════════════════════════
-   TRUST PROOF
-   ═══════════════════════════════════════════ */
+/* TRUST PROOF */
 .trust-proof {
   padding: 80px 0;
   border-top: 1px solid var(--border-light);
@@ -1631,15 +1613,13 @@ a:hover { text-decoration: underline; }
   font-weight: 600;
 }
 
-/* ═══════════════════════════════════════════
-   INTELLIGENCE SECTION
-   ═══════════════════════════════════════════ */
-.intelligence {
+/* USAGE CONTEXT SECTION */
+.usage-context {
   padding: 80px 0;
   border-top: 1px solid var(--border-light);
 }
 
-.intelligence-grid {
+.usage-context-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 20px;
@@ -1698,15 +1678,13 @@ a:hover { text-decoration: underline; }
 @media (max-width: 768px) {
   .provider-grid { grid-template-columns: 1fr; }
   .cross-provider-banner { flex-direction: column; text-align: center; gap: 12px; }
-  .intelligence-grid { grid-template-columns: 1fr; }
+  .usage-context-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 1024px) and (min-width: 769px) {
   .provider-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
-/* ═══════════════════════════════════════════
-   FEATURES SECTION
-   ═══════════════════════════════════════════ */
+/* FEATURES SECTION */
 .features {
   padding: 80px 0;
 }
@@ -1789,9 +1767,7 @@ a:hover { text-decoration: underline; }
   line-height: 1.6;
 }
 
-/* ═══════════════════════════════════════════
-   HOW IT WORKS / ARCHITECTURE
-   ═══════════════════════════════════════════ */
+/* HOW IT WORKS / ARCHITECTURE */
 .architecture {
   padding: 80px 0;
   border-top: 1px solid var(--border-light);
@@ -1879,9 +1855,7 @@ a:hover { text-decoration: underline; }
   margin-top: 4px;
 }
 
-/* ═══════════════════════════════════════════
-   INSTALL SECTION - Method Cards
-   ═══════════════════════════════════════════ */
+/* INSTALL SECTION - Method Cards */
 .install {
   padding: 80px 0;
   border-top: 1px solid var(--border-light);
@@ -2014,9 +1988,7 @@ a:hover { text-decoration: underline; }
   white-space: pre;
 }
 
-/* ═══════════════════════════════════════════
-   SCREENSHOTS GALLERY
-   ═══════════════════════════════════════════ */
+/* SCREENSHOTS GALLERY */
 .gallery {
   padding: 80px 0;
   border-top: 1px solid var(--border-light);
@@ -2321,9 +2293,7 @@ a:hover { text-decoration: underline; }
 .code-cmd { color: var(--accent-teal); }
 .code-string { color: var(--accent-peach); }
 
-/* ═══════════════════════════════════════════
-   COMPARISON / WHY SECTION
-   ═══════════════════════════════════════════ */
+/* COMPARISON / WHY SECTION */
 .comparison {
   padding: 80px 0;
   border-top: 1px solid var(--border-light);
@@ -2388,9 +2358,7 @@ a:hover { text-decoration: underline; }
 .check { color: var(--status-healthy); font-weight: 700; font-size: 15px; }
 .cross { color: var(--text-muted); opacity: 0.4; font-size: 13px; }
 
-/* ═══════════════════════════════════════════
-   FAQ SECTION
-   ═══════════════════════════════════════════ */
+/* FAQ SECTION */
 .faq-item {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -2451,9 +2419,7 @@ a:hover { text-decoration: underline; }
 }
 .faq-answer a { color: var(--accent-teal); }
 
-/* ═══════════════════════════════════════════
-   CTA SECTION
-   ═══════════════════════════════════════════ */
+/* CTA SECTION */
 .cta-section {
   padding: 80px 0;
   text-align: center;
@@ -2493,9 +2459,7 @@ a:hover { text-decoration: underline; }
   flex-wrap: wrap;
 }
 
-/* ═══════════════════════════════════════════
-   FOOTER
-   ═══════════════════════════════════════════ */
+/* FOOTER */
 .footer {
   padding: 32px 0;
   border-top: 1px solid var(--border-default);
@@ -2556,9 +2520,7 @@ a:hover { text-decoration: underline; }
   color: var(--text-muted);
 }
 
-/* ═══════════════════════════════════════════
-   ANIMATIONS
-   ═══════════════════════════════════════════ */
+/* ANIMATIONS */
 .fade-in {
   opacity: 0;
   transform: translateY(16px);
@@ -2574,9 +2536,7 @@ a:hover { text-decoration: underline; }
   50% { transform: rotateX(2deg) translateY(-4px); }
 }
 
-/* ═══════════════════════════════════════════
-   RESPONSIVE
-   ═══════════════════════════════════════════ */
+/* RESPONSIVE */
 @media (max-width: 1024px) {
   .hero-showcase {
     grid-template-columns: minmax(0, 1fr) minmax(172px, 194px);
@@ -2720,9 +2680,7 @@ a:hover { text-decoration: underline; }
   .arch-stats { grid-template-columns: 1fr 1fr; gap: 10px; }
 }
 
-/* ═══════════════════════════════════════════
-   REDUCED MOTION
-   ═══════════════════════════════════════════ */
+/* REDUCED MOTION */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
@@ -2775,7 +2733,7 @@ a:hover { text-decoration: underline; }
         </a>
         <div class="nav-links">
             <a href="#providers" class="nav-link">Providers</a>
-            <a href="#intelligence" class="nav-link">Intelligence</a>
+            <a href="#usage-context" class="nav-link">Usage Context</a>
             <a href="#features" class="nav-link">Features</a>
             <a href="#install" class="nav-link">Install</a>
             <a href="#faq" class="nav-link">FAQ</a>
@@ -3385,15 +3343,15 @@ a:hover { text-decoration: underline; }
     </div>
 </section>
 
-<!-- Intelligence -->
-<section class="intelligence" id="intelligence">
+<!-- Usage Context -->
+<section class="usage-context" id="usage-context">
     <div class="container">
         <div class="fade-in">
             <div class="section-label">Why onWatch</div>
             <h2 class="section-title">What provider dashboards miss</h2>
             <p class="section-desc">They show current usage. onWatch shows the full picture.</p>
         </div>
-        <div class="intelligence-grid">
+        <div class="usage-context-grid">
             <div class="intel-card fade-in">
                 <div class="intel-card-icon" style="background:var(--accent-teal-muted);color:var(--accent-teal);">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>
@@ -3419,7 +3377,7 @@ a:hover { text-decoration: underline; }
                 <div class="intel-card-icon" style="background:var(--accent-teal-muted);color:var(--accent-teal);">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
                 </div>
-                <h3 class="intel-card-title">Subscription intelligence</h3>
+                <h3 class="intel-card-title">Subscription planning</h3>
                 <p class="intel-card-desc">Track burn rates and cycle utilization over time. When renewal comes, you know whether to upgrade, downgrade, or stay put. All data stays local.</p>
             </div>
         </div>
@@ -3514,7 +3472,7 @@ a:hover { text-decoration: underline; }
                 <div class="arch-node-icon" style="background:var(--accent-blue-muted);color:var(--accent-blue);">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>
                 </div>
-                <div class="arch-node-title">Intelligence Dashboard</div>
+                <div class="arch-node-title">Usage Dashboard</div>
                 <div class="arch-node-desc">Patterns, projections, decisions</div>
             </div>
         </div>
@@ -3529,7 +3487,7 @@ a:hover { text-decoration: underline; }
             </div>
             <div class="arch-stat">
                 <div class="arch-stat-value">SQLite</div>
-                <div class="arch-stat-label">Local Intelligence Store</div>
+                <div class="arch-stat-label">Local Usage Store</div>
             </div>
             <div class="arch-stat">
                 <div class="arch-stat-value">60s</div>
@@ -5077,16 +5035,14 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 
 <script>
-/* ═══════════════════════════════════════════
-   DYNAMIC TIME + CHART.JS INITIALIZATION
-   ═══════════════════════════════════════════ */
+/* DYNAMIC TIME + CHART.JS INITIALIZATION */
 (function() {
-    /* ── Seeded PRNG for reproducible but random-looking data ── */
+    /* Seeded PRNG for reproducible but random-looking data */
     var _s = 42;
     function seed(v) { _s = v; }
     function rand() { _s = (_s * 16807) % 2147483647; return (_s - 1) / 2147483646; }
 
-    /* ── Generate developer activity mask (realistic work sessions) ── */
+    /* Generate developer activity mask (realistic work sessions) */
     function genActivity(sd) {
         seed(sd);
         var pts = 72; /* 6 hours at 5-min intervals */
@@ -5113,7 +5069,7 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
         return mask;
     }
 
-    /* ── Time formatting helpers ── */
+    /* Time formatting helpers */
     function pad(n) { return n < 10 ? '0' + n : '' + n; }
     function fmtTime(d) { var h = d.getHours(), m = d.getMinutes(), s = d.getSeconds(); var ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return h + ':' + pad(m) + ':' + pad(s) + ' ' + ap; }
     function fmtCountdown(secs) {
@@ -5132,7 +5088,7 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
         return 'Resets ' + h + ':' + pad(m) + ' ' + ap;
     }
 
-    /* ── Reset offsets from page load (in seconds) ── */
+    /* Reset offsets from page load (in seconds) */
     /* Sub resets every ~5h, Search every ~1h, Tool Calls every ~24h, Z.ai daily */
     var now = new Date();
     var subOff = 3 * 3600 + 47 * 60 + 12;     /* ~3h 47m left of 5h cycle */
@@ -5149,7 +5105,7 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
     var ant5hReset = new Date(now.getTime() + ant5hOff * 1000);
     var ant7dReset = new Date(now.getTime() + ant7dOff * 1000);
 
-    /* ── Dynamic time ticker ── */
+    /* Dynamic time ticker */
     function tick() {
         var t = new Date();
         var el = document.getElementById('mock-time');
@@ -5242,7 +5198,7 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
     tick();
     setInterval(tick, 1000);
 
-    /* ── Generate chart data ── */
+    /* Generate chart data */
     if (typeof Chart === 'undefined') return;
 
     var POINTS = 72;
@@ -5254,7 +5210,7 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
         labels.push(h + ':' + pad(t.getMinutes()));
     }
 
-    /* ── Curve builders ── */
+    /* Curve builders */
 
     /* Monotonically increasing curve from 0 to endPct */
     function buildCurve(activity, endPct) {
@@ -5355,25 +5311,25 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
         return arr;
     }
 
-    /* ── Synthetic data ── */
+    /* Synthetic data */
     var actSub = genActivity(1337);
     var actSearch = genActivity(7891);
     var actTool = genActivity(4242);
 
-    /* Subscription: ~5h cycle, 3h47m left → reset happened ~1h13m (≈15 pts) ago → resetIdx = 57 */
+    /* Subscription: ~5h cycle, 3h47m left -> reset happened ~1h13m (≈15 pts) ago -> resetIdx = 57 */
     /* Before reset: was climbing all cycle, peaked around 72%. After reset: climbed to 11.4%. */
     var synSubData = buildCurveWithReset(actSub, 57, 42, 72, 11.4);
 
-    /* Search: hourly resets, 38m left → current cycle started 22m ago */
+    /* Search: hourly resets, 38m left -> current cycle started 22m ago */
     /* Reset points every 12 data points (1h). Last reset at pt 68, then 56, 44, 32, 20, 8 */
     var synSearchData = buildSawtooth(actSearch, [8, 20, 32, 44, 56, 68], 95.2);
 
-    /* Tool Calls: ~24h cycle, 16h22m left → reset was ~7h38m ago, before the 6h window. No reset. */
+    /* Tool Calls: ~24h cycle, 16h22m left -> reset was ~7h38m ago, before the 6h window. No reset. */
     var synToolData = buildCurveWithBase(actTool, 62, 87.6);
     monotonic(synToolData);
 
-    /* ── Z.ai data ── */
-    /* Daily resets, 17h14m left → reset ~6h46m ago, just outside the 6h window. Monotonic climb. */
+    /* Z.ai data */
+    /* Daily resets, 17h14m left -> reset ~6h46m ago, just outside the 6h window. Monotonic climb. */
     var actZTok = genActivity(5555);
     var actZTime = genActivity(9876);
     var actZTool = genActivity(3141);
@@ -5385,16 +5341,16 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
     monotonic(zaiTimeData);
     monotonic(zaiToolData);
 
-    /* ── Anthropic data ── */
+    /* Anthropic data */
     var actAnt5h = genActivity(7777);
     var actAnt7d = genActivity(4242);
     var actAntSon = genActivity(1234);
 
-    /* Five-hour: 5h cycle, 2h18m left → reset ~2h42m (≈32 pts) ago → resetIdx = 40 */
+    /* Five-hour: 5h cycle, 2h18m left -> reset ~2h42m (≈32 pts) ago -> resetIdx = 40 */
     /* Before reset: peaked around 65%. After reset: climbed to 50%. */
     var ant5hData = buildCurveWithReset(actAnt5h, 40, 38, 65, 50);
 
-    /* Seven-day: weekly reset, 4d12h left → no reset in 6h window. Monotonic. */
+    /* Seven-day: weekly reset, 4d12h left -> no reset in 6h window. Monotonic. */
     var ant7dData = buildCurveWithBase(actAnt7d, 20, 31);
     monotonic(ant7dData);
 
@@ -5408,12 +5364,12 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
     roundArray(ant7dData);
     roundArray(antSonData);
 
-    /* ── Antigravity data ── */
+    /* Antigravity data */
     var actAgClaude = genActivity(8888);
     var actAgGeminiPro = genActivity(2222);
     var actAgGeminiFlash = genActivity(3333);
 
-    /* Claude+GPT: ~2h cycle, 2h14m left → reset ~1h46m ago. Peaked around 55%, now at 40%. */
+    /* Claude+GPT: ~2h cycle, 2h14m left -> reset ~1h46m ago. Peaked around 55%, now at 40%. */
     var agClaudeData = buildCurveWithReset(actAgClaude, 50, 25, 55, 40);
     roundArray(agClaudeData);
 
@@ -5423,7 +5379,7 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
     /* Gemini Flash: 5h cycle, no reset in window. Low usage. */
     var agGeminiFlashData = buildCurveWithBase(actAgGeminiFlash, 0, 0);
 
-    /* ── Chart colors ── */
+    /* Chart colors */
     var TEAL = '#0D9488';
     var PURPLE = '#8B5CF6';
     var AMBER = '#F59E0B';
@@ -5502,7 +5458,7 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
         };
     }
 
-    /* ── Create charts ── */
+    /* Create charts */
     var synYMax = calcYMax([synSubData, synSearchData, synToolData]);
     var zaiYMax = calcYMax([zaiTokData, zaiTimeData, zaiToolData], 1.2);
     var antYMax = calcYMax([ant5hData, ant7dData, antSonData], 1.3);
@@ -5589,7 +5545,7 @@ document.querySelectorAll('a[href^="#"]').forEach(function(a) {
         });
     }
 
-    /* ── Tab switching for charts ── */
+    /* Tab switching for charts */
     var synLegend = '<span class="mock-legend-item"><span class="mock-legend-dot" style="background:' + TEAL + '"></span>Subscription</span><span class="mock-legend-item"><span class="mock-legend-dot" style="background:' + PURPLE + '"></span>Search</span><span class="mock-legend-item"><span class="mock-legend-dot" style="background:' + AMBER + '"></span>Tool Calls</span>';
     var zaiLegend = '<span class="mock-legend-item"><span class="mock-legend-dot" style="background:' + BLUE + '"></span>Tokens</span><span class="mock-legend-item"><span class="mock-legend-dot" style="background:' + ROSE + '"></span>Time</span><span class="mock-legend-item"><span class="mock-legend-dot" style="background:' + EMERALD + '"></span>Tool Calls</span>';
     var antLegend = '<span class="mock-legend-item"><span class="mock-legend-dot" style="background:' + CORAL + '"></span>Five-Hour</span><span class="mock-legend-item"><span class="mock-legend-dot" style="background:' + PINK + '"></span>Seven-Day</span><span class="mock-legend-item"><span class="mock-legend-dot" style="background:' + CYAN + '"></span>Sonnet</span>';

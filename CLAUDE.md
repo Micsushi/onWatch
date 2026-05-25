@@ -1,6 +1,6 @@
 # onWatch
 
-Go CLI for AI quota tracking. Polls 9 providers → SQLite → Material Design 3 dashboard.
+Go CLI for AI quota tracking. Polls 9 providers -> SQLite -> Material Design 3 dashboard.
 
 ## Task
 
@@ -27,7 +27,7 @@ internal/
 
 ## Objectives
 
-1. **TDD-first**: Test → fail → implement → pass
+1. **TDD-first**: Test -> fail -> implement -> pass
 2. **RAM-bounded**: 40MB limit, single SQLite conn, lean HTTP
 3. **Single binary**: All assets via `embed.FS`
 
@@ -88,4 +88,4 @@ go test -race ./... && go vet ./...   # Pre-commit (mandatory)
 
 ## Style
 
-- Use `-` (hyphen) instead of `—` (em dash) in all text
+- Use `-` (hyphen) instead of em dash in all text

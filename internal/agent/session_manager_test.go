@@ -41,7 +41,7 @@ func TestSessionManager_CreatesSessionOnUsageChange(t *testing.T) {
 
 	// First poll: baseline
 	sm.ReportPoll([]float64{100, 50, 500})
-	// Second poll: values changed → should create session
+	// Second poll: values changed -> should create session
 	sm.ReportPoll([]float64{110, 50, 500})
 
 	sessions, _ := str.QuerySessionHistory("synthetic")
@@ -58,8 +58,8 @@ func TestSessionManager_SessionStaysOpenDuringActivity(t *testing.T) {
 	sm, str := newTestSessionManager(t, 10*time.Second)
 
 	sm.ReportPoll([]float64{100, 50, 500})
-	sm.ReportPoll([]float64{110, 50, 500}) // change → session starts
-	sm.ReportPoll([]float64{120, 50, 500}) // change → session stays open
+	sm.ReportPoll([]float64{110, 50, 500}) // change -> session starts
+	sm.ReportPoll([]float64{120, 50, 500}) // change -> session stays open
 
 	sessions, _ := str.QuerySessionHistory("synthetic")
 	if len(sessions) != 1 {
@@ -75,7 +75,7 @@ func TestSessionManager_ClosesSessionAfterIdleTimeout(t *testing.T) {
 	sm, str := newTestSessionManager(t, 100*time.Millisecond)
 
 	sm.ReportPoll([]float64{100, 50, 500})
-	sm.ReportPoll([]float64{110, 50, 500}) // change → session starts
+	sm.ReportPoll([]float64{110, 50, 500}) // change -> session starts
 
 	// Wait for idle timeout to elapse
 	time.Sleep(150 * time.Millisecond)
@@ -100,9 +100,9 @@ func TestSessionManager_NewSessionAfterIdleGap(t *testing.T) {
 	sm.ReportPoll([]float64{110, 50, 500}) // session 1 starts
 
 	time.Sleep(150 * time.Millisecond)
-	sm.ReportPoll([]float64{110, 50, 500}) // idle timeout → close session 1
+	sm.ReportPoll([]float64{110, 50, 500}) // idle timeout -> close session 1
 
-	// New usage change → session 2
+	// New usage change -> session 2
 	sm.ReportPoll([]float64{120, 50, 500})
 
 	sessions, _ := str.QuerySessionHistory("synthetic")
@@ -164,7 +164,7 @@ func TestSessionManager_SliceLengthChange_IsUsageChange(t *testing.T) {
 	sm, str := newTestSessionManager(t, 10*time.Second)
 
 	sm.ReportPoll([]float64{10, 20})
-	sm.ReportPoll([]float64{10, 20, 30}) // length changed → usage change
+	sm.ReportPoll([]float64{10, 20, 30}) // length changed -> usage change
 
 	sessions, _ := str.QuerySessionHistory("synthetic")
 	if len(sessions) != 1 {
@@ -222,7 +222,7 @@ func TestSessionManager_RecordsStartValues(t *testing.T) {
 
 	// First poll: baseline (100, 50, 500)
 	sm.ReportPoll([]float64{100, 50, 500})
-	// Second poll: values changed → session starts with start values = baseline
+	// Second poll: values changed -> session starts with start values = baseline
 	sm.ReportPoll([]float64{200, 60, 600})
 
 	sessions, _ := str.QuerySessionHistory("synthetic")
@@ -248,7 +248,7 @@ func TestSessionManager_InactivePolls_IncrementSnapshotInWindow(t *testing.T) {
 
 	sm.ReportPoll([]float64{100, 50, 500})
 	sm.ReportPoll([]float64{110, 50, 500}) // session starts
-	sm.ReportPoll([]float64{110, 50, 500}) // no change, within idle window → still increments
+	sm.ReportPoll([]float64{110, 50, 500}) // no change, within idle window -> still increments
 
 	sessions, _ := str.QuerySessionHistory("synthetic")
 	if len(sessions) != 1 {

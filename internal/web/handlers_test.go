@@ -98,10 +98,73 @@ func TestHandler_Dashboard_IncludesAPIIntegrationsTabWhenVisible(t *testing.T) {
 	}
 	body := rr.Body.String()
 	if !strings.Contains(body, `data-provider="api-integrations"`) {
-		t.Fatalf("expected API Integrations tab in dashboard, got %s", body)
+		t.Fatalf("expected Cost tab in dashboard, got %s", body)
+	}
+	if !strings.Contains(body, `Cost`) {
+		t.Fatalf("expected Cost tab label in dashboard, got %s", body)
 	}
 	if !strings.Contains(body, `id="api-integrations-dashboard"`) {
-		t.Fatalf("expected API integrations dashboard shell, got %s", body)
+		t.Fatalf("expected cost dashboard shell, got %s", body)
+	}
+}
+
+func TestHandler_Dashboard_UsesDefaultProviderCookie(t *testing.T) {
+	t.Parallel()
+	s, _ := store.New(":memory:")
+	defer s.Close()
+
+	cfg := createTestConfigWithSynthetic()
+	cfg.APIIntegrationsEnabled = true
+	h := NewHandler(s, nil, nil, nil, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: "onwatch-default-provider", Value: "api-integrations"})
+	rr := httptest.NewRecorder()
+	h.Dashboard(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `id="api-integrations-dashboard"`) {
+		t.Fatalf("expected cost dashboard shell from default provider cookie, got %s", body)
+	}
+	if strings.Contains(body, "provider=${savedProvider}") {
+		t.Fatalf("dashboard should not require client-side default-provider redirect")
+	}
+}
+
+func TestHandler_Dashboard_APIIntegrationsView_RendersLoadingCards(t *testing.T) {
+	t.Parallel()
+	s, _ := store.New(":memory:")
+	defer s.Close()
+
+	cfg := createTestConfigWithSynthetic()
+	cfg.APIIntegrationsEnabled = true
+	h := NewHandler(s, nil, nil, nil, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/?provider=api-integrations", nil)
+	rr := httptest.NewRecorder()
+	h.Dashboard(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `id="api-integrations-grid"`) {
+		t.Fatal("expected Cost page card grid")
+	}
+	if !strings.Contains(body, `api-integrations-card quota-card-loading`) {
+		t.Fatal("expected Cost page loading cards")
+	}
+	if !strings.Contains(body, `loading-spinner`) {
+		t.Fatal("expected Cost page loading spinner")
+	}
+	if !strings.Contains(body, `id="chart-mode-select"`) {
+		t.Fatal("expected Cost page graph mode selector")
+	}
+	if !strings.Contains(body, `id="usage-chart-empty"`) {
+		t.Fatal("expected Cost page chart empty state")
 	}
 }
 
@@ -1693,8 +1756,29 @@ func TestHandler_Dashboard_CodexView_RestoresProfileTabsAndTables(t *testing.T) 
 	if !strings.Contains(body, `id="quota-grid-codex"`) {
 		t.Error("expected single-account codex quota grid")
 	}
+	if !strings.Contains(body, `quota-card-loading`) {
+		t.Error("expected codex quota loading placeholders")
+	}
 	if strings.Contains(body, `id="codex-accounts-container-both"`) {
 		t.Error("did not expect all-view codex multi-account container in codex view")
+	}
+	if !strings.Contains(body, `id="platform-cost-section"`) {
+		t.Error("expected provider cost section scaffold in codex view")
+	}
+	if !strings.Contains(body, `id="platform-cost-chart-mode-select"`) {
+		t.Error("expected provider cost graph mode selector in codex view")
+	}
+	if !strings.Contains(body, `id="platform-cost-chart-empty"`) {
+		t.Error("expected provider cost chart empty state in codex view")
+	}
+	if !strings.Contains(body, `id="chart-mode-select"`) {
+		t.Error("expected usage graph mode selector in codex view")
+	}
+	if !strings.Contains(body, `id="usage-chart-empty"`) {
+		t.Error("expected usage chart empty state in codex view")
+	}
+	if strings.Contains(body, `id="platform-cost-section" data-provider="codex" hidden`) {
+		t.Error("expected provider cost section to reserve space instead of rendering hidden")
 	}
 	if !strings.Contains(body, `id="sessions-section"`) {
 		t.Error("expected Session History section for codex view")
@@ -1704,6 +1788,46 @@ func TestHandler_Dashboard_CodexView_RestoresProfileTabsAndTables(t *testing.T) 
 	}
 	if !strings.Contains(body, `id="overview-table"`) {
 		t.Error("expected Cycle Overview table for codex view")
+	}
+}
+
+func TestHandler_Dashboard_AnthropicView_RendersVisibleCostScaffold(t *testing.T) {
+	t.Parallel()
+	cfg := createTestConfigWithAnthropic()
+	h := NewHandler(nil, nil, nil, nil, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/?provider=anthropic", nil)
+	rr := httptest.NewRecorder()
+	h.Dashboard(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+
+	body := rr.Body.String()
+	if !strings.Contains(body, `id="platform-cost-section"`) {
+		t.Fatal("expected provider cost section scaffold in anthropic view")
+	}
+	if strings.Contains(body, `id="platform-cost-section" data-provider="anthropic" hidden`) {
+		t.Fatal("expected provider cost section to reserve space instead of rendering hidden")
+	}
+	if !strings.Contains(body, `Loading cost telemetry`) {
+		t.Fatal("expected cost section loading placeholder")
+	}
+	if !strings.Contains(body, `id="platform-cost-chart-mode-select"`) {
+		t.Fatal("expected provider cost graph mode selector")
+	}
+	if !strings.Contains(body, `id="platform-cost-chart-empty"`) {
+		t.Fatal("expected provider cost chart empty state")
+	}
+	if !strings.Contains(body, `id="chart-mode-select"`) {
+		t.Fatal("expected usage graph mode selector")
+	}
+	if !strings.Contains(body, `id="usage-chart-empty"`) {
+		t.Fatal("expected usage chart empty state")
+	}
+	if !strings.Contains(body, `quota-card-loading`) {
+		t.Fatal("expected anthropic quota loading placeholders")
 	}
 }
 
@@ -1994,7 +2118,7 @@ func TestHandler_Cycles_ZaiActiveAndCompleted(t *testing.T) {
 	}
 }
 
-// ── KPI Modal Chart Regression Tests ──
+// KPI Modal Chart Regression Tests
 // These tests guard against the range-selector misfire bug where
 // insights range pills (data-insights-range) were picked up instead
 // of chart range buttons (data-range), sending range=undefined to the API.
@@ -2097,8 +2221,7 @@ func TestHandler_History_EmptyDB_ReturnsEmptyArrays_Both(t *testing.T) {
 	}
 }
 
-// ── Anthropic Provider Tests ──
-
+// Anthropic Provider Tests
 func createTestConfigWithAnthropic() *config.Config {
 	return &config.Config{
 		AnthropicToken: "test_anthropic_token",
@@ -3175,11 +3298,7 @@ func TestHandler_Insights_AnthropicEmptyDB(t *testing.T) {
 		t.Errorf("expected 'Getting Started' insight, got %q", response.Insights[0].Title)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Login / Logout Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Login / Logout Tests
 func TestHandler_Login_GET_RendersForm(t *testing.T) {
 	t.Parallel()
 	cfg := createTestConfigWithSynthetic()
@@ -3365,11 +3484,7 @@ func TestHandler_SettingsPage_RendersHTML(t *testing.T) {
 		t.Error("expected SMTP protocol hint in settings page")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Password Change Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Password Change Tests
 func TestHandler_ChangePassword_Success(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -3525,11 +3640,7 @@ func TestHandler_ChangePassword_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected status 405, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Settings CRUD Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Settings CRUD Tests
 func TestHandler_GetSettings_ReturnsTimezoneAndHiddenInsights(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -3909,11 +4020,7 @@ func TestHandler_UpdateSettings_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected status 405, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── SMTP Test Handler Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// SMTP Test Handler Tests
 // mockNotifier implements the Notifier interface for testing.
 type mockNotifier struct {
 	sendTestErr  error
@@ -4006,11 +4113,7 @@ func TestHandler_SMTPTest_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected status 405, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── CycleOverview Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// CycleOverview Tests
 func TestHandler_CycleOverview_Synthetic(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -4449,11 +4552,7 @@ func TestHandler_CycleOverview_AntigravityReturnsSingleActiveCycleRowPerGroup(t 
 		t.Fatalf("expected at most 1 active cycle row for antigravity group, got %d", activeCount)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Logging History Handler Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Logging History Handler Tests
 func TestHandler_LoggingHistory_AntigravityReturnsSnapshots(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -4993,11 +5092,7 @@ func TestHandler_LoggingHistory_UnknownProviderReturnsError(t *testing.T) {
 		t.Fatalf("unexpected error message: %q", response["error"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Update Handler Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Update Handler Tests
 func TestHandler_CheckUpdate_NoUpdater(t *testing.T) {
 	t.Parallel()
 	cfg := createTestConfigWithSynthetic()
@@ -5055,11 +5150,7 @@ func TestHandler_ApplyUpdate_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected status 405, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Anthropic Handler Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Anthropic Handler Tests
 func TestHandler_Current_Anthropic_WithData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -5401,11 +5492,7 @@ func TestBuildAntigravityInsights_RangeFiltersOldCycles(t *testing.T) {
 		t.Fatal("expected at least some insights for 1d range")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Dashboard With Provider Param Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Dashboard With Provider Param Tests
 func TestHandler_Dashboard_WithProviderParam(t *testing.T) {
 	t.Parallel()
 	cfg := createTestConfigWithAll()
@@ -5461,11 +5548,7 @@ func TestHandler_Dashboard_NotFound_For_NonRootPath(t *testing.T) {
 		t.Errorf("expected status 404 for non-root path, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Utility Function Tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Utility Function Tests
 func TestHandler_formatDuration(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -5532,11 +5615,7 @@ func TestHandler_parseInsightsRange(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Security Tests: MaxBytesReader and Error Sanitization ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Security Tests: MaxBytesReader and Error Sanitization
 func TestHandler_MaxBytesReader_RejectsLargeBody(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -5608,11 +5687,7 @@ func TestHandler_ApplyUpdate_SanitizesErrors(t *testing.T) {
 		t.Errorf("expected generic error message, got %q", response["error"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Security Tests: Login Error Whitelist ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Security Tests: Login Error Whitelist
 func TestLogin_WhitelistsErrorCodes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -5687,11 +5762,7 @@ func TestLogin_RejectsUnknownErrorCode(t *testing.T) {
 		t.Error("error-message div should not be rendered for unknown error codes")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── New coverage tests: helper functions ──
-// ═══════════════════════════════════════════════════════════════════
-
+// New coverage tests: helper functions
 func createTestConfigWithCopilot() *config.Config {
 	return &config.Config{
 		CopilotToken: "ghp_test_copilot_token",
@@ -5944,11 +6015,7 @@ func TestParseCycleOverviewLimit(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Billing period helper tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Billing period helper tests
 func TestGroupBillingPeriods_Empty(t *testing.T) {
 	t.Parallel()
 	result := groupBillingPeriods(nil)
@@ -6066,11 +6133,7 @@ func TestCycleSumConsumptionSince(t *testing.T) {
 		t.Errorf("expected 100, got %.1f", result)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Anthropic billing period helper tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Anthropic billing period helper tests
 func TestGroupAnthropicBillingPeriods_Empty(t *testing.T) {
 	t.Parallel()
 	result := groupAnthropicBillingPeriods(nil)
@@ -6168,11 +6231,7 @@ func TestAnthropicBillingPeriodPeak(t *testing.T) {
 		t.Errorf("expected peak 80.0, got %.1f", result)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── anthropicCycleToMap tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// anthropicCycleToMap tests
 func TestAnthropicCycleToMap(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
@@ -6224,11 +6283,7 @@ func TestAnthropicCycleToMap_NilEnds(t *testing.T) {
 		t.Error("expected renewsAt to not be set when ResetsAt is nil")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildZaiTrackerSummaryResponse tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildZaiTrackerSummaryResponse tests
 func TestBuildZaiTrackerSummaryResponse_WithRenewsAt(t *testing.T) {
 	t.Parallel()
 	renewsAt := time.Now().UTC().Add(3 * time.Hour)
@@ -6284,11 +6339,7 @@ func TestBuildZaiTrackerSummaryResponse_WithoutRenewsAt(t *testing.T) {
 		t.Errorf("expected trackingSince nil, got %v", result["trackingSince"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Push notification handler tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Push notification handler tests
 type mockNotifierWithVAPID struct {
 	sendTestErr    error
 	sendPushErr    error
@@ -6596,11 +6647,7 @@ func TestHandler_PushTest_SendFailure(t *testing.T) {
 		t.Errorf("expected success false, got %v", response["success"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── "Both" handler tests (cyclesBoth, summaryBoth, insightsBoth) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// "Both" handler tests (cyclesBoth, summaryBoth, insightsBoth)
 func TestHandler_DiscordTest_Success(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, createTestConfigWithSynthetic())
@@ -6867,11 +6914,7 @@ func TestHandler_InsightsBoth_WithAllProviders(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Copilot handler tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Copilot handler tests
 func TestHandler_Current_Copilot_EmptyStore(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -7214,11 +7257,7 @@ func TestCopilotInsightSeverity(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Antigravity handler tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Antigravity handler tests
 func TestAntigravityUsageStatus(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -7477,11 +7516,7 @@ func TestTruncateName(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── UpdateSettings edge case tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// UpdateSettings edge case tests
 func TestHandler_UpdateSettings_SMTP_InvalidPort(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -7561,11 +7596,7 @@ func TestHandler_UpdateSettings_EmptyTimezone(t *testing.T) {
 		t.Errorf("expected status 200 for empty timezone (clear), got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Login with rate limiter tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Login with rate limiter tests
 func TestHandler_LoginPost_RateLimited(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -7631,11 +7662,7 @@ func TestHandler_LoginPost_FailedAttemptRecorded(t *testing.T) {
 		t.Errorf("expected redirect to invalid error, got %s", location)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Providers endpoint coverage tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Providers endpoint coverage tests
 func TestHandler_Providers_WithVisibility(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -7796,11 +7823,7 @@ func TestHandler_Providers_WithRequestedProvider(t *testing.T) {
 		t.Errorf("expected current provider zai, got %v", response["current"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── getHiddenInsightKeys tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// getHiddenInsightKeys tests
 func TestGetHiddenInsightKeys_NilStore(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, createTestConfigWithSynthetic())
@@ -7860,11 +7883,7 @@ func TestGetHiddenInsightKeys_InvalidJSON(t *testing.T) {
 		t.Errorf("expected empty map for invalid JSON, got %v", hidden)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── zaiToolCallsPercent tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// zaiToolCallsPercent tests
 func TestZaiToolCallsPercent_NoDetails(t *testing.T) {
 	t.Parallel()
 	snapshot := &api.ZaiSnapshot{TimeUsage: 100, TimeUsageDetails: ""}
@@ -7904,11 +7923,7 @@ func TestZaiToolCallsPercent_InvalidJSON(t *testing.T) {
 		t.Errorf("expected 0 for invalid JSON, got %.1f", result)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── codexQuotaInsightLabel tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// codexQuotaInsightLabel tests
 func TestCodexQuotaInsightLabel(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -7928,11 +7943,7 @@ func TestCodexQuotaInsightLabel(t *testing.T) {
 		})
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── History "both" coverage tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// History "both" coverage tests
 func TestHandler_HistoryBoth_WithAllProviders(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -7976,11 +7987,7 @@ func TestHandler_HistoryBoth_InvalidRange(t *testing.T) {
 		t.Errorf("expected status 400 for invalid range, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── CycleOverview Copilot tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// CycleOverview Copilot tests
 func TestHandler_CycleOverview_Copilot_EmptyStore(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -7997,11 +8004,7 @@ func TestHandler_CycleOverview_Copilot_EmptyStore(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Insights with data for Synthetic, Zai, Anthropic coverage ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Insights with data for Synthetic, Zai, Anthropic coverage
 func TestHandler_Insights_Synthetic_WithRichData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -8113,11 +8116,7 @@ func TestHandler_Insights_Anthropic_WithTrackerData(t *testing.T) {
 		t.Error("expected stats key in response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Copilot & Antigravity summary handler tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Copilot & Antigravity summary handler tests
 func TestHandler_Summary_Antigravity_EmptyStore(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -8142,11 +8141,7 @@ func TestHandler_Summary_Antigravity_EmptyStore(t *testing.T) {
 		t.Fatalf("expected empty response map for no snapshots, got %v", response)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── SMTP settings edge cases in UpdateSettings ──
-// ═══════════════════════════════════════════════════════════════════
-
+// SMTP settings edge cases in UpdateSettings
 func TestHandler_UpdateSettings_SMTP_ValidConfig(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -8223,11 +8218,7 @@ func TestHandler_UpdateSettings_Notifications_PushChannel(t *testing.T) {
 		t.Errorf("expected status 200, got %d. Body: %s", rr.Code, rr.Body.String())
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── computeAnthropicRate coverage (via insights with enough data) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// computeAnthropicRate coverage (via insights with enough data)
 func TestHandler_Insights_Anthropic_ComputeRate(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -8279,11 +8270,7 @@ func TestHandler_Insights_Anthropic_ComputeRate(t *testing.T) {
 		t.Error("expected non-empty insights for anthropic with data")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── History Antigravity & Copilot with data tests ──
-// ═══════════════════════════════════════════════════════════════════
-
+// History Antigravity & Copilot with data tests
 func TestHandler_History_Antigravity_EmptyStore(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -8378,11 +8365,7 @@ func TestHandler_History_Antigravity_InvalidRange(t *testing.T) {
 		t.Errorf("expected status 400, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Deep insights coverage tests with rich data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Deep insights coverage tests with rich data
 func TestHandler_BuildSyntheticInsights_WithCycles(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -8681,11 +8664,7 @@ func TestComputeAnthropicRate_FallbackToTracker(t *testing.T) {
 		t.Error("expected positive TimeToExhaust")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Copilot & Codex with tracker data (summaryMap coverage) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Copilot & Codex with tracker data (summaryMap coverage)
 func TestHandler_Summary_Copilot_WithTrackerData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -8766,11 +8745,7 @@ func TestBuildCopilotSummaryResponse_NoResetDate(t *testing.T) {
 		t.Error("expected nil trackingSince for zero time")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Cycles Copilot with data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Cycles Copilot with data
 func TestHandler_Cycles_Copilot_WithData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -8805,11 +8780,7 @@ func TestHandler_Cycles_Copilot_WithData(t *testing.T) {
 		t.Error("expected non-empty cycles response with data")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildAnthropicSummaryResponse coverage ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildAnthropicSummaryResponse coverage
 func TestBuildAnthropicSummaryResponse(t *testing.T) {
 	t.Parallel()
 	resetsAt := time.Now().UTC().Add(3 * time.Hour)
@@ -8857,11 +8828,7 @@ func TestBuildAnthropicSummaryResponse_NoResetsAt(t *testing.T) {
 		t.Error("expected nil trackingSince for zero time")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── CycleOverview with Antigravity (normalizeAntigravityGroupBy) ──
-// ═══════════════════════════════════════════════════════════════════
-
+// CycleOverview with Antigravity (normalizeAntigravityGroupBy)
 func TestHandler_CycleOverview_Antigravity_EmptyStore(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -8907,11 +8874,7 @@ func TestHandler_CycleOverview_Copilot_WithData(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── UpdateSettings SMTP with full flow coverage ──
-// ═══════════════════════════════════════════════════════════════════
-
+// UpdateSettings SMTP with full flow coverage
 func TestHandler_UpdateSettings_SMTP_InvalidSMTPJSON(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -8983,11 +8946,7 @@ func TestHandler_UpdateSettings_NullHiddenInsights(t *testing.T) {
 		t.Errorf("expected status 200 for null hidden_insights, got %d", rr.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── historyBoth with data coverage ──
-// ═══════════════════════════════════════════════════════════════════
-
+// historyBoth with data coverage
 func TestHandler_HistoryBoth_WithSyntheticData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -9023,11 +8982,7 @@ func TestHandler_HistoryBoth_WithSyntheticData(t *testing.T) {
 		t.Error("expected non-empty synthetic data in historyBoth")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildCopilotInsights with copilot data for deeper coverage ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildCopilotInsights with copilot data for deeper coverage
 func TestHandler_BuildCopilotInsights_WithQuotaData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -9058,11 +9013,7 @@ func TestHandler_BuildCopilotInsights_WithQuotaData(t *testing.T) {
 		t.Error("expected non-empty stats")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Codex build insights with data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Codex build insights with data
 func TestHandler_BuildCodexInsights_WithData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -9094,11 +9045,7 @@ func TestHandler_BuildCodexInsights_WithData(t *testing.T) {
 		t.Error("expected non-empty stats for codex with data")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Synthetic Insights with cycle data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Synthetic Insights with cycle data
 func TestHandler_BuildSyntheticInsights_WithCycleData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -9284,11 +9231,7 @@ func TestHandler_BuildSyntheticInsights_HiddenKeys_Coverage(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Anthropic Insights with cycle data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Anthropic Insights with cycle data
 func TestHandler_BuildAnthropicInsights_WithCycleData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -9380,11 +9323,7 @@ func TestHandler_BuildAnthropicInsights_HiddenForecasts(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── ChangePassword handler ──
-// ═══════════════════════════════════════════════════════════════════
-
+// ChangePassword handler
 func TestHandler_ChangePassword_Success_Coverage(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -9504,11 +9443,7 @@ func TestHandler_ChangePassword_MethodNotAllowed_Coverage(t *testing.T) {
 		t.Errorf("expected 405, got %d", w.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Cycles endpoints with data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Cycles endpoints with data
 func TestHandler_CyclesSynthetic_WithData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -9599,11 +9534,7 @@ func TestHandler_CyclesZai_InvalidType(t *testing.T) {
 		t.Errorf("expected 400, got %d", w.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Z.ai summary and current with store fallback ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Z.ai summary and current with store fallback
 func TestHandler_BuildZaiSummaryMap_StoreFallback(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -9681,11 +9612,7 @@ func TestHandler_BuildZaiCurrent_WithStoreData(t *testing.T) {
 		t.Error("expected usageDetails in tool calls response")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── UpdateSettings SMTP branch with encryption ──
-// ═══════════════════════════════════════════════════════════════════
-
+// UpdateSettings SMTP branch with encryption
 func TestHandler_UpdateSettings_SMTPInvalidPort(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -9946,11 +9873,7 @@ func TestHandler_UpdateSettings_StoreNotAvailable(t *testing.T) {
 		t.Errorf("expected 500 for no store, got %d", w.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── ValidateToken edge cases ──
-// ═══════════════════════════════════════════════════════════════════
-
+// ValidateToken edge cases
 func TestSessionStore_ValidateToken_Expired(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -10046,11 +9969,7 @@ func TestSessionStore_EvictExpiredTokens(t *testing.T) {
 		t.Error("expected expired_2 to be evicted")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── SessionAuthMiddleware basic auth path ──
-// ═══════════════════════════════════════════════════════════════════
-
+// SessionAuthMiddleware basic auth path
 func TestSessionAuthMiddleware_BasicAuth(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -10199,11 +10118,7 @@ func TestSessionAuthMiddleware_SessionCookie(t *testing.T) {
 		t.Errorf("expected 200 for valid session cookie, got %d", w.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── CheckUpdate and ApplyUpdate ──
-// ═══════════════════════════════════════════════════════════════════
-
+// CheckUpdate and ApplyUpdate
 func TestHandler_CheckUpdate_MethodNotAllowed_Coverage(t *testing.T) {
 	t.Parallel()
 	cfg := createTestConfigWithSynthetic()
@@ -10233,11 +10148,7 @@ func TestHandler_ApplyUpdate_MethodNotAllowed_Coverage(t *testing.T) {
 		t.Errorf("expected 405, got %d", w.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── CycleOverview endpoints ──
-// ═══════════════════════════════════════════════════════════════════
-
+// CycleOverview endpoints
 func TestHandler_CycleOverview_Copilot(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -10310,11 +10221,7 @@ func TestHandler_CycleOverview_WithLargeLimit(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Logging history edge cases ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Logging history edge cases
 func TestHandler_LoggingHistory_Copilot(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -10368,11 +10275,7 @@ func TestHandler_LoggingHistory_Antigravity(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── LoginRateLimiter eviction and edge cases ──
-// ═══════════════════════════════════════════════════════════════════
-
+// LoginRateLimiter eviction and edge cases
 func TestLoginRateLimiter_EvictStaleEntries_AllNonBlocked(t *testing.T) {
 	t.Parallel()
 	rl := NewLoginRateLimiter(100)
@@ -10408,11 +10311,7 @@ func TestLoginRateLimiter_Clear(t *testing.T) {
 		t.Error("expected IP to not be blocked after clear")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── computeAnthropicRate with derived values ──
-// ═══════════════════════════════════════════════════════════════════
-
+// computeAnthropicRate with derived values
 func TestComputeAnthropicRate_ExhaustsBeforeReset(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -10458,11 +10357,7 @@ func TestComputeAnthropicRate_ExhaustsBeforeReset(t *testing.T) {
 		t.Error("expected positive TimeToReset")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── percentUsed helper ──
-// ═══════════════════════════════════════════════════════════════════
-
+// percentUsed helper
 func TestPercentUsed(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -10483,11 +10378,7 @@ func TestPercentUsed(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildZaiToolCallsResponse with critical/warning status ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildZaiToolCallsResponse with critical/warning status
 func TestBuildZaiToolCallsResponse_CriticalStatus(t *testing.T) {
 	t.Parallel()
 	snapshot := &api.ZaiSnapshot{
@@ -10550,11 +10441,7 @@ func TestBuildZaiToolCallsResponse_EmptyDetails(t *testing.T) {
 		t.Errorf("expected 0 usage for empty details, got %v", result["usage"])
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── History endpoints with data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// History endpoints with data
 func TestHandler_HistoryZai_WithData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -10623,11 +10510,7 @@ func TestHandler_HistoryAnthropic_WithData(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Sessions endpoint with data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Sessions endpoint with data
 func TestHandler_Sessions_WithData(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -10663,11 +10546,7 @@ func TestHandler_Sessions_Both(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── codexPlanLabel helper ──
-// ═══════════════════════════════════════════════════════════════════
-
+// codexPlanLabel helper
 func TestCodexPlanLabel(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -10686,11 +10565,7 @@ func TestCodexPlanLabel(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── buildInsight helper with all severity levels ──
-// ═══════════════════════════════════════════════════════════════════
-
+// buildInsight helper with all severity levels
 func TestBuildInsight_AllSeverities(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -10715,11 +10590,7 @@ func TestBuildInsight_AllSeverities(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── getProviderFromRequest edge cases ──
-// ═══════════════════════════════════════════════════════════════════
-
+// getProviderFromRequest edge cases
 func TestGetProviderFromRequest_DefaultWithMultipleProviders(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -10738,11 +10609,7 @@ func TestGetProviderFromRequest_DefaultWithMultipleProviders(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── formatDuration helper ──
-// ═══════════════════════════════════════════════════════════════════
-
+// formatDuration helper
 func TestFormatDuration(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -10763,11 +10630,7 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── compactNum helper ──
-// ═══════════════════════════════════════════════════════════════════
-
+// compactNum helper
 func TestCompactNum_Coverage(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -10787,11 +10650,7 @@ func TestCompactNum_Coverage(t *testing.T) {
 		}
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── truncateName helper ──
-// ═══════════════════════════════════════════════════════════════════
-
+// truncateName helper
 func TestTruncateName_Coverage(t *testing.T) {
 	t.Parallel()
 	short := "short"
@@ -10805,11 +10664,7 @@ func TestTruncateName_Coverage(t *testing.T) {
 		t.Errorf("expected truncated name <= 33 chars, got %d", len(result))
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Copilot insights with tracker data ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Copilot insights with tracker data
 func TestHandler_BuildCopilotInsights_WithTracker(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -10840,11 +10695,7 @@ func TestHandler_BuildCopilotInsights_WithTracker(t *testing.T) {
 		t.Error("expected non-empty stats for copilot with data")
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Anthropic billing period helpers ──
-// ═══════════════════════════════════════════════════════════════════
-
+// Anthropic billing period helpers
 func TestGroupAnthropicBillingPeriods(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
@@ -11092,106 +10943,14 @@ func TestGetProviderFromRequest_ErrorsAndNormalization(t *testing.T) {
 	})
 }
 
-// ── Anthropic Peak/Off-Peak Hours Tests ──
-
-func TestActiveAnthropicPromo_OngoingAfterStart(t *testing.T) {
-	t.Parallel()
-	// Any date after the 2026-03-28 start should return the ongoing entry.
-	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
-	promo := activeAnthropicPromo(now)
-	if promo == nil {
-		t.Fatal("expected ongoing peak-hours entry, got nil")
-	}
-	if promo.ID != "peak-hours-2026" {
-		t.Fatalf("expected peak-hours-2026, got %s", promo.ID)
-	}
-	if promo.EndsAt != "" {
-		t.Fatalf("expected ongoing entry (empty EndsAt), got %q", promo.EndsAt)
-	}
-	if promo.PeakStartHourET != 8 || promo.PeakEndHourET != 14 {
-		t.Fatalf("unexpected peak hours: %d-%d", promo.PeakStartHourET, promo.PeakEndHourET)
-	}
-}
-
-func TestActiveAnthropicPromo_BeforeStart(t *testing.T) {
-	t.Parallel()
-	// March 1, 2026 - before ongoing entry starts (2026-03-28).
-	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	promo := activeAnthropicPromo(now)
-	if promo != nil {
-		t.Fatalf("expected nil before start, got %+v", promo)
-	}
-}
-
-func TestIsAnthropicPeakHours_WeekdayInsideWindow(t *testing.T) {
-	t.Parallel()
-	// Wed 2026-04-15, 10am ET = 14:00 UTC. Inside 8am-2pm ET window.
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Skipf("tz db unavailable: %v", err)
-	}
-	now := time.Date(2026, 4, 15, 10, 0, 0, 0, loc)
-	promo := activeAnthropicPromo(now)
-	if promo == nil {
-		t.Fatal("expected active promo entry")
-	}
-	if !isAnthropicPeakHours(promo, now) {
-		t.Fatal("expected peak hours on Wed 10am ET")
-	}
-}
-
-func TestIsAnthropicPeakHours_WeekdayOutsideWindow(t *testing.T) {
-	t.Parallel()
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Skipf("tz db unavailable: %v", err)
-	}
-	// Wed 2026-04-15 3pm ET - past the 2pm cutoff.
-	now := time.Date(2026, 4, 15, 15, 0, 0, 0, loc)
-	promo := activeAnthropicPromo(now)
-	if promo == nil {
-		t.Fatal("expected active promo entry")
-	}
-	if isAnthropicPeakHours(promo, now) {
-		t.Fatal("expected off-peak at Wed 3pm ET")
-	}
-}
-
-func TestIsAnthropicPeakHours_Weekend(t *testing.T) {
-	t.Parallel()
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Skipf("tz db unavailable: %v", err)
-	}
-	// Saturday 2026-04-18 10am ET - weekday-only promo → off-peak.
-	now := time.Date(2026, 4, 18, 10, 0, 0, 0, loc)
-	promo := activeAnthropicPromo(now)
-	if promo == nil {
-		t.Fatal("expected active promo entry")
-	}
-	if isAnthropicPeakHours(promo, now) {
-		t.Fatal("expected off-peak on Saturday (weekday-only promo)")
-	}
-}
-
-func TestIsAnthropicPeakHours_NilSafe(t *testing.T) {
-	t.Parallel()
-	if isAnthropicPeakHours(nil, time.Now()) {
-		t.Fatal("expected false for nil promo")
-	}
-}
-
-func TestBuildAnthropicCurrent_IncludesPromo(t *testing.T) {
+func TestBuildAnthropicCurrent_ExcludesPeakHoursPromo(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, createTestConfigWithSynthetic())
 	resp := h.buildAnthropicCurrent()
-	// Verify response structure is valid even without store.
 	if _, ok := resp["quotas"]; !ok {
 		t.Fatal("expected quotas key in response")
 	}
-	// The ongoing entry should always be attached (peak gating happens at the UI/menubar layer).
-	promo, ok := resp["promo"]
-	if !ok || promo == nil {
-		t.Fatal("expected promo key in response")
+	if promo, ok := resp["promo"]; ok {
+		t.Fatalf("expected no stale peak-hours promo, got %+v", promo)
 	}
 }

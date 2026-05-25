@@ -134,6 +134,57 @@ func TestHandler_APIIntegrationsCurrent_GroupedTotals(t *testing.T) {
 	}
 }
 
+func TestHandler_APIIntegrationsCurrent_IncludesEffortBreakdown(t *testing.T) {
+	t.Parallel()
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	defer s.Close()
+
+	insertAPIIntegrationEventForTest(t, s, `{"ts":"2026-04-03T12:00:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":10,"completion_tokens":5,"metadata":{"reasoning_effort":"high","mode":"default","fast_mode":true}}`, "/tmp/codex.jsonl")
+	insertAPIIntegrationEventForTest(t, s, `{"ts":"2026-04-03T12:01:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":4,"completion_tokens":2,"metadata":{"reasoning_effort":"medium","mode":"default","fast_mode":false}}`, "/tmp/codex.jsonl")
+
+	h := NewHandler(s, nil, nil, nil, &config.Config{APIIntegrationsEnabled: true, APIIntegrationsDir: "/tmp/api-integrations"})
+	req := httptest.NewRequest(http.MethodGet, "/api/api-integrations/current", nil)
+	rr := httptest.NewRecorder()
+
+	h.APIIntegrationsCurrent(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200", rr.Code)
+	}
+	var response map[string]struct {
+		Providers []struct {
+			Accounts []struct {
+				Models []struct {
+					Model   string `json:"model"`
+					Efforts []struct {
+						ReasoningEffort string `json:"reasoningEffort"`
+						Mode            string `json:"mode"`
+						SpeedMode       string `json:"speedMode"`
+						RequestCount    int    `json:"requestCount"`
+						TotalTokens     int    `json:"totalTokens"`
+					} `json:"efforts"`
+				} `json:"models"`
+			} `json:"accounts"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	model := response["Codex CLI"].Providers[0].Accounts[0].Models[0]
+	if model.Model != "gpt-5.5" || len(model.Efforts) != 2 {
+		t.Fatalf("model effort breakdown=%+v", model)
+	}
+	if model.Efforts[0].ReasoningEffort != "high" || model.Efforts[0].SpeedMode != "fast" {
+		t.Fatalf("first effort=%+v", model.Efforts[0])
+	}
+	if model.Efforts[1].ReasoningEffort != "medium" || model.Efforts[1].SpeedMode != "standard" {
+		t.Fatalf("second effort=%+v", model.Efforts[1])
+	}
+}
+
 func TestHandler_APIIntegrationsHistory_RangeAndDownsample(t *testing.T) {
 	t.Parallel()
 	s, err := store.New(":memory:")
@@ -179,6 +230,71 @@ func TestHandler_APIIntegrationsHistory_RangeAndDownsample(t *testing.T) {
 	}
 	if buckets[0].RequestCount < 1 || buckets[0].TotalTokens < 2 {
 		t.Fatalf("unexpected first bucket: %+v", buckets[0])
+	}
+}
+
+func TestHandler_APIIntegrationsSessions_IncludesUnsampledTotals(t *testing.T) {
+	t.Parallel()
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	defer s.Close()
+
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Minute)
+	for i := 0; i < 3; i++ {
+		line := `{"ts":"` + base.Add(time.Duration(i)*time.Minute).Format(time.RFC3339) + `","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":10,"completion_tokens":5,"cost_usd":0.25,"metadata":{"session_id":"chat-a"}}`
+		insertAPIIntegrationEventForTest(t, s, line, "/tmp/api-integrations/codex-a.jsonl")
+	}
+	insertAPIIntegrationEventForTest(t, s, `{"ts":"`+base.Add(10*time.Minute).Format(time.RFC3339)+`","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":20,"completion_tokens":10,"cost_usd":0.5,"metadata":{"session_id":"chat-b"}}`, "/tmp/api-integrations/codex-b.jsonl")
+	insertAPIIntegrationEventForTest(t, s, `{"ts":"`+base.Add(10*time.Minute).Format(time.RFC3339)+`","integration":"Claude Code","provider":"anthropic","model":"claude-sonnet-4-6","prompt_tokens":100,"completion_tokens":50,"cost_usd":1.5}`, "/tmp/api-integrations/claude.jsonl")
+
+	h := NewHandler(s, nil, nil, nil, &config.Config{APIIntegrationsEnabled: true, APIIntegrationsDir: "/tmp/api-integrations"})
+	req := httptest.NewRequest(http.MethodGet, "/api/api-integrations/sessions?range=24h&integration=Codex%20CLI", nil)
+	rr := httptest.NewRecorder()
+
+	h.APIIntegrationsSessions(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200", rr.Code)
+	}
+	var response struct {
+		Totals map[string]struct {
+			RequestCount int     `json:"requestCount"`
+			TotalTokens  int     `json:"totalTokens"`
+			TotalCostUSD float64 `json:"totalCostUsd"`
+		} `json:"_totals"`
+		Models map[string][]struct {
+			Model        string  `json:"model"`
+			RequestCount int     `json:"requestCount"`
+			TotalTokens  int     `json:"totalTokens"`
+			TotalCostUSD float64 `json:"totalCostUsd"`
+		} `json:"_models"`
+		Codex []struct {
+			SessionID             string  `json:"sessionId"`
+			RequestCount          int     `json:"requestCount"`
+			TotalTokens           int     `json:"totalTokens"`
+			CumulativeCostUSD     float64 `json:"cumulativeCostUsd"`
+			CumulativeTotalTokens int     `json:"cumulativeTotalTokens"`
+		} `json:"Codex CLI"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	total := response.Totals["Codex CLI"]
+	if total.RequestCount != 4 || total.TotalTokens != 75 || total.TotalCostUSD != 1.25 {
+		t.Fatalf("totals=%+v", total)
+	}
+	if len(response.Codex) != 2 {
+		t.Fatalf("codex sessions len=%d want 2: %+v", len(response.Codex), response.Codex)
+	}
+	last := response.Codex[len(response.Codex)-1]
+	if last.CumulativeTotalTokens != total.TotalTokens || last.CumulativeCostUSD != total.TotalCostUSD {
+		t.Fatalf("last cumulative=%+v totals=%+v", last, total)
+	}
+	models := response.Models["Codex CLI"]
+	if len(models) != 1 || models[0].Model != "gpt-5.5" || models[0].RequestCount != total.RequestCount || models[0].TotalTokens != total.TotalTokens {
+		t.Fatalf("models=%+v totals=%+v", models, total)
 	}
 }
 

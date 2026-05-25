@@ -507,6 +507,105 @@ button, input, select { font-family: inherit; }
   margin-bottom: 28px;
 }
 
+.quota-card-loading {
+  pointer-events: none;
+}
+
+.loading-line,
+.loading-pill {
+  display: inline-block;
+  overflow: hidden;
+  position: relative;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-card-alt) 78%, #ffffff 8%);
+}
+
+.loading-line::after,
+.loading-pill::after,
+.loading-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+  animation: loading-sheen 1500ms ease-in-out infinite;
+}
+
+.loading-line.title {
+  width: 140px;
+  height: 16px;
+}
+
+.loading-line.percent {
+  width: 86px;
+  height: 40px;
+}
+
+.loading-line.label {
+  width: 76px;
+  height: 14px;
+  margin-top: 7px;
+}
+
+.loading-line.reset {
+  width: 120px;
+  height: 13px;
+}
+
+.loading-pill {
+  width: 54px;
+  height: 28px;
+  border-radius: var(--radius-full);
+}
+
+.loading-spinner {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: 2px solid color-mix(in srgb, var(--text-muted) 26%, transparent);
+  border-top-color: var(--accent-teal);
+  border-radius: 50%;
+  animation: loading-spin 850ms linear infinite;
+}
+
+.loading-spinner.inline {
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border-width: 2px;
+}
+
+.loading-spinner.tiny {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+}
+
+.loading-pill.status {
+  width: 92px;
+  height: 32px;
+}
+
+.loading-fill {
+  position: relative;
+  width: 38%;
+  opacity: 0.55;
+}
+
+@keyframes loading-sheen {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 #quota-grid-gemini {
   grid-template-columns: repeat(3, 1fr);
 }
@@ -877,6 +976,15 @@ body.all-density-comfortable .provider-kpi-card {
   flex-wrap: wrap;
 }
 
+.graph-mode-toggle {
+  flex-shrink: 0;
+}
+
+.graph-mode-btn {
+  min-width: 96px;
+  white-space: nowrap;
+}
+
 .api-integrations-insights-panels {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1024,6 +1132,229 @@ body.all-density-comfortable .provider-kpi-card {
 
 .api-integrations-summary-card {
   cursor: pointer;
+}
+
+.platform-cost-section {
+  display: block;
+}
+
+.platform-cost-section[hidden] {
+  display: none;
+}
+
+.platform-cost-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.platform-cost-metric {
+  display: flex;
+  min-width: 0;
+  min-height: 78px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card-alt);
+}
+
+.platform-cost-metric.primary {
+  border-color: color-mix(in srgb, var(--accent-teal) 42%, var(--border-light));
+  background: color-mix(in srgb, var(--accent-teal) 12%, var(--surface-card-alt));
+}
+
+.platform-cost-label,
+.platform-cost-chart-subtitle {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.platform-cost-metric strong {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.platform-cost-metric.primary strong {
+  font-size: 24px;
+}
+
+.platform-cost-chart-card {
+  min-width: 0;
+  padding: 18px 20px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card-alt);
+  margin-bottom: 16px;
+}
+
+.platform-cost-chart-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+  font-weight: 800;
+}
+
+.platform-cost-chart-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: -3px;
+}
+
+.platform-cost-range-selector {
+  padding: 3px;
+}
+
+.platform-cost-range-btn {
+  min-height: 32px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.platform-cost-range-btn:hover {
+  color: var(--text-primary);
+}
+
+.platform-cost-range-btn.active {
+  background: var(--surface-card);
+  color: var(--accent-teal);
+  box-shadow: var(--shadow-xs);
+}
+
+.platform-cost-chart-subtitle {
+  text-align: right;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.platform-cost-chart-wrap {
+  position: relative;
+  height: 280px;
+}
+
+.chart-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--surface-card-alt) 86%, transparent);
+  opacity: 1;
+  transition: opacity 160ms ease;
+}
+
+.chart-loading-overlay[hidden] {
+  display: none;
+}
+
+.chart-empty-state {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: 32px;
+  color: var(--text-secondary);
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.3;
+  text-align: center;
+  background: var(--surface-card-alt);
+  pointer-events: none;
+}
+
+.chart-empty-state[hidden] {
+  display: none;
+}
+
+.platform-cost-chart-wrap canvas {
+  width: 100% !important;
+  height: 280px !important;
+}
+
+.platform-cost-chart-wrap canvas.is-loading {
+  opacity: 0.22;
+}
+
+.platform-cost-range-btn[disabled] {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.platform-cost-breakdown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0 10px;
+}
+
+.platform-cost-breakdown-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.platform-cost-breakdown-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card-alt);
+}
+
+.platform-cost-breakdown-tab {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.platform-cost-breakdown-tab.active {
+  background: color-mix(in srgb, var(--accent-teal) 16%, var(--surface-card));
+  color: var(--text-primary);
+}
+
+.platform-cost-models {
+  margin-top: 8px;
 }
 
 /* Both View - Multi-Column Layout */
@@ -2382,6 +2713,7 @@ body.all-density-comfortable .provider-kpi-card {
   .provider-card-body { padding: 12px; }
   .provider-kpis { grid-template-columns: 1fr; }
   .api-integrations-card-stats, .api-integrations-summary-grid, .api-integrations-health-grid { grid-template-columns: 1fr; }
+  .platform-cost-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .provider-chart canvas { height: 170px !important; max-height: 170px; }
   .quota-card { padding: 18px; }
   .range-selector { width: 100%; }
@@ -2425,6 +2757,11 @@ body.all-density-comfortable .provider-kpi-card {
     border-radius: var(--radius-md);
   }
   .insights-stats { grid-template-columns: 1fr; }
+  .platform-cost-summary { grid-template-columns: 1fr; }
+  .platform-cost-metric.primary strong { font-size: 28px; }
+  .platform-cost-breakdown-header { align-items: stretch; flex-direction: column; }
+  .platform-cost-breakdown-tabs { width: 100%; }
+  .platform-cost-breakdown-tab { flex: 1; }
   .chart-container { height: 220px; }
   .data-table { font-size: 12px; }
   .data-table th, .data-table td { padding: 8px 6px; }
@@ -3694,35 +4031,6 @@ select.settings-input {
 .notification-dismiss svg {
   width: 14px;
   height: 14px;
-}
-
-/* ═══════════════════════════════════════════
-   19. ANTHROPIC PROMO TAG (inline in quota cards)
-   ═══════════════════════════════════════════ */
-
-.promo-tag-inline {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: var(--radius-full, 999px);
-  font-size: 10px;
-  font-weight: 600;
-  cursor: pointer;
-  text-decoration: none;
-  transition: var(--transition-base);
-}
-
-.promo-tag-inline:hover {
-  filter: brightness(0.9);
-}
-
-.promo-tag-inline.promo-offpeak {
-  background: var(--accent-teal-muted);
-  color: var(--accent-teal-text);
-}
-
-.promo-tag-inline.promo-peak {
-  background: var(--accent-peach-muted);
-  color: var(--accent-peach-text);
 }
 
 /* ═══════════════════════════════════════════

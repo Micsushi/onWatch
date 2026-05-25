@@ -10,7 +10,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Tracker.Process – reset via time-based and api-based paths with onReset
+// Tracker.Process - reset via time-based and api-based paths with onReset
 // ---------------------------------------------------------------------------
 
 // TestTracker_Process_TimeBasedReset_WithHasLastValues exercises the
@@ -28,7 +28,7 @@ func TestTracker_Process_TimeBasedReset_WithHasLastValues(t *testing.T) {
 	baseTime := time.Now()
 	renewsAt := baseTime.Add(1 * time.Hour)
 
-	// Snapshot 1 – creates cycles
+	// Snapshot 1 - creates cycles
 	snap1 := &api.Snapshot{
 		CapturedAt: baseTime,
 		Sub:        api.QuotaInfo{Limit: 1000, Requests: 200, RenewsAt: renewsAt},
@@ -39,7 +39,7 @@ func TestTracker_Process_TimeBasedReset_WithHasLastValues(t *testing.T) {
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Snapshot 2 – same cycle, usage increases (hasLastValues becomes true)
+	// Snapshot 2 - same cycle, usage increases (hasLastValues becomes true)
 	snap2 := &api.Snapshot{
 		CapturedAt: baseTime.Add(30 * time.Minute),
 		Sub:        api.QuotaInfo{Limit: 1000, Requests: 350, RenewsAt: renewsAt},
@@ -50,8 +50,8 @@ func TestTracker_Process_TimeBasedReset_WithHasLastValues(t *testing.T) {
 		t.Fatalf("Process snap2: %v", err)
 	}
 
-	// Snapshot 3 – capturedAt is past renewsAt+2min, triggering time-based reset.
-	// Sub delta from snap2 to snap3 is positive → exercises delta accumulation
+	// Snapshot 3 - capturedAt is past renewsAt+2min, triggering time-based reset.
+	// Sub delta from snap2 to snap3 is positive -> exercises delta accumulation
 	// in the reset path.
 	snap3 := &api.Snapshot{
 		CapturedAt: baseTime.Add(2*time.Hour + 5*time.Minute),
@@ -109,7 +109,7 @@ func TestTracker_Process_APIBasedReset_WithHasLastValues_PositiveDelta(t *testin
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Snapshot 2 – increases requests so hasLastValues is true and delta > 0
+	// Snapshot 2 - increases requests so hasLastValues is true and delta > 0
 	if err := tr.Process(&api.Snapshot{
 		CapturedAt: baseTime.Add(2 * time.Minute),
 		Sub:        api.QuotaInfo{Limit: 1000, Requests: 200, RenewsAt: renewsAt},
@@ -119,7 +119,7 @@ func TestTracker_Process_APIBasedReset_WithHasLastValues_PositiveDelta(t *testin
 		t.Fatalf("Process snap2: %v", err)
 	}
 
-	// Snapshot 3 – RenewsAt shifts by a full hour (api-based reset), positive delta
+	// Snapshot 3 - RenewsAt shifts by a full hour (api-based reset), positive delta
 	newRenewsAt := renewsAt.Add(5 * time.Hour) // different hour bucket
 	if err := tr.Process(&api.Snapshot{
 		CapturedAt: baseTime.Add(3 * time.Minute),
@@ -144,7 +144,7 @@ func TestTracker_Process_APIBasedReset_WithHasLastValues_PositiveDelta(t *testin
 }
 
 // TestTracker_Process_Error exercises the error-return path in Process when
-// no store is available (simulate by passing a nil store to trigger panic –
+// no store is available (simulate by passing a nil store to trigger panic -
 // instead, use a closed store).
 func TestTracker_Process_ClosedStore_ReturnsError(t *testing.T) {
 	t.Parallel()
@@ -152,7 +152,7 @@ func TestTracker_Process_ClosedStore_ReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.New: %v", err)
 	}
-	s.Close() // close immediately – subsequent queries will error
+	s.Close() // close immediately - subsequent queries will error
 
 	tr := New(s, nil)
 	snap := &api.Snapshot{
@@ -168,7 +168,7 @@ func TestTracker_Process_ClosedStore_ReturnsError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AnthropicTracker.processQuota – time-based reset, nil ResetsAt paths
+// AnthropicTracker.processQuota - time-based reset, nil ResetsAt paths
 // ---------------------------------------------------------------------------
 
 // TestAnthropicTracker_ProcessQuota_TimeBasedReset exercises the time-based
@@ -191,13 +191,13 @@ func TestAnthropicTracker_ProcessQuota_TimeBasedReset(t *testing.T) {
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Second snapshot – same cycle, raise utilization (hasLast becomes true)
+	// Second snapshot - same cycle, raise utilization (hasLast becomes true)
 	snap2 := makeAnthropicSnapshot(baseTime.Add(30*time.Minute), "five_hour", 45.0, &resetsAt1)
 	if err := tr.Process(snap2); err != nil {
 		t.Fatalf("Process snap2: %v", err)
 	}
 
-	// Third snapshot – capturedAt is past resetsAt1+2min → time-based reset
+	// Third snapshot - capturedAt is past resetsAt1+2min -> time-based reset
 	// ResetsAt in API response is new (same as old so no api-based, but time-based fires)
 	capturedAt3 := resetsAt1.Add(3 * time.Minute)
 	snap3 := makeAnthropicSnapshot(capturedAt3, "five_hour", 5.0, &resetsAt1)
@@ -277,7 +277,7 @@ func TestAnthropicTracker_ProcessQuota_NilResetsAt_ThenResetsAtAppears(t *testin
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Second snapshot with ResetsAt now set → "new ResetsAt appeared" branch
+	// Second snapshot with ResetsAt now set -> "new ResetsAt appeared" branch
 	newResetsAt := baseTime.Add(5 * time.Hour)
 	snap2 := makeAnthropicSnapshot(baseTime.Add(time.Minute), "five_hour", 20.0, &newResetsAt)
 	if err := tr.Process(snap2); err != nil {
@@ -335,7 +335,7 @@ func TestAnthropicTracker_ProcessQuota_NewQuotaSeenAfterOtherQuotaProcessed(t *t
 		t.Fatal("expected active cycle for seven_day")
 	}
 
-	// Now process a third snapshot for seven_day where util > peak → exercises
+	// Now process a third snapshot for seven_day where util > peak -> exercises
 	// the "new quota after restart" update-peak-if-higher branch
 	snap3 := makeMultiQuotaSnapshot(baseTime.Add(2*time.Minute), []api.AnthropicQuota{
 		{Name: "five_hour", Utilization: 25.0, ResetsAt: &resetsAt},
@@ -355,7 +355,7 @@ func TestAnthropicTracker_ProcessQuota_NewQuotaSeenAfterOtherQuotaProcessed(t *t
 }
 
 // ---------------------------------------------------------------------------
-// NewCodexTracker / NewCopilotTracker – nil logger branch
+// NewCodexTracker / NewCopilotTracker - nil logger branch
 // ---------------------------------------------------------------------------
 
 // TestNewCodexTracker_NilLogger verifies nil logger is handled gracefully.
@@ -367,7 +367,7 @@ func TestNewCodexTracker_NilLogger(t *testing.T) {
 	}
 	defer s.Close()
 
-	tr := NewCodexTracker(s, nil) // nil logger → should use slog.Default()
+	tr := NewCodexTracker(s, nil) // nil logger -> should use slog.Default()
 	if tr == nil {
 		t.Fatal("expected non-nil CodexTracker")
 	}
@@ -385,7 +385,7 @@ func TestNewCopilotTracker_NilLogger(t *testing.T) {
 	}
 	defer s.Close()
 
-	tr := NewCopilotTracker(s, nil) // nil logger → should use slog.Default()
+	tr := NewCopilotTracker(s, nil) // nil logger -> should use slog.Default()
 	if tr == nil {
 		t.Fatal("expected non-nil CopilotTracker")
 	}
@@ -427,7 +427,7 @@ func TestNewCopilotTracker_WithLogger(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CodexTracker.processQuota – reset via utilization drop (diff>threshold)
+// CodexTracker.processQuota - reset via utilization drop (diff>threshold)
 // ---------------------------------------------------------------------------
 
 // TestCodexTracker_processQuota_ResetViaUtilizationDrop exercises the branch:
@@ -455,8 +455,8 @@ func TestCodexTracker_processQuota_ResetViaUtilizationDrop(t *testing.T) {
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Second snapshot – reset timestamp shifts by >60min AND util drops materially
-	// (80 -> 5, so 5+2 < 80 → reset detected)
+	// Second snapshot - reset timestamp shifts by >60min AND util drops materially
+	// (80 -> 5, so 5+2 < 80 -> reset detected)
 	reset2 := now.Add(12 * time.Hour) // shift > 60 min
 	snap2 := &api.CodexSnapshot{
 		CapturedAt: now.Add(time.Minute),
@@ -502,8 +502,8 @@ func TestCodexTracker_processQuota_LargeShift_NoUtilDrop_NoReset(t *testing.T) {
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Second snapshot – reset timestamp shifts by >60min but utilization stays HIGH
-	// (40 -> 42, so 42+2=44 >= 40 → no reset detected, just cycle reset-at update)
+	// Second snapshot - reset timestamp shifts by >60min but utilization stays HIGH
+	// (40 -> 42, so 42+2=44 >= 40 -> no reset detected, just cycle reset-at update)
 	reset2 := now.Add(12 * time.Hour)
 	snap2 := &api.CodexSnapshot{
 		CapturedAt: now.Add(time.Minute),
@@ -525,7 +525,7 @@ func TestCodexTracker_processQuota_LargeShift_NoUtilDrop_NoReset(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CodexTracker.UsageSummary – active cycle with rate calculation
+// CodexTracker.UsageSummary - active cycle with rate calculation
 // ---------------------------------------------------------------------------
 
 // TestCodexTracker_UsageSummary_ActiveCycleWithRate exercises the rate &
@@ -597,7 +597,7 @@ func TestCodexTracker_UsageSummary_NoCycles(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CopilotTracker.processQuota – time-based reset (reset date passed + remaining up)
+// CopilotTracker.processQuota - time-based reset (reset date passed + remaining up)
 // ---------------------------------------------------------------------------
 
 // TestCopilotTracker_processQuota_TimeBasedReset exercises the time-based reset
@@ -625,7 +625,7 @@ func TestCopilotTracker_processQuota_TimeBasedReset(t *testing.T) {
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Second snapshot – capturedAt is after resetDate, remaining increased (reset)
+	// Second snapshot - capturedAt is after resetDate, remaining increased (reset)
 	snap2 := &api.CopilotSnapshot{
 		CapturedAt: now,
 		ResetDate:  &resetDate, // same reset date string so not detected by string compare
@@ -675,7 +675,7 @@ func TestCopilotTracker_Process_NilResetDate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ZaiTracker.processTokensQuota – time-based and api-based reset paths
+// ZaiTracker.processTokensQuota - time-based and api-based reset paths
 // ---------------------------------------------------------------------------
 
 // TestZaiTracker_processTokensQuota_TimeBasedReset exercises the time-based
@@ -698,13 +698,13 @@ func TestZaiTracker_processTokensQuota_TimeBasedReset(t *testing.T) {
 		t.Fatalf("Process s1: %v", err)
 	}
 
-	// Snapshot 2 – same cycle, increase to set hasLastValues
+	// Snapshot 2 - same cycle, increase to set hasLastValues
 	s2 := makeZaiSnapshot(baseTime.Add(30*time.Minute), 80000, 150, &nextReset)
 	if err := tr.Process(s2); err != nil {
 		t.Fatalf("Process s2: %v", err)
 	}
 
-	// Snapshot 3 – capturedAt is past nextReset+2min → time-based reset
+	// Snapshot 3 - capturedAt is past nextReset+2min -> time-based reset
 	capturedAt3 := nextReset.Add(3 * time.Minute)
 	s3 := makeZaiSnapshot(capturedAt3, 5000, 160, &nextReset)
 	if err := tr.Process(s3); err != nil {
@@ -739,7 +739,7 @@ func TestZaiTracker_processTokensQuota_APIBasedReset_NewResetAppeared(t *testing
 		t.Fatalf("Process s1: %v", err)
 	}
 
-	// Second snapshot with non-nil nextReset → api-based "appeared" reset
+	// Second snapshot with non-nil nextReset -> api-based "appeared" reset
 	newReset := baseTime.Add(24 * time.Hour)
 	s2 := makeZaiSnapshot(baseTime.Add(time.Minute), 1000, 110, &newReset)
 	if err := tr.Process(s2); err != nil {
@@ -773,7 +773,7 @@ func TestZaiTracker_Process_ClosedStore_ReturnsError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ZaiTracker.processTimeQuota – zero value and reset path
+// ZaiTracker.processTimeQuota - zero value and reset path
 // ---------------------------------------------------------------------------
 
 // TestZaiTracker_processTimeQuota_ZeroLastValue verifies that when lastTimeValue
@@ -790,13 +790,13 @@ func TestZaiTracker_processTimeQuota_ZeroLastValue(t *testing.T) {
 	baseTime := time.Now()
 	resetTime := baseTime.Add(24 * time.Hour)
 
-	// Snapshot 1 – timeValue = 0 (initial zero value)
+	// Snapshot 1 - timeValue = 0 (initial zero value)
 	s1 := makeZaiSnapshot(baseTime, 1000, 0, &resetTime)
 	if err := tr.Process(s1); err != nil {
 		t.Fatalf("Process s1: %v", err)
 	}
 
-	// Snapshot 2 – timeValue goes up from 0; since lastTimeValue=0 no reset
+	// Snapshot 2 - timeValue goes up from 0; since lastTimeValue=0 no reset
 	s2 := makeZaiSnapshot(baseTime.Add(time.Minute), 2000, 100, &resetTime)
 	if err := tr.Process(s2); err != nil {
 		t.Fatalf("Process s2: %v", err)
@@ -828,13 +828,13 @@ func TestZaiTracker_processTimeQuota_ResetCallback(t *testing.T) {
 	baseTime := time.Now()
 	resetTime := baseTime.Add(24 * time.Hour)
 
-	// Snapshot 1 – high time value
+	// Snapshot 1 - high time value
 	s1 := makeZaiSnapshot(baseTime, 50000, 900, &resetTime)
 	if err := tr.Process(s1); err != nil {
 		t.Fatalf("Process s1: %v", err)
 	}
 
-	// Snapshot 2 – time value drops >50% → reset detected
+	// Snapshot 2 - time value drops >50% -> reset detected
 	s2 := makeZaiSnapshot(baseTime.Add(time.Minute), 55000, 100, &resetTime)
 	if err := tr.Process(s2); err != nil {
 		t.Fatalf("Process s2: %v", err)
@@ -866,7 +866,7 @@ func TestZaiTracker_processTimeQuota_ExistingCycleAfterRestart_UpdatesPeak(t *te
 		t.Fatalf("UpdateZaiCycle: %v", err)
 	}
 
-	// New tracker – hasLastValues = false
+	// New tracker - hasLastValues = false
 	tr := NewZaiTracker(s, nil)
 	resetTime := base.Add(24 * time.Hour)
 	snap := makeZaiSnapshot(base.Add(10*time.Minute), 5000, 400, &resetTime)
@@ -891,7 +891,7 @@ func TestZaiTracker_processTimeQuota_ExistingCycleAfterRestart_UpdatesPeak(t *te
 }
 
 // ---------------------------------------------------------------------------
-// ZaiTracker.UsageSummary – active/no cycles, time quota
+// ZaiTracker.UsageSummary - active/no cycles, time quota
 // ---------------------------------------------------------------------------
 
 // TestZaiTracker_UsageSummary_ActiveCycleWithRate exercises the rate calculation
@@ -990,13 +990,13 @@ func TestZaiTracker_UsageSummary_WithCompletedCycles(t *testing.T) {
 	baseTime := time.Now()
 	resetTime1 := baseTime.Add(24 * time.Hour)
 
-	// Cycle 1: 50000 → 100000 (delta = 50000)
+	// Cycle 1: 50000 -> 100000 (delta = 50000)
 	s1 := makeZaiSnapshot(baseTime, 50000, 100, &resetTime1)
 	tr.Process(s1)
 	s2 := makeZaiSnapshot(baseTime.Add(time.Minute), 100000, 200, &resetTime1)
 	tr.Process(s2)
 
-	// Trigger reset → cycle 1 closed
+	// Trigger reset -> cycle 1 closed
 	resetTime2 := baseTime.Add(48 * time.Hour)
 	s3 := makeZaiSnapshot(baseTime.Add(2*time.Minute), 10000, 210, &resetTime2)
 	s.InsertZaiSnapshot(s3)
@@ -1055,7 +1055,7 @@ func TestZaiTracker_UsageSummary_TokensRenewsAtFallback(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CodexTracker.UsageSummary – history with completed cycles
+// CodexTracker.UsageSummary - history with completed cycles
 // ---------------------------------------------------------------------------
 
 // TestCodexTracker_UsageSummary_WithHistory exercises the completed cycles
@@ -1072,7 +1072,7 @@ func TestCodexTracker_UsageSummary_WithHistory(t *testing.T) {
 	now := time.Now().UTC()
 	reset1 := now.Add(5 * time.Hour)
 
-	// Cycle 1: 20 → 45 (delta = 25)
+	// Cycle 1: 20 -> 45 (delta = 25)
 	snap1 := &api.CodexSnapshot{
 		CapturedAt: now,
 		Quotas:     []api.CodexQuota{{Name: "five_hour", Utilization: 20, ResetsAt: &reset1}},
@@ -1156,7 +1156,7 @@ func TestCodexTracker_UsageSummary_ActiveCycleNoLatestSnapshot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CopilotTracker.UsageSummary – completed cycles path
+// CopilotTracker.UsageSummary - completed cycles path
 // ---------------------------------------------------------------------------
 
 // TestCopilotTracker_UsageSummary_WithHistory exercises the completed cycles
@@ -1173,7 +1173,7 @@ func TestCopilotTracker_UsageSummary_WithHistory(t *testing.T) {
 	now := time.Now().UTC()
 	resetDate1 := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
-	// Cycle 1: 1500 entitlement, start at 1500 → usage increases to 500
+	// Cycle 1: 1500 entitlement, start at 1500 -> usage increases to 500
 	snap1 := &api.CopilotSnapshot{
 		CapturedAt: now,
 		ResetDate:  &resetDate1,
@@ -1261,13 +1261,13 @@ func TestCopilotTracker_UsageSummary_ActiveCycleNoLatestSnapshot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tracker.Process – toolcall and search error paths (via error injection)
+// Tracker.Process - toolcall and search error paths (via error injection)
 // ---------------------------------------------------------------------------
 
 // TestTracker_Process_SearchError exercises the "tracker: search: ..." error
 // path by using a store that succeeds for subscription but errors for search.
 // We simulate this by running subscription first (creating its cycle) then
-// closing the store – but that would error on subscription too. Instead we
+// closing the store - but that would error on subscription too. Instead we
 // directly call processQuota with a broken quotaType that comes second.
 // The simplest approach: create a fresh store, process one snapshot to seed
 // cycles for subscription, then close the store; the NEXT process call
@@ -1324,7 +1324,7 @@ func TestTracker_Process_DirectToolcallError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AnthropicTracker.Process – error path
+// AnthropicTracker.Process - error path
 // ---------------------------------------------------------------------------
 
 // TestAnthropicTracker_Process_Error exercises the error return path from Process
@@ -1348,7 +1348,7 @@ func TestAnthropicTracker_Process_Error(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CopilotTracker.processQuota – hasLastValues=true but quota not in lastValues
+// CopilotTracker.processQuota - hasLastValues=true but quota not in lastValues
 // ---------------------------------------------------------------------------
 
 // TestCopilotTracker_processQuota_HasLastButNoLastForThisQuota exercises the
@@ -1367,7 +1367,7 @@ func TestCopilotTracker_processQuota_HasLastButNoLastForQuota(t *testing.T) {
 	now := time.Now().UTC()
 	resetDate := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 
-	// First snapshot with only "premium_interactions" → sets hasLastValues=true
+	// First snapshot with only "premium_interactions" -> sets hasLastValues=true
 	snap1 := &api.CopilotSnapshot{
 		CapturedAt: now,
 		ResetDate:  &resetDate,
@@ -1399,7 +1399,7 @@ func TestCopilotTracker_processQuota_HasLastButNoLastForQuota(t *testing.T) {
 		t.Fatal("expected active cycle for chat after second snapshot")
 	}
 
-	// Third snapshot: "chat" now has higher usage → exercises the
+	// Third snapshot: "chat" now has higher usage -> exercises the
 	// "hasLastValues && quota not in lastValues" branch that updates peak
 	snap3 := &api.CopilotSnapshot{
 		CapturedAt: now.Add(2 * time.Minute),
@@ -1551,10 +1551,10 @@ func TestZaiTracker_processTimeQuota_ExistingCycle_PeakNotUpdated(t *testing.T) 
 		t.Fatalf("UpdateZaiCycle: %v", err)
 	}
 
-	// New tracker – hasLastValues = false
+	// New tracker - hasLastValues = false
 	tr := NewZaiTracker(s, nil)
 	resetTime := base.Add(24 * time.Hour)
-	// currentValue (100) < cycle.PeakValue (900) → no update
+	// currentValue (100) < cycle.PeakValue (900) -> no update
 	snap := makeZaiSnapshot(base.Add(5*time.Minute), 5000, 100, &resetTime)
 
 	if err := tr.processTimeQuota(snap); err != nil {
@@ -1575,7 +1575,7 @@ func TestZaiTracker_processTimeQuota_ExistingCycle_PeakNotUpdated(t *testing.T) 
 }
 
 // ---------------------------------------------------------------------------
-// ZaiTracker.processTokensQuota – first snapshot after restart with existing cycle
+// ZaiTracker.processTokensQuota - first snapshot after restart with existing cycle
 // ---------------------------------------------------------------------------
 
 // TestZaiTracker_processTokensQuota_ExistingCycleAfterRestart_PeakUpdated exercises
@@ -1597,9 +1597,9 @@ func TestZaiTracker_processTokensQuota_ExistingCycleAfterRestart_PeakUpdated(t *
 		t.Fatalf("UpdateZaiCycle: %v", err)
 	}
 
-	// New tracker – hasLastValues = false
+	// New tracker - hasLastValues = false
 	tr := NewZaiTracker(s, nil)
-	// currentValue (5000) > cycle.PeakValue (1000) → peak should update
+	// currentValue (5000) > cycle.PeakValue (1000) -> peak should update
 	snap := makeZaiSnapshot(base.Add(10*time.Minute), 5000, 100, &nextReset)
 
 	if err := tr.processTokensQuota(snap); err != nil {
@@ -1638,7 +1638,7 @@ func TestZaiTracker_processTokensQuota_ExistingCycleAfterRestart_PeakNotUpdated(
 	}
 
 	tr := NewZaiTracker(s, nil)
-	// currentValue (500) < cycle.PeakValue (90000) → no update
+	// currentValue (500) < cycle.PeakValue (90000) -> no update
 	snap := makeZaiSnapshot(base.Add(5*time.Minute), 500, 200, &nextReset)
 
 	if err := tr.processTokensQuota(snap); err != nil {
@@ -1655,7 +1655,7 @@ func TestZaiTracker_processTokensQuota_ExistingCycleAfterRestart_PeakNotUpdated(
 }
 
 // ---------------------------------------------------------------------------
-// AnthropicTracker.UsageSummary – rate calculation path
+// AnthropicTracker.UsageSummary - rate calculation path
 // ---------------------------------------------------------------------------
 
 // TestAnthropicTracker_UsageSummary_WithRateAndProjection exercises the rate
@@ -1744,7 +1744,7 @@ func TestAnthropicTracker_UsageSummary_ActiveCycleNilResetsAt(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tracker.UsageSummary – active cycle path (subscription, search, toolcall)
+// Tracker.UsageSummary - active cycle path (subscription, search, toolcall)
 // ---------------------------------------------------------------------------
 
 // TestTracker_UsageSummary_ActiveCycle_Toolcall exercises the "toolcall" branch
@@ -1790,7 +1790,7 @@ func TestTracker_UsageSummary_ActiveCycle_Toolcall(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Codex processQuota – "cycle.ResetsAt == nil and quota.ResetsAt != nil" path
+// Codex processQuota - "cycle.ResetsAt == nil and quota.ResetsAt != nil" path
 // (updateCycleResetAt without a prior reset)
 // ---------------------------------------------------------------------------
 
@@ -1814,7 +1814,7 @@ func TestCodexTracker_processQuota_NilCycleResetAt_QuotaHasResetAt(t *testing.T)
 	}
 
 	tr := NewCodexTracker(s, slog.Default())
-	// Process quota with non-nil ResetsAt → triggers updateCycleResetAt branch
+	// Process quota with non-nil ResetsAt -> triggers updateCycleResetAt branch
 	newReset := base.Add(5 * time.Hour)
 	quota := api.CodexQuota{Name: "five_hour", Utilization: 25, ResetsAt: &newReset, Status: "healthy"}
 	if err := tr.processQuota(store.DefaultCodexAccountID, quota, base.Add(10*time.Minute)); err != nil {
@@ -1836,7 +1836,7 @@ func TestCodexTracker_processQuota_NilCycleResetAt_QuotaHasResetAt(t *testing.T)
 }
 
 // ---------------------------------------------------------------------------
-// AntigravityTracker.processModel – uncovered branches
+// AntigravityTracker.processModel - uncovered branches
 // ---------------------------------------------------------------------------
 
 // TestAntigravityTracker_processModel_ExistingCycle_PeakNotUpdated exercises
@@ -1860,7 +1860,7 @@ func TestAntigravityTracker_processModel_ExistingCycle_PeakNotUpdated(t *testing
 	}
 
 	tr := NewAntigravityTracker(s, nil)
-	// remaining=0.95 → currentUsage=0.05, which is < cycle.PeakUsage (0.9)
+	// remaining=0.95 -> currentUsage=0.05, which is < cycle.PeakUsage (0.9)
 	model := makeModel("model-z", "Model Z", 0.95, &reset)
 	if err := tr.processModel(model, base.Add(5*time.Minute)); err != nil {
 		t.Fatalf("processModel: %v", err)
@@ -1890,7 +1890,7 @@ func TestAntigravityTracker_processModel_HasLastButNoLastForThisModel(t *testing
 	base := time.Now()
 	reset := base.Add(24 * time.Hour)
 
-	// First snapshot with "model-a" only → sets hasLastValues=true
+	// First snapshot with "model-a" only -> sets hasLastValues=true
 	s1 := makeAntigravitySnapshot(base, []api.AntigravityModelQuota{
 		makeModel("model-a", "Model A", 0.9, &reset),
 	})
@@ -1916,7 +1916,7 @@ func TestAntigravityTracker_processModel_HasLastButNoLastForThisModel(t *testing
 		t.Fatal("expected active cycle for model-b")
 	}
 
-	// Third snapshot: model-b usage increases → exercises the
+	// Third snapshot: model-b usage increases -> exercises the
 	// "hasLastValues && !ok" branch where currentUsage > cycle.PeakUsage
 	s3 := makeAntigravitySnapshot(base.Add(2*time.Minute), []api.AntigravityModelQuota{
 		makeModel("model-a", "Model A", 0.7, &reset),
@@ -1949,7 +1949,7 @@ func TestAntigravityTracker_processModel_HasLast_NewModel_NotHigherThanPeak(t *t
 	base := time.Now()
 	reset := base.Add(24 * time.Hour)
 
-	// First snapshot with "model-a" only → sets hasLastValues=true
+	// First snapshot with "model-a" only -> sets hasLastValues=true
 	s1 := makeAntigravitySnapshot(base, []api.AntigravityModelQuota{
 		makeModel("model-a", "Model A", 0.5, &reset),
 	})
@@ -1966,7 +1966,7 @@ func TestAntigravityTracker_processModel_HasLast_NewModel_NotHigherThanPeak(t *t
 	}
 
 	// Second snapshot adds "model-c" for first time, but usage (0.1) < existing peak (0.95)
-	// hasLastValues=true, !ok for model-c, currentUsage=0.1 < 0.95 → no update
+	// hasLastValues=true, !ok for model-c, currentUsage=0.1 < 0.95 -> no update
 	s2 := makeAntigravitySnapshot(base.Add(time.Minute), []api.AntigravityModelQuota{
 		makeModel("model-a", "Model A", 0.45, &reset),
 		makeModel("model-c", "Model C", 0.9, &reset), // usage=0.1
@@ -1986,7 +1986,7 @@ func TestAntigravityTracker_processModel_HasLast_NewModel_NotHigherThanPeak(t *t
 }
 
 // ---------------------------------------------------------------------------
-// Copilot processQuota – hasLastValues but no lastValues for this quota
+// Copilot processQuota - hasLastValues but no lastValues for this quota
 // ---------------------------------------------------------------------------
 
 // TestCopilotTracker_processQuota_HasLast_NoLastForQuota_PeakNotHigher exercises
@@ -2003,7 +2003,7 @@ func TestCopilotTracker_processQuota_HasLast_NewQuota_PeakNotHigher(t *testing.T
 	now := time.Now().UTC()
 	resetDate := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 
-	// First snapshot – set hasLastValues=true
+	// First snapshot - set hasLastValues=true
 	snap1 := &api.CopilotSnapshot{
 		CapturedAt: now,
 		ResetDate:  &resetDate,
@@ -2022,7 +2022,7 @@ func TestCopilotTracker_processQuota_HasLast_NewQuota_PeakNotHigher(t *testing.T
 	}
 
 	// Second snapshot: "chat" appears for first time, low usage (50) < existing peak (400)
-	// hasLastValues=true, chat not in lastValues → exercises "else { if currentUsed > cycle.PeakUsed }" NO-OP
+	// hasLastValues=true, chat not in lastValues -> exercises "else { if currentUsed > cycle.PeakUsed }" NO-OP
 	snap2 := &api.CopilotSnapshot{
 		CapturedAt: now.Add(time.Minute),
 		ResetDate:  &resetDate,
@@ -2046,7 +2046,7 @@ func TestCopilotTracker_processQuota_HasLast_NewQuota_PeakNotHigher(t *testing.T
 }
 
 // ---------------------------------------------------------------------------
-// Tracker.processQuota – "first after restart, existing cycle, peak not higher"
+// Tracker.processQuota - "first after restart, existing cycle, peak not higher"
 // ---------------------------------------------------------------------------
 
 // TestTracker_processQuota_ExistingCycle_RestartPath_PeakNotHigher exercises
@@ -2069,7 +2069,7 @@ func TestTracker_processQuota_ExistingCycle_RestartPath_PeakNotHigher(t *testing
 	}
 
 	tr := New(s, nil)
-	// info.Requests (100) < cycle.PeakRequests (900) → no update to peak
+	// info.Requests (100) < cycle.PeakRequests (900) -> no update to peak
 	info := api.QuotaInfo{Limit: 1000, Requests: 100, RenewsAt: base.Add(5 * time.Hour)}
 	if err := tr.processQuota("subscription", base.Add(10*time.Minute), info, &tr.lastSubRequests); err != nil {
 		t.Fatalf("processQuota: %v", err)
@@ -2086,7 +2086,7 @@ func TestTracker_processQuota_ExistingCycle_RestartPath_PeakNotHigher(t *testing
 }
 
 // ---------------------------------------------------------------------------
-// AntigravityTracker.UsageSummary – cycle.ResetTime in the past (TimeUntilReset capped)
+// AntigravityTracker.UsageSummary - cycle.ResetTime in the past (TimeUntilReset capped)
 // ---------------------------------------------------------------------------
 
 // TestAntigravityTracker_UsageSummary_CycleResetTimeInPast exercises the
@@ -2125,7 +2125,7 @@ func TestAntigravityTracker_UsageSummary_CycleResetTimeInPast(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Anthropic processQuota – diff < 0 (resetsAt went backward)
+// Anthropic processQuota - diff < 0 (resetsAt went backward)
 // ---------------------------------------------------------------------------
 
 // TestAnthropicTracker_processQuota_ResetsAtWentBackward exercises the
@@ -2149,7 +2149,7 @@ func TestAnthropicTracker_processQuota_ResetsAtWentBackward(t *testing.T) {
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Second snapshot – ResetsAt went backward by 2 seconds (jitter, not a reset)
+	// Second snapshot - ResetsAt went backward by 2 seconds (jitter, not a reset)
 	// But the backward diff is < 10 min so no reset detected, just exercises diff < 0 path
 	resetsAtBackward := resetsAt1.Add(-2 * time.Second)
 	snap2 := makeAnthropicSnapshot(baseTime.Add(time.Minute), "five_hour", 35.0, &resetsAtBackward)
@@ -2187,7 +2187,7 @@ func TestAnthropicTracker_processQuota_ResetsAtWentBackwardBig(t *testing.T) {
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Second snapshot – ResetsAt went backward by 1 hour (>10 min → reset)
+	// Second snapshot - ResetsAt went backward by 1 hour (>10 min -> reset)
 	resetsAtBigBackward := resetsAt1.Add(-1 * time.Hour)
 	snap2 := makeAnthropicSnapshot(baseTime.Add(time.Minute), "five_hour", 5.0, &resetsAtBigBackward)
 	if err := tr.Process(snap2); err != nil {
@@ -2204,12 +2204,12 @@ func TestAnthropicTracker_processQuota_ResetsAtWentBackwardBig(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Antigravity processModel – diff < 0 (resetTime went backward)
+// Antigravity processModel - diff < 0 (resetTime went backward)
 // ---------------------------------------------------------------------------
 
 // TestAntigravityTracker_processModel_ResetTimeWentBackward exercises the
 // `if diff < 0 { diff = -diff }` branch where the model's ResetTime
-// goes backward (which is a large shift → reset).
+// goes backward (which is a large shift -> reset).
 func TestAntigravityTracker_processModel_ResetTimeWentBackward(t *testing.T) {
 	t.Parallel()
 	s, err := store.New(":memory:")
@@ -2230,7 +2230,7 @@ func TestAntigravityTracker_processModel_ResetTimeWentBackward(t *testing.T) {
 		t.Fatalf("Process s1: %v", err)
 	}
 
-	// Second snapshot – reset time went backward by 1 hour (|diff| > 10min → reset)
+	// Second snapshot - reset time went backward by 1 hour (|diff| > 10min -> reset)
 	resetBackward := reset1.Add(-1 * time.Hour)
 	s2 := makeAntigravitySnapshot(base.Add(time.Minute), []api.AntigravityModelQuota{
 		makeModel("model-q", "Model Q", 0.9, &resetBackward),
@@ -2249,11 +2249,11 @@ func TestAntigravityTracker_processModel_ResetTimeWentBackward(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Anthropic processQuota – !hasLast, existing cycle, util not higher
+// Anthropic processQuota - !hasLast, existing cycle, util not higher
 // ---------------------------------------------------------------------------
 
 // TestAnthropicTracker_processQuota_NotHasLast_PeakNotUpdated exercises the
-// `!hasLast → else { if currentUtil > cycle.PeakUtilization }` branch where
+// `!hasLast -> else { if currentUtil > cycle.PeakUtilization }` branch where
 // the current utilization is NOT higher than the existing peak.
 func TestAnthropicTracker_processQuota_NotHasLast_PeakNotUpdated(t *testing.T) {
 	t.Parallel()
@@ -2273,9 +2273,9 @@ func TestAnthropicTracker_processQuota_NotHasLast_PeakNotUpdated(t *testing.T) {
 		t.Fatalf("UpdateAnthropicCycle: %v", err)
 	}
 
-	// New tracker – hasLast = false
+	// New tracker - hasLast = false
 	tr := NewAnthropicTracker(s, nil)
-	// util (30) < cycle peak (80) → no update
+	// util (30) < cycle peak (80) -> no update
 	snap := makeAnthropicSnapshot(base.Add(time.Minute), "five_hour", 30.0, &resetsAt)
 	if err := tr.Process(snap); err != nil {
 		t.Fatalf("Process: %v", err)
@@ -2292,7 +2292,7 @@ func TestAnthropicTracker_processQuota_NotHasLast_PeakNotUpdated(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Codex processQuota – time-based reset when capturedAt > cycle.ResetsAt+2min
+// Codex processQuota - time-based reset when capturedAt > cycle.ResetsAt+2min
 // ---------------------------------------------------------------------------
 
 // TestCodexTracker_processQuota_TimeBasedReset exercises the time-based reset
@@ -2318,7 +2318,7 @@ func TestCodexTracker_processQuota_TimeBasedReset(t *testing.T) {
 		t.Fatalf("Process snap1: %v", err)
 	}
 
-	// Second snapshot – trigger time-based reset (capturedAt > reset1 + 2min)
+	// Second snapshot - trigger time-based reset (capturedAt > reset1 + 2min)
 	capturedAt2 := reset1.Add(3 * time.Minute)
 	reset2 := capturedAt2.Add(5 * time.Hour)
 	snap2 := &api.CodexSnapshot{
@@ -2391,7 +2391,7 @@ func TestCodexTracker_processQuota_TimeBasedReset_WithHasLast_PositiveDelta(t *t
 }
 
 // ---------------------------------------------------------------------------
-// Anthropic UsageSummary – projected util > 100 (clamped)
+// Anthropic UsageSummary - projected util > 100 (clamped)
 // ---------------------------------------------------------------------------
 
 // TestAnthropicTracker_UsageSummary_ProjectedUtilClamped exercises the
@@ -2436,7 +2436,7 @@ func TestAnthropicTracker_UsageSummary_ProjectedUtilClamped(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tracker.UsageSummary – subscription case in switch (latest != nil)
+// Tracker.UsageSummary - subscription case in switch (latest != nil)
 // ---------------------------------------------------------------------------
 
 // TestTracker_UsageSummary_SubscriptionWithSnapshot exercises the "subscription"
@@ -2483,7 +2483,7 @@ func TestTracker_UsageSummary_SubscriptionWithSnapshot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Copilot processQuota – hasLastValues=true, quota in lastValues, no delta, peak higher
+// Copilot processQuota - hasLastValues=true, quota in lastValues, no delta, peak higher
 // The "else { if currentUsed > cycle.PeakUsed }" branch with high usage
 // ---------------------------------------------------------------------------
 
@@ -2501,7 +2501,7 @@ func TestCopilotTracker_processQuota_HasLast_NewQuota_PeakHigher(t *testing.T) {
 	now := time.Now().UTC()
 	resetDate := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 
-	// First snapshot – sets hasLastValues=true for "premium_interactions"
+	// First snapshot - sets hasLastValues=true for "premium_interactions"
 	snap1 := &api.CopilotSnapshot{
 		CapturedAt: now,
 		ResetDate:  &resetDate,
@@ -2520,7 +2520,7 @@ func TestCopilotTracker_processQuota_HasLast_NewQuota_PeakHigher(t *testing.T) {
 	}
 
 	// Second snapshot: "chat" appears for first time, HIGH usage (200) > existing peak (5)
-	// hasLastValues=true, chat not in lastValues → exercises "else { if currentUsed > cycle.PeakUsed }" YES branch
+	// hasLastValues=true, chat not in lastValues -> exercises "else { if currentUsed > cycle.PeakUsed }" YES branch
 	snap2 := &api.CopilotSnapshot{
 		CapturedAt: now.Add(time.Minute),
 		ResetDate:  &resetDate,
@@ -2544,7 +2544,7 @@ func TestCopilotTracker_processQuota_HasLast_NewQuota_PeakHigher(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Antigravity processModel – hasLastValues=true, model in lastFractions, but peak IS higher
+// Antigravity processModel - hasLastValues=true, model in lastFractions, but peak IS higher
 // ---------------------------------------------------------------------------
 
 // TestAntigravityTracker_processModel_HasLast_NewModel_PeakHigher already tested
@@ -2583,7 +2583,7 @@ func TestAntigravityTracker_processModel_HasLast_ExistingModel_HigherThanPeak(t 
 	}
 
 	// Second snapshot: model-y appears for first time with HIGH usage (0.7) > cycle peak (0.05)
-	// hasLastValues=true, model-y not in lastFractions → exercises "else { if currentUsage > cycle.PeakUsage }" YES branch
+	// hasLastValues=true, model-y not in lastFractions -> exercises "else { if currentUsage > cycle.PeakUsage }" YES branch
 	s2 := makeAntigravitySnapshot(base.Add(time.Minute), []api.AntigravityModelQuota{
 		makeModel("model-x", "Model X", 0.7, &reset),
 		makeModel("model-y", "Model Y", 0.3, &reset), // usage=0.7 > peak=0.05
@@ -2602,7 +2602,7 @@ func TestAntigravityTracker_processModel_HasLast_ExistingModel_HigherThanPeak(t 
 }
 
 // ---------------------------------------------------------------------------
-// Anthropic processQuota – hasLast=true, no lastValues for quota, util NOT higher
+// Anthropic processQuota - hasLast=true, no lastValues for quota, util NOT higher
 // AND hasLast=false, util NOT higher
 // ---------------------------------------------------------------------------
 
@@ -2620,7 +2620,7 @@ func TestAnthropicTracker_processQuota_HasLast_NewQuota_NotHigherThanPeak(t *tes
 	base := time.Now()
 	resetsAt := base.Add(5 * time.Hour)
 
-	// First snapshot – sets hasLast=true for "five_hour"
+	// First snapshot - sets hasLast=true for "five_hour"
 	snap1 := makeAnthropicSnapshot(base, "five_hour", 20.0, &resetsAt)
 	if err := tr.Process(snap1); err != nil {
 		t.Fatalf("Process snap1: %v", err)
@@ -2636,7 +2636,7 @@ func TestAnthropicTracker_processQuota_HasLast_NewQuota_NotHigherThanPeak(t *tes
 	}
 
 	// Second snapshot: "seven_day" appears for first time with LOW util (10) < peak (90)
-	// hasLast=true, seven_day not in lastValues → exercises "else { if currentUtil > cycle.PeakUtilization }" NO branch
+	// hasLast=true, seven_day not in lastValues -> exercises "else { if currentUtil > cycle.PeakUtilization }" NO branch
 	snap2 := makeMultiQuotaSnapshot(base.Add(time.Minute), []api.AnthropicQuota{
 		{Name: "five_hour", Utilization: 25.0, ResetsAt: &resetsAt},
 		{Name: "seven_day", Utilization: 10.0, ResetsAt: &sevenDayReset},
@@ -2656,7 +2656,7 @@ func TestAnthropicTracker_processQuota_HasLast_NewQuota_NotHigherThanPeak(t *tes
 }
 
 // ---------------------------------------------------------------------------
-// Codex UsageSummary – active cycle, ResetsAt nil in cycle but found in snapshot
+// Codex UsageSummary - active cycle, ResetsAt nil in cycle but found in snapshot
 // ---------------------------------------------------------------------------
 
 // TestCodexTracker_UsageSummary_ActiveCycleNilResetsAt_SnapshotHasIt exercises
@@ -2705,7 +2705,7 @@ func TestCodexTracker_UsageSummary_ActiveCycleNilResetsAt_SnapshotHasIt(t *testi
 }
 
 // ---------------------------------------------------------------------------
-// Anthropic processQuota – hasLast=true, quota NOT in lastValues, cycle EXISTS,
+// Anthropic processQuota - hasLast=true, quota NOT in lastValues, cycle EXISTS,
 // currentUtil IS higher (lines 204-206)
 // ---------------------------------------------------------------------------
 
@@ -2733,15 +2733,15 @@ func TestAnthropicTracker_processQuota_HasLast_ExistingCycle_NewQuota_HigherThan
 		t.Fatalf("UpdateAnthropicCycle: %v", err)
 	}
 
-	// First: Process five_hour snapshot → sets hasLast=true, lastValues["five_hour"]=10.0
+	// First: Process five_hour snapshot -> sets hasLast=true, lastValues["five_hour"]=10.0
 	snap1 := makeAnthropicSnapshot(base, "five_hour", 10.0, &resetsAt)
 	if err := tr.Process(snap1); err != nil {
 		t.Fatalf("Process snap1: %v", err)
 	}
 
 	// Second: Process a snapshot with BOTH quotas.
-	// hasLast=true, seven_day EXISTS in DB, but NOT in lastValues → hits "else { if > }" branch
-	// currentUtil=40 > cycle.PeakUtilization=10 → updates peak (exercises lines 204-206)
+	// hasLast=true, seven_day EXISTS in DB, but NOT in lastValues -> hits "else { if > }" branch
+	// currentUtil=40 > cycle.PeakUtilization=10 -> updates peak (exercises lines 204-206)
 	snap2 := makeMultiQuotaSnapshot(base.Add(time.Minute), []api.AnthropicQuota{
 		{Name: "five_hour", Utilization: 15.0, ResetsAt: &resetsAt},
 		{Name: "seven_day", Utilization: 40.0, ResetsAt: &sevenDayReset},
@@ -2780,9 +2780,9 @@ func TestAnthropicTracker_processQuota_NotHasLast_ExistingCycle_HigherThanPeak(t
 		t.Fatalf("UpdateAnthropicCycle: %v", err)
 	}
 
-	// Fresh tracker – hasLast = false
+	// Fresh tracker - hasLast = false
 	tr := NewAnthropicTracker(s, nil)
-	// util (60) > cycle peak (15) → SHOULD update peak
+	// util (60) > cycle peak (15) -> SHOULD update peak
 	snap := makeAnthropicSnapshot(base.Add(time.Minute), "five_hour", 60.0, &resetsAt)
 	if err := tr.Process(snap); err != nil {
 		t.Fatalf("Process: %v", err)
@@ -2798,7 +2798,7 @@ func TestAnthropicTracker_processQuota_NotHasLast_ExistingCycle_HigherThanPeak(t
 }
 
 // ---------------------------------------------------------------------------
-// Anthropic UsageSummary – ResetsAt=nil in cycle, but snapshot quota has ResetsAt
+// Anthropic UsageSummary - ResetsAt=nil in cycle, but snapshot quota has ResetsAt
 // (lines 282-285 in UsageSummary)
 // ---------------------------------------------------------------------------
 

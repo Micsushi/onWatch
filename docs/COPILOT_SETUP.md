@@ -13,11 +13,11 @@ Track your GitHub Copilot premium request usage with onWatch.
 
 ## Step 1: Create a GitHub Personal Access Token
 
-1. Go to **GitHub Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
+1. Go to **GitHub Settings** -> **Developer settings** -> **Personal access tokens** -> **Tokens (classic)**
 
    Direct link: https://github.com/settings/tokens
 
-2. Click **Generate new token** → **Generate new token (classic)**
+2. Click **Generate new token** -> **Generate new token (classic)**
 
 3. Configure the token:
    - **Note**: `onwatch-copilot` (or any name you prefer)
@@ -28,7 +28,7 @@ Track your GitHub Copilot premium request usage with onWatch.
 
 4. Click **Generate token**
 
-5. **Copy the token immediately** — you won't see it again. It starts with `ghp_`.
+5. **Copy the token immediately** - you won't see it again. It starts with `ghp_`.
 
 ---
 
@@ -146,5 +146,5 @@ This endpoint returns real-time quota data including entitlement, remaining coun
 
 ## See Also
 
-- [Development Guide](DEVELOPMENT.md) — Build from source
-- [README](../README.md) — Quick start and configuration
+- [Development Guide](DEVELOPMENT.md) - Build from source
+- [README](../README.md) - Quick start and configuration

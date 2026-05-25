@@ -72,7 +72,7 @@ type Config struct {
 	APIIntegrationsRetention time.Duration // ONWATCH_API_INTEGRATIONS_RETENTION (example: 720h, 0 disables pruning)
 
 	// Shared configuration
-	PollInterval       time.Duration // ONWATCH_POLL_INTERVAL (seconds → Duration)
+	PollInterval       time.Duration // ONWATCH_POLL_INTERVAL (seconds -> Duration)
 	Port               int           // ONWATCH_PORT
 	Host               string        // ONWATCH_HOST (bind address, default: 0.0.0.0)
 	SecureCookies      bool          // ONWATCH_SECURE_COOKIES (set Secure flag on cookies)
@@ -85,7 +85,7 @@ type Config struct {
 	LogLevel           string        // ONWATCH_LOG_LEVEL
 	LogFormat          string        // ONWATCH_LOG_FORMAT: text (default), txt, fmt, or json
 	MetricsToken       string        // ONWATCH_METRICS_TOKEN (bearer token for /metrics endpoint)
-	SessionIdleTimeout time.Duration // ONWATCH_SESSION_IDLE_TIMEOUT (seconds → Duration)
+	SessionIdleTimeout time.Duration // ONWATCH_SESSION_IDLE_TIMEOUT (seconds -> Duration)
 	BasePath           string        // ONWATCH_BASE_PATH (subdirectory hosting, e.g. "/onwatch")
 	DebugMode          bool          // --debug flag (foreground mode)
 	DebugStdout        bool          // --debugstdout flag (foreground + all logs to stdout)
@@ -93,7 +93,7 @@ type Config struct {
 }
 
 // envWithFallback reads the primary env var, falling back to the legacy name.
-// This provides backward compatibility for SYNTRACK_* → ONWATCH_* rename.
+// This provides backward compatibility for SYNTRACK_* -> ONWATCH_* rename.
 func envWithFallback(primary, fallback string) string {
 	if v := os.Getenv(primary); v != "" {
 		return v

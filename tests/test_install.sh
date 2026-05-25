@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# ═══════════════════════════════════════════════════════════════════════
 # install.sh Test Suite
 # Tests the interactive setup flow with mocked inputs.
 #
 # Usage: bash test_install.sh
-# ═══════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,8 +15,7 @@ TOTAL=0
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BOLD='\033[1m'; NC='\033[0m'
 
-# ─── Test Helpers ───────────────────────────────────────────────────
-
+# Test Helpers
 setup() {
     TEST_DIR=$(mktemp -d)
     export ONWATCH_INSTALL_DIR="$TEST_DIR"
@@ -111,8 +108,7 @@ run_test() {
     teardown
 }
 
-# ─── Test Cases ─────────────────────────────────────────────────────
-
+# Test Cases
 test_synthetic_only() {
     setup && source_functions
     run_setup "1\nsyn_test123456\nadmin\n\n9211\n60\n"
@@ -349,8 +345,7 @@ EOF
     [[ "$token" == "file-fallback-token-xyz" ]]
 }
 
-# ─── Run All Tests ──────────────────────────────────────────────────
-
+# Run All Tests
 printf "\n${BOLD}  install.sh Test Suite${NC}\n"
 printf "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n\n"
 

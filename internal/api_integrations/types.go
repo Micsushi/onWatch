@@ -21,6 +21,7 @@ var allowedProviders = map[string]struct{}{
 	"mistral":    {},
 	"openrouter": {},
 	"gemini":     {},
+	"cursor":     {},
 }
 
 // UsageEvent is the normalized API integration telemetry event stored by onWatch.

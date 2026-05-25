@@ -55,7 +55,7 @@ async function run() {
     console.log(`Switching to provider: ${provider.name}`);
     await tabButton.click();
 
-    // Wait for content to load — quota cards or both-view to render
+    // Wait for content to load - quota cards or both-view to render
     await page.waitForTimeout(2000);
 
     for (const theme of THEMES) {

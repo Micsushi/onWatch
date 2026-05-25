@@ -8,7 +8,7 @@
 
 **Project:** onWatch
 **Updated:** 2026-02-06
-**Design Language:** Google Material Design 3 (Material You) — adapted for monitoring dashboards
+**Design Language:** Google Material Design 3 (Material You) - adapted for monitoring dashboards
 **Theme:** Dual-mode (Dark + Light) with system preference detection
 
 ---
@@ -17,11 +17,11 @@
 
 onWatch follows Google Material Design 3 principles adapted for a monitoring dashboard:
 
-1. **Elevated surfaces** — Cards float above the background using Material elevation system
-2. **Dynamic color** — Theme-aware colors using CSS custom properties
-3. **Motion** — Purposeful transitions (200ms ease), not decorative animation
-4. **Density** — Comfortable density for data-heavy dashboard (not compact, not spacious)
-5. **At-a-glance clarity** — Users must immediately see: (a) what's near limit, (b) when it resets
+1. **Elevated surfaces** - Cards float above the background using Material elevation system
+2. **Dynamic color** - Theme-aware colors using CSS custom properties
+3. **Motion** - Purposeful transitions (200ms ease), not decorative animation
+4. **Density** - Comfortable density for data-heavy dashboard (not compact, not spacious)
+5. **At-a-glance clarity** - Users must immediately see: (a) what's near limit, (b) when it resets
 
 ---
 
@@ -65,7 +65,7 @@ onWatch follows Google Material Design 3 principles adapted for a monitoring das
 
 ### Quota Status Colors (Both Modes)
 
-These are semantic colors for the usage meters — the core visual feature of onWatch.
+These are semantic colors for the usage meters - the core visual feature of onWatch.
 
 | Status | Condition | Dark Hex | Light Hex | CSS Variable |
 |--------|-----------|----------|-----------|-------------|
@@ -94,7 +94,7 @@ These are semantic colors for the usage meters — the core visual feature of on
 --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
 ```
 
-**Google Fonts import (optional — system fonts work fine for minimal RAM):**
+**Google Fonts import (optional - system fonts work fine for minimal RAM):**
 ```css
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 ```
@@ -183,7 +183,7 @@ The most important UI element. Each card represents one quota type.
 +---------------------------------------------------------------------+
 ```
 
-- Sticky top bar (not floating — saves layout complexity)
+- Sticky top bar (not floating - saves layout complexity)
 - Connection status: green dot = fresh data, yellow = stale (>2x interval)
 - Settings gear: opens inline panel (poll interval, time range, etc.)
 
@@ -243,7 +243,7 @@ The most important UI element. Each card represents one quota type.
 |-------------|---------------|
 | Color contrast | 4.5:1 minimum (WCAG AA) for all text |
 | Focus states | 2px `--md-primary` ring on all interactive elements |
-| Keyboard navigation | Tab order: theme toggle → time range → quota cards → chart → table |
+| Keyboard navigation | Tab order: theme toggle -> time range -> quota cards -> chart -> table |
 | Screen reader | `aria-label` on progress bars, `role="progressbar"` with `aria-valuenow` |
 | Status indicators | Color + icon + text (never color alone) |
 | Skip link | "Skip to dashboard" link for keyboard users |
@@ -254,7 +254,7 @@ The most important UI element. Each card represents one quota type.
 
 ## Anti-Patterns (DO NOT USE)
 
-- Emojis as icons — use SVG icons (Lucide icon set)
+- Emojis as icons - use SVG icons (Lucide icon set)
 - `outline: none` without replacement focus style
 - Color-only status indicators
 - Layout-shifting hover effects (`scale` on cards)
