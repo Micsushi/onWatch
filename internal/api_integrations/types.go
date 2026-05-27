@@ -174,6 +174,11 @@ func ParseUsageEventLine(line []byte, sourcePath string) (*UsageEvent, error) {
 
 func eventFingerprint(event *UsageEvent) string {
 	h := sha256.New()
+	if eventKey := metadataString(event.MetadataJSON, "event_key"); eventKey != "" {
+		writeHashPart(h, "event_key")
+		writeHashPart(h, eventKey)
+		return hex.EncodeToString(h.Sum(nil))
+	}
 	writeHashPart(h, event.SourcePath)
 	writeHashPart(h, event.Timestamp.Format(time.RFC3339Nano))
 	writeHashPart(h, event.Integration)
@@ -185,6 +190,21 @@ func eventFingerprint(event *UsageEvent) string {
 	writeHashPart(h, fmt.Sprintf("%d", event.TotalTokens))
 	writeHashPart(h, event.RequestID)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func metadataString(metadataJSON, key string) string {
+	if strings.TrimSpace(metadataJSON) == "" {
+		return ""
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+		return ""
+	}
+	value, ok := metadata[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 func writeHashPart(h interface{ Write([]byte) (int, error) }, part string) {

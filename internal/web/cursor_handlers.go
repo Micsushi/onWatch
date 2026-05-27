@@ -225,6 +225,7 @@ func (h *Handler) buildCursorCurrent() map[string]interface{} {
 				quotaMap["resetsAt"] = q.ResetsAt.Format(time.RFC3339)
 				quotaMap["timeUntilReset"] = formatDuration(timeUntilReset)
 				quotaMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+				applyWeeklyPaceStatus(quotaMap, q.Name, q.Utilization, *q.ResetsAt, now)
 			}
 			if h.cursorTracker != nil {
 				if summary, sErr := h.cursorTracker.UsageSummary(q.Name); sErr == nil && summary != nil {
@@ -267,6 +268,7 @@ func (h *Handler) buildCursorCurrent() map[string]interface{} {
 			qMap["resetsAt"] = q.ResetsAt.Format(time.RFC3339)
 			qMap["timeUntilReset"] = formatDuration(timeUntilReset)
 			qMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+			applyWeeklyPaceStatus(qMap, q.Name, q.Utilization, *q.ResetsAt, now)
 		}
 		if h.cursorTracker != nil {
 			if summary, sErr := h.cursorTracker.UsageSummary(q.Name); sErr == nil && summary != nil {

@@ -67,10 +67,20 @@ func (c *Collector) CollectOnce() error {
 	if err := os.MkdirAll(c.outDir, 0o700); err != nil {
 		return err
 	}
-	outPath := filepath.Join(c.outDir, "agent-usage.jsonl")
+	outPath := c.outputPath(time.Now())
 	if !c.seenLoaded {
+		seenPath := c.seenPath()
+		_, seenStatErr := os.Stat(seenPath)
+		if err := c.loadSeenKeys(seenPath); err != nil {
+			c.logger.Warn("agent usage collector could not load persisted fingerprints", "path", seenPath, "error", err)
+		}
 		if err := c.loadSeenFromOutput(outPath); err != nil {
 			c.logger.Warn("agent usage collector could not load existing output fingerprints", "path", outPath, "error", err)
+		}
+		if os.IsNotExist(seenStatErr) && len(c.seen) > 0 {
+			if err := appendSeenKeys(seenPath, mapKeys(c.seen)); err != nil {
+				c.logger.Warn("agent usage collector could not seed persisted fingerprints", "path", seenPath, "error", err)
+			}
 		}
 		c.seenLoaded = true
 	}
@@ -82,6 +92,7 @@ func (c *Collector) CollectOnce() error {
 			continue
 		}
 		var lines [][]byte
+		var newKeys []string
 		for _, event := range events {
 			line, err := event.ToAPIIntegrationLine()
 			if err != nil {
@@ -94,9 +105,13 @@ func (c *Collector) CollectOnce() error {
 			}
 			c.seen[key] = struct{}{}
 			lines = append(lines, line)
+			newKeys = append(newKeys, key)
 		}
 		if len(lines) > 0 {
 			if err := appendLines(outPath, lines); err != nil {
+				return err
+			}
+			if err := appendSeenKeys(c.seenPath(), newKeys); err != nil {
 				return err
 			}
 			wrote = true
@@ -107,6 +122,32 @@ func (c *Collector) CollectOnce() error {
 		return nil
 	}
 	c.initialized = true
+	return nil
+}
+
+func (c *Collector) outputPath(now time.Time) string {
+	return filepath.Join(c.outDir, fmt.Sprintf("agent-usage-%s.jsonl", now.UTC().Format("2006-01-02")))
+}
+
+func (c *Collector) seenPath() string {
+	return filepath.Join(c.outDir, ".agent-usage-seen")
+}
+
+func (c *Collector) loadSeenKeys(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, raw := range strings.Split(string(data), "\n") {
+		key := strings.TrimSpace(raw)
+		if key == "" {
+			continue
+		}
+		c.seen[key] = struct{}{}
+	}
 	return nil
 }
 
@@ -233,6 +274,33 @@ func appendLines(path string, lines [][]byte) error {
 		}
 	}
 	return nil
+}
+
+func appendSeenKeys(path string, keys []string) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, err := file.WriteString(key + "\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mapKeys(m map[string]struct{}) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (c *Collector) collectSource(source Source) ([]UsageEvent, error) {

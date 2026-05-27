@@ -64,7 +64,7 @@ Retention notes:
 
 ## Local Agent Usage Collector
 
-onWatch also includes a local collector for agent log files. It runs beside API Integrations and writes normalized rows to `agent-usage.jsonl` in the same ingest directory.
+onWatch also includes a local collector for agent log files. It runs beside API Integrations and writes normalized rows to daily `agent-usage-YYYY-MM-DD.jsonl` queue files in the same ingest directory.
 
 Default local sources:
 
@@ -100,7 +100,7 @@ Run it continuously:
 onwatch agent-usage --out "\\server\onwatch-api-integrations" --interval 15
 ```
 
-The runner does not start the dashboard, does not need provider API keys, and does not open the SQLite database. It only reads local agent logs and writes normalized `agent-usage.jsonl` rows. The Linux onWatch daemon remains responsible for ingesting those rows, storing them, and serving the dashboard.
+The runner does not start the dashboard, does not need provider API keys, and does not open the SQLite database. It only reads local agent logs and writes normalized `agent-usage-YYYY-MM-DD.jsonl` queue rows. The Linux onWatch daemon remains responsible for ingesting those rows, storing them, and serving the dashboard. After the daemon has fully ingested an `agent-usage*.jsonl` queue file, it removes that file so SQLite remains the durable history and the ingest folder stays small. The collector also keeps a compact `.agent-usage-seen` cache in the ingest directory so archived sessions are not re-emitted after the queue file is removed.
 
 If you need to scan a different Windows profile or portable Codex home:
 

@@ -158,15 +158,19 @@ func (a *APIIntegrationsIngestAgent) scanFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}
-	defer file.Close()
 
 	if _, err := file.Seek(state.Offset, io.SeekStart); err != nil {
+		_ = file.Close()
 		return fmt.Errorf("seek file: %w", err)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(file, apiIntegrationIngestMaxReadBytes))
+	closeErr := file.Close()
 	if err != nil {
 		return fmt.Errorf("read file: %w", err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close file: %w", closeErr)
 	}
 
 	if len(data) == 0 {
@@ -227,7 +231,34 @@ func (a *APIIntegrationsIngestAgent) scanFile(path string) error {
 		)
 	}
 
-	return a.store.UpsertAPIIntegrationIngestState(state)
+	if err := a.store.UpsertAPIIntegrationIngestState(state); err != nil {
+		return err
+	}
+	a.removeConsumedAgentUsageFile(path, state)
+	return nil
+}
+
+func (a *APIIntegrationsIngestAgent) removeConsumedAgentUsageFile(path string, state *apiintegrations.IngestState) {
+	if state == nil || state.PartialLine != "" || !isAgentUsageQueueFile(path) {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return
+	}
+	if info.Size() != state.Offset || info.Size() != state.FileSize {
+		return
+	}
+	if err := os.Remove(path); err != nil {
+		a.logger.Debug("API integrations ingester left consumed agent usage file in place", "path", path, "error", err)
+		return
+	}
+	a.logger.Debug("API integrations ingester removed consumed agent usage file", "path", path)
+}
+
+func isAgentUsageQueueFile(path string) bool {
+	name := filepath.Base(path)
+	return name == "agent-usage.jsonl" || (strings.HasPrefix(name, "agent-usage-") && strings.HasSuffix(name, ".jsonl"))
 }
 
 func splitCompleteLines(data string) ([]string, string) {
@@ -246,12 +277,20 @@ func splitCompleteLines(data string) ([]string, string) {
 }
 
 func (a *APIIntegrationsIngestAgent) recordInvalidLine(path, line string, err error) {
+	const provider = "api_integrations"
+	const alertType = "ingest_error"
+	const title = "API integrations ingest skipped invalid event"
 	msg := fmt.Sprintf("%s: %v", filepath.Base(path), err)
+	if exists, existsErr := a.store.HasActiveSystemAlert(provider, alertType, title, msg); existsErr != nil {
+		a.logger.Warn("Failed to check duplicate API integrations ingest alert", "path", path, "error", existsErr)
+	} else if exists {
+		return
+	}
 	if len(line) > 180 {
 		line = line[:180] + "..."
 	}
 	metadata := fmt.Sprintf(`{"source_path":%q,"line":%q}`, path, line)
-	if _, createErr := a.store.CreateSystemAlert("api_integrations", "ingest_error", "API integrations ingest skipped invalid event", msg, "warning", metadata); createErr != nil {
+	if _, createErr := a.store.CreateSystemAlert(provider, alertType, title, msg, "warning", metadata); createErr != nil {
 		a.logger.Warn("Failed to create API integrations ingest alert", "path", path, "error", createErr)
 	}
 }

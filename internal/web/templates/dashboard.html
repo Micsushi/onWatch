@@ -1,5 +1,5 @@
 {{define "content"}}
-<div class="app" data-poll-interval="{{.PollIntervalSec}}">
+<div class="app" data-poll-interval="{{.PollIntervalSec}}" data-provider="{{.CurrentProvider}}">
     <header class="app-header">
         <a href="#" class="header-brand" id="scroll-top" aria-label="Scroll to top">
             <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -459,7 +459,7 @@
                     <strong>--</strong>
                 </div>
                 <div class="platform-cost-metric">
-                    <span class="platform-cost-label">Last Seen</span>
+                    <span class="platform-cost-label">Last Entry</span>
                     <strong>--</strong>
                 </div>
             </div>
@@ -474,9 +474,9 @@
                         </div>
                         <div class="range-selector platform-cost-range-selector" role="group" aria-label="Cost graph time range">
                             <button class="platform-cost-range-btn" type="button" data-range="1h">1h</button>
-                            <button class="platform-cost-range-btn active" type="button" data-range="6h">6h</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="6h">6h</button>
                             <button class="platform-cost-range-btn" type="button" data-range="24h">24h</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="7d">7d</button>
+                            <button class="platform-cost-range-btn active" type="button" data-range="7d">7d</button>
                             <button class="platform-cost-range-btn" type="button" data-range="30d">30d</button>
                             <button class="platform-cost-range-btn" type="button" data-range="all">All</button>
                         </div>
@@ -491,13 +491,100 @@
                     <div class="chart-empty-state" id="platform-cost-chart-empty" hidden aria-live="polite"></div>
                 </div>
             </div>
-            <div class="platform-cost-breakdown-header">
-                <h4 class="platform-cost-breakdown-title">Cost Breakdown</h4>
-                <div class="platform-cost-breakdown-tabs" role="group" aria-label="Cost breakdown view">
-                    <button class="platform-cost-breakdown-tab active" type="button" data-cost-view="types">By Token Type</button>
-                    <button class="platform-cost-breakdown-tab" type="button" data-cost-view="models">By Model</button>
+        </section>
+        {{end}}
+
+        {{if ne .CurrentProvider "both"}}
+        <section class="chart-section">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 3v18h18"/>
+                        <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
+                    </svg>
+                    {{if eq .CurrentProvider "api-integrations"}}Cost Over Time{{else}}Usage Graphs{{end}}
+                </h3>
+                <div class="chart-controls">
+                    {{if eq .CurrentProvider "api-integrations"}}
+                    <select class="page-size-select" id="api-integrations-metric-select" aria-label="API integrations chart metric">
+                        <option value="tokenPerCall">Tokens per Request</option>
+                        <option value="requestCount">Requests</option>
+                        <option value="accumulatedTokens">Accumulated Token Use</option>
+                        <option value="totalCostUsd">Estimated Cost</option>
+                    </select>
+                    {{end}}
+                    <div class="range-selector graph-mode-toggle" id="chart-mode-select" role="group" aria-label="Graph style">
+                        <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative">Cumulative</button>
+                        <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket">Per Period</button>
+                    </div>
+                    <div class="range-selector" role="group" aria-label="Time range">
+                        <button class="range-btn" data-range="1h">1h</button>
+                        <button class="range-btn" data-range="6h">6h</button>
+                        <button class="range-btn" data-range="24h">24h</button>
+                        <button class="range-btn active" data-range="7d">7d</button>
+                        <button class="range-btn" data-range="30d">30d</button>
+                        <button class="range-btn" data-range="all">All</button>
+                    </div>
+                </div>
+            </header>
+            {{if ne .CurrentProvider "api-integrations"}}
+            <div class="usage-summary" id="usage-summary">
+                <div class="platform-cost-metric primary">
+                    <span class="platform-cost-label">Avg Weekly All-Model</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Current Usage</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Avg 5-Hour Usage</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Samples</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Last Entry</span>
+                    <strong>--</strong>
                 </div>
             </div>
+            {{end}}
+            <div class="chart-container">
+                <canvas id="usage-chart"></canvas>
+                <div class="chart-empty-state" id="usage-chart-empty" hidden aria-live="polite"></div>
+            </div>
+        </section>
+        {{end}}
+
+        {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex")}}
+        <section class="sessions-section platform-cost-breakdown-section" id="platform-cost-breakdown-section" data-provider="{{.CurrentProvider}}">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 4h16v16H4z"/>
+                        <path d="M8 9h8"/>
+                        <path d="M8 13h8"/>
+                        <path d="M8 17h5"/>
+                    </svg>
+                    Token Cost Breakdown
+                </h3>
+                <div class="platform-cost-breakdown-controls">
+                    <div class="platform-cost-breakdown-tabs" role="group" aria-label="Token cost breakdown view">
+                        <button class="platform-cost-breakdown-tab active" type="button" data-cost-view="types">By Token Type</button>
+                        <button class="platform-cost-breakdown-tab" type="button" data-cost-view="models">By Model</button>
+                    </div>
+                    <div class="range-selector platform-cost-breakdown-range-selector" role="group" aria-label="Token cost breakdown time range">
+                        <button class="platform-cost-breakdown-range-btn" type="button" data-range="1h">1h</button>
+                        <button class="platform-cost-breakdown-range-btn" type="button" data-range="6h">6h</button>
+                        <button class="platform-cost-breakdown-range-btn" type="button" data-range="24h">24h</button>
+                        <button class="platform-cost-breakdown-range-btn active" type="button" data-range="7d">7d</button>
+                        <button class="platform-cost-breakdown-range-btn" type="button" data-range="30d">30d</button>
+                        <button class="platform-cost-breakdown-range-btn" type="button" data-range="all">All</button>
+                    </div>
+                </div>
+            </header>
             <div class="table-wrapper platform-cost-models">
                 <table class="data-table" id="platform-cost-models-table">
                     <thead id="platform-cost-models-thead">
@@ -571,45 +658,6 @@
             <div class="insights-stats" id="insights-stats"></div>
             <div class="insights-cards" id="insights-cards">
                 <p class="insight-text">Loading insights...</p>
-            </div>
-        </section>
-        {{end}}
-
-        {{if ne .CurrentProvider "both"}}
-        <section class="chart-section">
-            <header class="section-header">
-                <h3 class="section-title">
-                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 3v18h18"/>
-                        <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
-                    </svg>
-                    {{if eq .CurrentProvider "api-integrations"}}Cost Over Time{{else}}Usage Graphs{{end}}
-                </h3>
-                <div class="chart-controls">
-                    {{if eq .CurrentProvider "api-integrations"}}
-                    <select class="page-size-select" id="api-integrations-metric-select" aria-label="API integrations chart metric">
-                        <option value="tokenPerCall">Tokens per Request</option>
-                        <option value="requestCount">Requests</option>
-                        <option value="accumulatedTokens">Accumulated Token Use</option>
-                        <option value="totalCostUsd">Estimated Cost</option>
-                    </select>
-                    {{end}}
-                    <div class="range-selector graph-mode-toggle" id="chart-mode-select" role="group" aria-label="Graph style">
-                        <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative">Cumulative</button>
-                        <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket">Per Period</button>
-                    </div>
-                    <div class="range-selector" role="group" aria-label="Time range">
-                        <button class="range-btn" data-range="1h">1h</button>
-                        <button class="range-btn active" data-range="6h">6h</button>
-                        <button class="range-btn" data-range="24h">24h</button>
-                        <button class="range-btn" data-range="7d">7d</button>
-                        <button class="range-btn" data-range="30d">30d</button>
-                    </div>
-                </div>
-            </header>
-            <div class="chart-container">
-                <canvas id="usage-chart"></canvas>
-                <div class="chart-empty-state" id="usage-chart-empty" hidden aria-live="polite"></div>
             </div>
         </section>
         {{end}}
@@ -761,8 +809,9 @@
                             {{else if eq .CurrentProvider "zai"}}
                             <th data-sort-key="snapshots" role="button" tabindex="0">Snapshots <span class="sort-arrow"></span></th>
                             {{else if eq .CurrentProvider "codex"}}
-                            <th data-sort-key="sub" role="button" tabindex="0" id="codex-session-col-0">5-Hour Limit <span class="sort-arrow"></span></th>
-                            <th data-sort-key="search" role="button" tabindex="0" id="codex-session-col-1">Weekly All-Model <span class="sort-arrow"></span></th>
+                            <th data-sort-key="sub" role="button" tabindex="0" id="codex-session-col-0">5-Hour <span class="sort-arrow"></span></th>
+                            <th data-sort-key="search" role="button" tabindex="0" id="codex-session-col-1">Weekly <span class="sort-arrow"></span></th>
+                            <th data-sort-key="tool" role="button" tabindex="0" id="codex-session-col-2">Review <span class="sort-arrow"></span></th>
                             {{else if eq .CurrentProvider "minimax"}}
                             <th data-sort-key="sub" role="button" tabindex="0">Peak Requests <span class="sort-arrow"></span></th>
                             <th data-sort-key="search" role="button" tabindex="0">Requests Used <span class="sort-arrow"></span></th>
@@ -791,7 +840,7 @@
                             {{if eq .CurrentProvider "zai"}}
                             <td colspan="5" class="empty-state">No sessions recorded yet.</td>
                             {{else if eq .CurrentProvider "codex"}}
-                            <td colspan="6" class="empty-state">No sessions recorded yet.</td>
+                            <td colspan="7" class="empty-state">No sessions recorded yet.</td>
                             {{else if eq .CurrentProvider "minimax"}}
                             <td colspan="6" class="empty-state">No sessions recorded yet.</td>
                             {{else if eq .CurrentProvider "antigravity"}}

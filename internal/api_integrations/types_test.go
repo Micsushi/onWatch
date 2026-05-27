@@ -104,3 +104,19 @@ func TestParseUsageEventLine_FingerprintDependsOnSourcePath(t *testing.T) {
 		t.Fatal("expected different fingerprints for different source files")
 	}
 }
+
+func TestParseUsageEventLine_FingerprintUsesStableEventKey(t *testing.T) {
+	line := []byte(`{"ts":"2026-04-03T12:00:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":3,"completion_tokens":2,"metadata":{"event_key":"stable-agent-event"}}`)
+
+	a, err := ParseUsageEventLine(line, "/tmp/api-integrations/agent-usage-2026-04-03.jsonl")
+	if err != nil {
+		t.Fatalf("ParseUsageEventLine(a): %v", err)
+	}
+	b, err := ParseUsageEventLine(line, "/tmp/api-integrations/agent-usage-2026-04-04.jsonl")
+	if err != nil {
+		t.Fatalf("ParseUsageEventLine(b): %v", err)
+	}
+	if a.Fingerprint != b.Fingerprint {
+		t.Fatalf("expected matching fingerprints for stable event key: %s != %s", a.Fingerprint, b.Fingerprint)
+	}
+}

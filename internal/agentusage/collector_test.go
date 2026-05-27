@@ -27,7 +27,7 @@ func TestCollectorWritesNormalizedJSONLAndSkipsAlreadySeenEvents(t *testing.T) {
 		t.Fatalf("CollectOnce() second error = %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(outDir, "agent-usage.jsonl"))
+	data, err := os.ReadFile(filepath.Join(outDir, "agent-usage-"+time.Now().UTC().Format("2006-01-02")+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestCollectorOnlyRescansChangedFilesAfterInitialPass(t *testing.T) {
 		t.Fatalf("CollectOnce() changed error = %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(outDir, "agent-usage.jsonl"))
+	data, err := os.ReadFile(filepath.Join(outDir, "agent-usage-"+time.Now().UTC().Format("2006-01-02")+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestCollectorInitialBackfillIncludesOldArchivedSource(t *testing.T) {
 	if err := withoutBackfill.CollectOnce(); err != nil {
 		t.Fatalf("CollectOnce() without backfill error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "without", "agent-usage.jsonl")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "without", "agent-usage-"+time.Now().UTC().Format("2006-01-02")+".jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("old non-backfill source wrote output, err=%v", err)
 	}
 
@@ -117,11 +117,42 @@ func TestCollectorInitialBackfillIncludesOldArchivedSource(t *testing.T) {
 	if err := withBackfill.CollectOnce(); err != nil {
 		t.Fatalf("CollectOnce() with backfill error = %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "with", "agent-usage.jsonl"))
+	data, err := os.ReadFile(filepath.Join(dir, "with", "agent-usage-"+time.Now().UTC().Format("2006-01-02")+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(data), `"ts":"2026-04-04T12:00:01Z"`) {
 		t.Fatalf("backfill output missing archived event timestamp: %s", string(data))
+	}
+}
+
+func TestCollectorPersistsSeenKeysWhenQueueFileIsRemoved(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "old-codex.jsonl")
+	writeFixture(t, source, []string{
+		`{"type":"turn_context","timestamp":"2026-04-04T12:00:00Z","payload":{"model":"gpt-5.5","effort":"medium"}}`,
+		`{"type":"event_msg","timestamp":"2026-04-04T12:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}`,
+	})
+	outDir := filepath.Join(dir, "out")
+
+	first := NewCollector(outDir, testPricing(t), []Source{
+		{Kind: SourceCodex, Path: source, InitialBackfill: true},
+	}, nil)
+	if err := first.CollectOnce(); err != nil {
+		t.Fatalf("CollectOnce(first) error = %v", err)
+	}
+	outPath := filepath.Join(outDir, "agent-usage-"+time.Now().UTC().Format("2006-01-02")+".jsonl")
+	if err := os.Remove(outPath); err != nil {
+		t.Fatalf("Remove queue file: %v", err)
+	}
+
+	second := NewCollector(outDir, testPricing(t), []Source{
+		{Kind: SourceCodex, Path: source, InitialBackfill: true},
+	}, nil)
+	if err := second.CollectOnce(); err != nil {
+		t.Fatalf("CollectOnce(second) error = %v", err)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("expected removed queue file to stay absent after seen-key reload, err=%v", err)
 	}
 }

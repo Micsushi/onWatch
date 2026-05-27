@@ -2176,6 +2176,19 @@ func (s *Store) CreateSystemAlert(provider, alertType, title, message, severity 
 	return res.LastInsertId()
 }
 
+// HasActiveSystemAlert checks if an equivalent non-dismissed system alert exists.
+func (s *Store) HasActiveSystemAlert(provider, alertType, title, message string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM system_alerts
+		WHERE provider = ? AND alert_type = ? AND title = ? AND message = ? AND dismissed_at IS NULL
+	`, provider, alertType, title, message).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("store.HasActiveSystemAlert: %w", err)
+	}
+	return count > 0, nil
+}
+
 // GetActiveSystemAlerts returns all non-dismissed alerts, ordered by most recent first.
 func (s *Store) GetActiveSystemAlerts() ([]SystemAlert, error) {
 	rows, err := s.db.Query(`

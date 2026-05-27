@@ -841,6 +841,7 @@ func TestHandler_parseTimeRange(t *testing.T) {
 		{"24h", 24 * time.Hour, false},
 		{"7d", 7 * 24 * time.Hour, false},
 		{"30d", 30 * 24 * time.Hour, false},
+		{"all", 100 * 365 * 24 * time.Hour, false},
 		{"invalid", 0, true},
 		{"undefined", 0, true},
 		{"", 6 * time.Hour, false},
@@ -3269,6 +3270,60 @@ func TestHandler_AnthropicUtilStatus(t *testing.T) {
 	}
 }
 
+func TestApplyWeeklyPaceStatus(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(4 * 24 * time.Hour)
+
+	tests := []struct {
+		name        string
+		utilization float64
+		resetIn     time.Duration
+		status      string
+		label       string
+	}{
+		{name: "on pace", utilization: 43, status: "healthy", label: "On pace"},
+		{name: "over by one day", utilization: 58, status: "warning", label: "Over pace +15%"},
+		{name: "over by two days", utilization: 72, status: "critical", label: "Over pace +29%"},
+		{name: "under by one day", utilization: 28, status: "underuse", label: "Under pace -15%"},
+		{name: "under by hourly reset", utilization: 56, resetIn: 33 * time.Hour, status: "underuse", label: "Under pace -24%"},
+		{name: "weekly prefix", utilization: 58, status: "warning", label: "Over pace +15%"},
+		{name: "wkly prefix", utilization: 58, status: "warning", label: "Over pace +15%"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qMap := map[string]interface{}{"status": "healthy"}
+			quotaName := "seven_day"
+			if tt.name == "weekly prefix" {
+				quotaName = "weekly_MiniMax-M2"
+			} else if tt.name == "wkly prefix" {
+				quotaName = "wkly_MiniMax-M2"
+			}
+			resetAt := reset
+			if tt.resetIn > 0 {
+				resetAt = now.Add(tt.resetIn)
+			}
+			applyWeeklyPaceStatus(qMap, quotaName, tt.utilization, resetAt, now)
+			if got := qMap["status"]; got != tt.status {
+				t.Fatalf("status = %v, want %s", got, tt.status)
+			}
+			if got := qMap["statusLabel"]; got != tt.label {
+				t.Fatalf("statusLabel = %v, want %s", got, tt.label)
+			}
+		})
+	}
+
+	qMap := map[string]interface{}{"status": "warning"}
+	applyWeeklyPaceStatus(qMap, "five_hour", 80, reset, now)
+	if got := qMap["status"]; got != "warning" {
+		t.Fatalf("non-weekly status = %v, want warning", got)
+	}
+	if _, exists := qMap["statusLabel"]; exists {
+		t.Fatal("non-weekly quota should not get a pace status label")
+	}
+}
+
 func TestHandler_Insights_AnthropicEmptyDB(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")
@@ -3298,6 +3353,7 @@ func TestHandler_Insights_AnthropicEmptyDB(t *testing.T) {
 		t.Errorf("expected 'Getting Started' insight, got %q", response.Insights[0].Title)
 	}
 }
+
 // Login / Logout Tests
 func TestHandler_Login_GET_RendersForm(t *testing.T) {
 	t.Parallel()
@@ -3484,6 +3540,7 @@ func TestHandler_SettingsPage_RendersHTML(t *testing.T) {
 		t.Error("expected SMTP protocol hint in settings page")
 	}
 }
+
 // Password Change Tests
 func TestHandler_ChangePassword_Success(t *testing.T) {
 	t.Parallel()
@@ -3640,6 +3697,7 @@ func TestHandler_ChangePassword_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected status 405, got %d", rr.Code)
 	}
 }
+
 // Settings CRUD Tests
 func TestHandler_GetSettings_ReturnsTimezoneAndHiddenInsights(t *testing.T) {
 	t.Parallel()
@@ -4020,6 +4078,7 @@ func TestHandler_UpdateSettings_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected status 405, got %d", rr.Code)
 	}
 }
+
 // SMTP Test Handler Tests
 // mockNotifier implements the Notifier interface for testing.
 type mockNotifier struct {
@@ -4113,6 +4172,7 @@ func TestHandler_SMTPTest_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected status 405, got %d", rr.Code)
 	}
 }
+
 // CycleOverview Tests
 func TestHandler_CycleOverview_Synthetic(t *testing.T) {
 	t.Parallel()
@@ -4552,6 +4612,7 @@ func TestHandler_CycleOverview_AntigravityReturnsSingleActiveCycleRowPerGroup(t 
 		t.Fatalf("expected at most 1 active cycle row for antigravity group, got %d", activeCount)
 	}
 }
+
 // Logging History Handler Tests
 func TestHandler_LoggingHistory_AntigravityReturnsSnapshots(t *testing.T) {
 	t.Parallel()
@@ -5092,6 +5153,7 @@ func TestHandler_LoggingHistory_UnknownProviderReturnsError(t *testing.T) {
 		t.Fatalf("unexpected error message: %q", response["error"])
 	}
 }
+
 // Update Handler Tests
 func TestHandler_CheckUpdate_NoUpdater(t *testing.T) {
 	t.Parallel()
@@ -5150,6 +5212,7 @@ func TestHandler_ApplyUpdate_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected status 405, got %d", rr.Code)
 	}
 }
+
 // Anthropic Handler Tests
 func TestHandler_Current_Anthropic_WithData(t *testing.T) {
 	t.Parallel()
@@ -5492,6 +5555,7 @@ func TestBuildAntigravityInsights_RangeFiltersOldCycles(t *testing.T) {
 		t.Fatal("expected at least some insights for 1d range")
 	}
 }
+
 // Dashboard With Provider Param Tests
 func TestHandler_Dashboard_WithProviderParam(t *testing.T) {
 	t.Parallel()
@@ -5548,6 +5612,7 @@ func TestHandler_Dashboard_NotFound_For_NonRootPath(t *testing.T) {
 		t.Errorf("expected status 404 for non-root path, got %d", rr.Code)
 	}
 }
+
 // Utility Function Tests
 func TestHandler_formatDuration(t *testing.T) {
 	t.Parallel()
@@ -5615,6 +5680,7 @@ func TestHandler_parseInsightsRange(t *testing.T) {
 		})
 	}
 }
+
 // Security Tests: MaxBytesReader and Error Sanitization
 func TestHandler_MaxBytesReader_RejectsLargeBody(t *testing.T) {
 	t.Parallel()
@@ -5687,6 +5753,7 @@ func TestHandler_ApplyUpdate_SanitizesErrors(t *testing.T) {
 		t.Errorf("expected generic error message, got %q", response["error"])
 	}
 }
+
 // Security Tests: Login Error Whitelist
 func TestLogin_WhitelistsErrorCodes(t *testing.T) {
 	t.Parallel()
@@ -5762,6 +5829,7 @@ func TestLogin_RejectsUnknownErrorCode(t *testing.T) {
 		t.Error("error-message div should not be rendered for unknown error codes")
 	}
 }
+
 // New coverage tests: helper functions
 func createTestConfigWithCopilot() *config.Config {
 	return &config.Config{
@@ -6015,6 +6083,7 @@ func TestParseCycleOverviewLimit(t *testing.T) {
 		})
 	}
 }
+
 // Billing period helper tests
 func TestGroupBillingPeriods_Empty(t *testing.T) {
 	t.Parallel()
@@ -6133,6 +6202,7 @@ func TestCycleSumConsumptionSince(t *testing.T) {
 		t.Errorf("expected 100, got %.1f", result)
 	}
 }
+
 // Anthropic billing period helper tests
 func TestGroupAnthropicBillingPeriods_Empty(t *testing.T) {
 	t.Parallel()
@@ -6231,6 +6301,7 @@ func TestAnthropicBillingPeriodPeak(t *testing.T) {
 		t.Errorf("expected peak 80.0, got %.1f", result)
 	}
 }
+
 // anthropicCycleToMap tests
 func TestAnthropicCycleToMap(t *testing.T) {
 	t.Parallel()
@@ -6283,6 +6354,7 @@ func TestAnthropicCycleToMap_NilEnds(t *testing.T) {
 		t.Error("expected renewsAt to not be set when ResetsAt is nil")
 	}
 }
+
 // buildZaiTrackerSummaryResponse tests
 func TestBuildZaiTrackerSummaryResponse_WithRenewsAt(t *testing.T) {
 	t.Parallel()
@@ -6339,6 +6411,7 @@ func TestBuildZaiTrackerSummaryResponse_WithoutRenewsAt(t *testing.T) {
 		t.Errorf("expected trackingSince nil, got %v", result["trackingSince"])
 	}
 }
+
 // Push notification handler tests
 type mockNotifierWithVAPID struct {
 	sendTestErr    error
@@ -6647,6 +6720,7 @@ func TestHandler_PushTest_SendFailure(t *testing.T) {
 		t.Errorf("expected success false, got %v", response["success"])
 	}
 }
+
 // "Both" handler tests (cyclesBoth, summaryBoth, insightsBoth)
 func TestHandler_DiscordTest_Success(t *testing.T) {
 	t.Parallel()
@@ -6914,6 +6988,7 @@ func TestHandler_InsightsBoth_WithAllProviders(t *testing.T) {
 		}
 	}
 }
+
 // Copilot handler tests
 func TestHandler_Current_Copilot_EmptyStore(t *testing.T) {
 	t.Parallel()
@@ -7257,6 +7332,7 @@ func TestCopilotInsightSeverity(t *testing.T) {
 		})
 	}
 }
+
 // Antigravity handler tests
 func TestAntigravityUsageStatus(t *testing.T) {
 	t.Parallel()
@@ -7516,6 +7592,7 @@ func TestTruncateName(t *testing.T) {
 		})
 	}
 }
+
 // UpdateSettings edge case tests
 func TestHandler_UpdateSettings_SMTP_InvalidPort(t *testing.T) {
 	t.Parallel()
@@ -7596,6 +7673,7 @@ func TestHandler_UpdateSettings_EmptyTimezone(t *testing.T) {
 		t.Errorf("expected status 200 for empty timezone (clear), got %d", rr.Code)
 	}
 }
+
 // Login with rate limiter tests
 func TestHandler_LoginPost_RateLimited(t *testing.T) {
 	t.Parallel()
@@ -7662,6 +7740,7 @@ func TestHandler_LoginPost_FailedAttemptRecorded(t *testing.T) {
 		t.Errorf("expected redirect to invalid error, got %s", location)
 	}
 }
+
 // Providers endpoint coverage tests
 func TestHandler_Providers_WithVisibility(t *testing.T) {
 	t.Parallel()
@@ -7823,6 +7902,7 @@ func TestHandler_Providers_WithRequestedProvider(t *testing.T) {
 		t.Errorf("expected current provider zai, got %v", response["current"])
 	}
 }
+
 // getHiddenInsightKeys tests
 func TestGetHiddenInsightKeys_NilStore(t *testing.T) {
 	t.Parallel()
@@ -7883,6 +7963,7 @@ func TestGetHiddenInsightKeys_InvalidJSON(t *testing.T) {
 		t.Errorf("expected empty map for invalid JSON, got %v", hidden)
 	}
 }
+
 // zaiToolCallsPercent tests
 func TestZaiToolCallsPercent_NoDetails(t *testing.T) {
 	t.Parallel()
@@ -7923,6 +8004,7 @@ func TestZaiToolCallsPercent_InvalidJSON(t *testing.T) {
 		t.Errorf("expected 0 for invalid JSON, got %.1f", result)
 	}
 }
+
 // codexQuotaInsightLabel tests
 func TestCodexQuotaInsightLabel(t *testing.T) {
 	t.Parallel()
@@ -7943,6 +8025,7 @@ func TestCodexQuotaInsightLabel(t *testing.T) {
 		})
 	}
 }
+
 // History "both" coverage tests
 func TestHandler_HistoryBoth_WithAllProviders(t *testing.T) {
 	t.Parallel()
@@ -7987,6 +8070,7 @@ func TestHandler_HistoryBoth_InvalidRange(t *testing.T) {
 		t.Errorf("expected status 400 for invalid range, got %d", rr.Code)
 	}
 }
+
 // CycleOverview Copilot tests
 func TestHandler_CycleOverview_Copilot_EmptyStore(t *testing.T) {
 	t.Parallel()
@@ -8004,6 +8088,7 @@ func TestHandler_CycleOverview_Copilot_EmptyStore(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
+
 // Insights with data for Synthetic, Zai, Anthropic coverage
 func TestHandler_Insights_Synthetic_WithRichData(t *testing.T) {
 	t.Parallel()
@@ -8116,6 +8201,7 @@ func TestHandler_Insights_Anthropic_WithTrackerData(t *testing.T) {
 		t.Error("expected stats key in response")
 	}
 }
+
 // Copilot & Antigravity summary handler tests
 func TestHandler_Summary_Antigravity_EmptyStore(t *testing.T) {
 	t.Parallel()
@@ -8141,6 +8227,7 @@ func TestHandler_Summary_Antigravity_EmptyStore(t *testing.T) {
 		t.Fatalf("expected empty response map for no snapshots, got %v", response)
 	}
 }
+
 // SMTP settings edge cases in UpdateSettings
 func TestHandler_UpdateSettings_SMTP_ValidConfig(t *testing.T) {
 	t.Parallel()
@@ -8218,6 +8305,7 @@ func TestHandler_UpdateSettings_Notifications_PushChannel(t *testing.T) {
 		t.Errorf("expected status 200, got %d. Body: %s", rr.Code, rr.Body.String())
 	}
 }
+
 // computeAnthropicRate coverage (via insights with enough data)
 func TestHandler_Insights_Anthropic_ComputeRate(t *testing.T) {
 	t.Parallel()
@@ -8270,6 +8358,7 @@ func TestHandler_Insights_Anthropic_ComputeRate(t *testing.T) {
 		t.Error("expected non-empty insights for anthropic with data")
 	}
 }
+
 // History Antigravity & Copilot with data tests
 func TestHandler_History_Antigravity_EmptyStore(t *testing.T) {
 	t.Parallel()
@@ -8365,6 +8454,7 @@ func TestHandler_History_Antigravity_InvalidRange(t *testing.T) {
 		t.Errorf("expected status 400, got %d", rr.Code)
 	}
 }
+
 // Deep insights coverage tests with rich data
 func TestHandler_BuildSyntheticInsights_WithCycles(t *testing.T) {
 	t.Parallel()
@@ -8664,6 +8754,7 @@ func TestComputeAnthropicRate_FallbackToTracker(t *testing.T) {
 		t.Error("expected positive TimeToExhaust")
 	}
 }
+
 // Copilot & Codex with tracker data (summaryMap coverage)
 func TestHandler_Summary_Copilot_WithTrackerData(t *testing.T) {
 	t.Parallel()
@@ -8745,6 +8836,7 @@ func TestBuildCopilotSummaryResponse_NoResetDate(t *testing.T) {
 		t.Error("expected nil trackingSince for zero time")
 	}
 }
+
 // Cycles Copilot with data
 func TestHandler_Cycles_Copilot_WithData(t *testing.T) {
 	t.Parallel()
@@ -8780,6 +8872,7 @@ func TestHandler_Cycles_Copilot_WithData(t *testing.T) {
 		t.Error("expected non-empty cycles response with data")
 	}
 }
+
 // buildAnthropicSummaryResponse coverage
 func TestBuildAnthropicSummaryResponse(t *testing.T) {
 	t.Parallel()
@@ -8828,6 +8921,7 @@ func TestBuildAnthropicSummaryResponse_NoResetsAt(t *testing.T) {
 		t.Error("expected nil trackingSince for zero time")
 	}
 }
+
 // CycleOverview with Antigravity (normalizeAntigravityGroupBy)
 func TestHandler_CycleOverview_Antigravity_EmptyStore(t *testing.T) {
 	t.Parallel()
@@ -8874,6 +8968,7 @@ func TestHandler_CycleOverview_Copilot_WithData(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rr.Code)
 	}
 }
+
 // UpdateSettings SMTP with full flow coverage
 func TestHandler_UpdateSettings_SMTP_InvalidSMTPJSON(t *testing.T) {
 	t.Parallel()
@@ -8946,6 +9041,7 @@ func TestHandler_UpdateSettings_NullHiddenInsights(t *testing.T) {
 		t.Errorf("expected status 200 for null hidden_insights, got %d", rr.Code)
 	}
 }
+
 // historyBoth with data coverage
 func TestHandler_HistoryBoth_WithSyntheticData(t *testing.T) {
 	t.Parallel()
@@ -8982,6 +9078,7 @@ func TestHandler_HistoryBoth_WithSyntheticData(t *testing.T) {
 		t.Error("expected non-empty synthetic data in historyBoth")
 	}
 }
+
 // buildCopilotInsights with copilot data for deeper coverage
 func TestHandler_BuildCopilotInsights_WithQuotaData(t *testing.T) {
 	t.Parallel()
@@ -9013,6 +9110,7 @@ func TestHandler_BuildCopilotInsights_WithQuotaData(t *testing.T) {
 		t.Error("expected non-empty stats")
 	}
 }
+
 // Codex build insights with data
 func TestHandler_BuildCodexInsights_WithData(t *testing.T) {
 	t.Parallel()
@@ -9045,6 +9143,7 @@ func TestHandler_BuildCodexInsights_WithData(t *testing.T) {
 		t.Error("expected non-empty stats for codex with data")
 	}
 }
+
 // Synthetic Insights with cycle data
 func TestHandler_BuildSyntheticInsights_WithCycleData(t *testing.T) {
 	t.Parallel()
@@ -9231,6 +9330,7 @@ func TestHandler_BuildSyntheticInsights_HiddenKeys_Coverage(t *testing.T) {
 		}
 	}
 }
+
 // Anthropic Insights with cycle data
 func TestHandler_BuildAnthropicInsights_WithCycleData(t *testing.T) {
 	t.Parallel()
@@ -9323,6 +9423,7 @@ func TestHandler_BuildAnthropicInsights_HiddenForecasts(t *testing.T) {
 		}
 	}
 }
+
 // ChangePassword handler
 func TestHandler_ChangePassword_Success_Coverage(t *testing.T) {
 	t.Parallel()
@@ -9443,6 +9544,7 @@ func TestHandler_ChangePassword_MethodNotAllowed_Coverage(t *testing.T) {
 		t.Errorf("expected 405, got %d", w.Code)
 	}
 }
+
 // Cycles endpoints with data
 func TestHandler_CyclesSynthetic_WithData(t *testing.T) {
 	t.Parallel()
@@ -9534,6 +9636,7 @@ func TestHandler_CyclesZai_InvalidType(t *testing.T) {
 		t.Errorf("expected 400, got %d", w.Code)
 	}
 }
+
 // Z.ai summary and current with store fallback
 func TestHandler_BuildZaiSummaryMap_StoreFallback(t *testing.T) {
 	t.Parallel()
@@ -9612,6 +9715,7 @@ func TestHandler_BuildZaiCurrent_WithStoreData(t *testing.T) {
 		t.Error("expected usageDetails in tool calls response")
 	}
 }
+
 // UpdateSettings SMTP branch with encryption
 func TestHandler_UpdateSettings_SMTPInvalidPort(t *testing.T) {
 	t.Parallel()
@@ -9873,6 +9977,7 @@ func TestHandler_UpdateSettings_StoreNotAvailable(t *testing.T) {
 		t.Errorf("expected 500 for no store, got %d", w.Code)
 	}
 }
+
 // ValidateToken edge cases
 func TestSessionStore_ValidateToken_Expired(t *testing.T) {
 	t.Parallel()
@@ -9969,6 +10074,7 @@ func TestSessionStore_EvictExpiredTokens(t *testing.T) {
 		t.Error("expected expired_2 to be evicted")
 	}
 }
+
 // SessionAuthMiddleware basic auth path
 func TestSessionAuthMiddleware_BasicAuth(t *testing.T) {
 	t.Parallel()
@@ -10118,6 +10224,7 @@ func TestSessionAuthMiddleware_SessionCookie(t *testing.T) {
 		t.Errorf("expected 200 for valid session cookie, got %d", w.Code)
 	}
 }
+
 // CheckUpdate and ApplyUpdate
 func TestHandler_CheckUpdate_MethodNotAllowed_Coverage(t *testing.T) {
 	t.Parallel()
@@ -10148,6 +10255,7 @@ func TestHandler_ApplyUpdate_MethodNotAllowed_Coverage(t *testing.T) {
 		t.Errorf("expected 405, got %d", w.Code)
 	}
 }
+
 // CycleOverview endpoints
 func TestHandler_CycleOverview_Copilot(t *testing.T) {
 	t.Parallel()
@@ -10221,6 +10329,7 @@ func TestHandler_CycleOverview_WithLargeLimit(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
+
 // Logging history edge cases
 func TestHandler_LoggingHistory_Copilot(t *testing.T) {
 	t.Parallel()
@@ -10275,6 +10384,7 @@ func TestHandler_LoggingHistory_Antigravity(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
+
 // LoginRateLimiter eviction and edge cases
 func TestLoginRateLimiter_EvictStaleEntries_AllNonBlocked(t *testing.T) {
 	t.Parallel()
@@ -10311,6 +10421,7 @@ func TestLoginRateLimiter_Clear(t *testing.T) {
 		t.Error("expected IP to not be blocked after clear")
 	}
 }
+
 // computeAnthropicRate with derived values
 func TestComputeAnthropicRate_ExhaustsBeforeReset(t *testing.T) {
 	t.Parallel()
@@ -10357,6 +10468,7 @@ func TestComputeAnthropicRate_ExhaustsBeforeReset(t *testing.T) {
 		t.Error("expected positive TimeToReset")
 	}
 }
+
 // percentUsed helper
 func TestPercentUsed(t *testing.T) {
 	t.Parallel()
@@ -10378,6 +10490,7 @@ func TestPercentUsed(t *testing.T) {
 		}
 	}
 }
+
 // buildZaiToolCallsResponse with critical/warning status
 func TestBuildZaiToolCallsResponse_CriticalStatus(t *testing.T) {
 	t.Parallel()
@@ -10441,6 +10554,7 @@ func TestBuildZaiToolCallsResponse_EmptyDetails(t *testing.T) {
 		t.Errorf("expected 0 usage for empty details, got %v", result["usage"])
 	}
 }
+
 // History endpoints with data
 func TestHandler_HistoryZai_WithData(t *testing.T) {
 	t.Parallel()
@@ -10510,6 +10624,7 @@ func TestHandler_HistoryAnthropic_WithData(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
+
 // Sessions endpoint with data
 func TestHandler_Sessions_WithData(t *testing.T) {
 	t.Parallel()
@@ -10546,6 +10661,7 @@ func TestHandler_Sessions_Both(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
+
 // codexPlanLabel helper
 func TestCodexPlanLabel(t *testing.T) {
 	t.Parallel()
@@ -10565,6 +10681,7 @@ func TestCodexPlanLabel(t *testing.T) {
 		}
 	}
 }
+
 // buildInsight helper with all severity levels
 func TestBuildInsight_AllSeverities(t *testing.T) {
 	t.Parallel()
@@ -10590,6 +10707,7 @@ func TestBuildInsight_AllSeverities(t *testing.T) {
 		}
 	}
 }
+
 // getProviderFromRequest edge cases
 func TestGetProviderFromRequest_DefaultWithMultipleProviders(t *testing.T) {
 	t.Parallel()
@@ -10609,6 +10727,7 @@ func TestGetProviderFromRequest_DefaultWithMultipleProviders(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
+
 // formatDuration helper
 func TestFormatDuration(t *testing.T) {
 	t.Parallel()
@@ -10630,6 +10749,7 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
 // compactNum helper
 func TestCompactNum_Coverage(t *testing.T) {
 	t.Parallel()
@@ -10650,6 +10770,7 @@ func TestCompactNum_Coverage(t *testing.T) {
 		}
 	}
 }
+
 // truncateName helper
 func TestTruncateName_Coverage(t *testing.T) {
 	t.Parallel()
@@ -10664,6 +10785,7 @@ func TestTruncateName_Coverage(t *testing.T) {
 		t.Errorf("expected truncated name <= 33 chars, got %d", len(result))
 	}
 }
+
 // Copilot insights with tracker data
 func TestHandler_BuildCopilotInsights_WithTracker(t *testing.T) {
 	t.Parallel()
@@ -10695,6 +10817,7 @@ func TestHandler_BuildCopilotInsights_WithTracker(t *testing.T) {
 		t.Error("expected non-empty stats for copilot with data")
 	}
 }
+
 // Anthropic billing period helpers
 func TestGroupAnthropicBillingPeriods(t *testing.T) {
 	t.Parallel()

@@ -986,6 +986,8 @@ func parseTimeRange(rangeStr string) (time.Duration, error) {
 		return 7 * 24 * time.Hour, nil
 	case "30d":
 		return 30 * 24 * time.Hour, nil
+	case "all":
+		return 100 * 365 * 24 * time.Hour, nil
 	default:
 		return 0, fmt.Errorf("invalid range: %s", rangeStr)
 	}
@@ -2298,6 +2300,7 @@ func buildQuotaResponse(name, description string, info api.QuotaInfo, tr *tracke
 		"timeUntilReset":        formatDuration(timeUntilReset),
 		"timeUntilResetSeconds": int64(timeUntilReset.Seconds()),
 	}
+	applyWeeklyPaceStatus(result, quotaType, percent, info.RenewsAt, time.Now().UTC())
 
 	// Get summary for rate and projection
 	if tr != nil {
@@ -5066,6 +5069,7 @@ func (h *Handler) buildAnthropicCurrent() map[string]interface{} {
 			qMap["resetsAt"] = q.ResetsAt.Format(time.RFC3339)
 			qMap["timeUntilReset"] = formatDuration(timeUntilReset)
 			qMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+			applyWeeklyPaceStatus(qMap, q.Name, q.Utilization, *q.ResetsAt, now)
 		}
 		// Enrich with tracker data
 		if h.anthropicTracker != nil {
@@ -5119,6 +5123,7 @@ func (h *Handler) buildAnthropicCurrentFallback(response map[string]interface{})
 			qMap["resetsAt"] = q.ResetsAt.Format(time.RFC3339)
 			qMap["timeUntilReset"] = formatDuration(timeUntilReset)
 			qMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+			applyWeeklyPaceStatus(qMap, q.Name, q.Utilization, *q.ResetsAt, now)
 		}
 		if h.anthropicTracker != nil {
 			if summary, err := h.anthropicTracker.UsageSummary(q.Name); err == nil && summary != nil {
@@ -5144,6 +5149,62 @@ func anthropicUtilStatus(util float64) string {
 		return "warning"
 	default:
 		return "healthy"
+	}
+}
+
+const (
+	weeklyPaceWindow           = 7 * 24 * time.Hour
+	weeklyPaceWarningThreshold = 100.0 / 7.0
+)
+
+func applyWeeklyPaceStatus(qMap map[string]interface{}, quotaName string, utilization float64, resetsAt time.Time, now time.Time) {
+	if qMap == nil || !isWeeklyPaceQuota(quotaName) {
+		return
+	}
+
+	timeLeft := resetsAt.Sub(now)
+	if timeLeft < 0 {
+		timeLeft = 0
+	}
+	if timeLeft > weeklyPaceWindow {
+		timeLeft = weeklyPaceWindow
+	}
+
+	expectedUsed := 100 - (float64(timeLeft) / float64(weeklyPaceWindow) * 100)
+	if expectedUsed < 0 {
+		expectedUsed = 0
+	}
+	if expectedUsed > 100 {
+		expectedUsed = 100
+	}
+
+	delta := utilization - expectedUsed
+	qMap["paceExpectedUsed"] = expectedUsed
+	qMap["paceDelta"] = delta
+
+	switch {
+	case delta >= weeklyPaceWarningThreshold*2:
+		qMap["status"] = "critical"
+		qMap["statusLabel"] = fmt.Sprintf("Over pace +%.0f%%", delta)
+	case delta >= weeklyPaceWarningThreshold:
+		qMap["status"] = "warning"
+		qMap["statusLabel"] = fmt.Sprintf("Over pace +%.0f%%", delta)
+	case delta <= -weeklyPaceWarningThreshold:
+		qMap["status"] = "underuse"
+		qMap["statusLabel"] = fmt.Sprintf("Under pace %.0f%%", delta)
+	default:
+		qMap["status"] = "healthy"
+		qMap["statusLabel"] = "On pace"
+	}
+}
+
+func isWeeklyPaceQuota(quotaName string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(quotaName))
+	switch normalized {
+	case "seven_day", "seven_day_sonnet":
+		return true
+	default:
+		return strings.Contains(normalized, "weekly") || strings.HasPrefix(normalized, "wkly_")
 	}
 }
 
@@ -7227,6 +7288,7 @@ func (h *Handler) buildCopilotCurrent() map[string]interface{} {
 			qMap["resetDate"] = latest.ResetDate.Format(time.RFC3339)
 			qMap["timeUntilReset"] = formatDuration(timeUntilReset)
 			qMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+			applyWeeklyPaceStatus(qMap, q.Name, usagePercent, *latest.ResetDate, now)
 		}
 		// Enrich with tracker data
 		if h.copilotTracker != nil {
@@ -7794,6 +7856,7 @@ func (h *Handler) buildCodexCurrent(accountID int64) map[string]interface{} {
 			qMap["resetsAt"] = q.ResetsAt.Format(time.RFC3339)
 			qMap["timeUntilReset"] = formatDuration(timeUntilReset)
 			qMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+			applyWeeklyPaceStatus(qMap, normalizedName, q.Utilization, *q.ResetsAt, now)
 		}
 		if h.codexTracker != nil {
 			if summary, err := h.codexTracker.UsageSummary(accountID, q.Name); err == nil && summary != nil {
@@ -8833,6 +8896,7 @@ func (h *Handler) buildMiniMaxCurrent(accountID int64) map[string]interface{} {
 			q["resetAt"] = quota.WeeklyResetAt.Format(time.RFC3339)
 			q["timeUntilReset"] = formatDuration(timeUntilReset)
 			q["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+			applyWeeklyPaceStatus(q, fmt.Sprintf("weekly_%s", quota.ModelName), quota.WeeklyUsedPercent, *quota.WeeklyResetAt, now)
 		}
 		if quota.WeeklyWindowStart != nil {
 			q["windowStart"] = quota.WeeklyWindowStart.Format(time.RFC3339)

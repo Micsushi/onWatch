@@ -1,6 +1,8 @@
 package agentusage
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -75,6 +77,7 @@ func (e UsageEvent) ToAPIIntegrationLine() ([]byte, error) {
 		"output_tokens":               e.OutputTokens,
 		"reasoning_output_tokens":     e.ReasoningTokens,
 		"source_path":                 e.SourcePath,
+		"event_key":                   e.stableEventKey(ts, total),
 	}
 	if strings.TrimSpace(e.ReasoningEffort) != "" {
 		metadata["reasoning_effort"] = strings.TrimSpace(e.ReasoningEffort)
@@ -139,6 +142,32 @@ func (e UsageEvent) ToAPIIntegrationLine() ([]byte, error) {
 	}
 	line = append(line, '\n')
 	return line, nil
+}
+
+func (e UsageEvent) stableEventKey(ts time.Time, total int) string {
+	h := sha256.New()
+	writeStableEventPart(h, e.SourcePath)
+	writeStableEventPart(h, ts.UTC().Format(time.RFC3339Nano))
+	writeStableEventPart(h, e.Source)
+	writeStableEventPart(h, e.Provider)
+	writeStableEventPart(h, e.Account)
+	writeStableEventPart(h, e.SessionID)
+	writeStableEventPart(h, e.RequestID)
+	writeStableEventPart(h, e.Model)
+	writeStableEventPart(h, e.ReasoningEffort)
+	writeStableEventPart(h, e.Mode)
+	writeStableEventPart(h, fmt.Sprintf("%d", e.InputTokens))
+	writeStableEventPart(h, fmt.Sprintf("%d", e.CachedInputTokens))
+	writeStableEventPart(h, fmt.Sprintf("%d", e.CacheCreationTokens))
+	writeStableEventPart(h, fmt.Sprintf("%d", e.OutputTokens))
+	writeStableEventPart(h, fmt.Sprintf("%d", e.ReasoningTokens))
+	writeStableEventPart(h, fmt.Sprintf("%d", total))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func writeStableEventPart(h interface{ Write([]byte) (int, error) }, part string) {
+	_, _ = h.Write([]byte(strings.TrimSpace(part)))
+	_, _ = h.Write([]byte{0})
 }
 
 func integrationName(source string) string {

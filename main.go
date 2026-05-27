@@ -554,7 +554,7 @@ func printAgentUsageHelp() {
 	fmt.Println("Usage: onwatch agent-usage [OPTIONS]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  --out PATH       Directory to write agent-usage.jsonl (default: ~/.onwatch/api-integrations)")
+	fmt.Println("  --out PATH       Directory to write daily agent-usage-YYYY-MM-DD.jsonl queue files (default: ~/.onwatch/api-integrations)")
 	fmt.Println("  --home PATH      Home directory to scan for agent logs (default: current user home)")
 	fmt.Println("  --interval SEC   Collection interval in seconds (default: 15)")
 	fmt.Println("  --once           Collect once and exit")

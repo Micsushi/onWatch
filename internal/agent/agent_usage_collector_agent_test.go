@@ -31,7 +31,7 @@ func TestAgentUsageCollectorAgentRunCollectsImmediately(t *testing.T) {
 
 	deadline := time.After(2 * time.Second)
 	for {
-		if _, err := os.Stat(filepath.Join(outDir, "agent-usage.jsonl")); err == nil {
+		if _, err := os.Stat(filepath.Join(outDir, "agent-usage-"+time.Now().UTC().Format("2006-01-02")+".jsonl")); err == nil {
 			cancel()
 			break
 		}
