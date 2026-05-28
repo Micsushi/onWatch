@@ -26,13 +26,15 @@ func ParseClaudeUsageLine(line []byte, sourcePath string, pricing *PricingMap) (
 	if len(usage) == 0 {
 		usage = object(obj["usage"])
 	}
+	cacheCreation1h := intValue(object(usage["cache_creation"]), "ephemeral_1h_input_tokens", "1h_input_tokens")
 	counts := TokenCounts{
-		InputTokens:         intValue(usage, "input_tokens", "input"),
-		CachedInputTokens:   intValue(usage, "cache_read_input_tokens", "cached_input_tokens", "cached"),
-		CacheCreationTokens: intValue(usage, "cache_creation_input_tokens", "cache_creation_tokens"),
-		OutputTokens:        intValue(usage, "output_tokens", "output"),
-		ReasoningTokens:     intValue(usage, "reasoning_output_tokens", "reasoning_tokens", "thinking_tokens"),
-		TotalTokens:         intValue(usage, "total_tokens", "total"),
+		InputTokens:           intValue(usage, "input_tokens", "input"),
+		CachedInputTokens:     intValue(usage, "cache_read_input_tokens", "cached_input_tokens", "cached"),
+		CacheCreationTokens:   intValue(usage, "cache_creation_input_tokens", "cache_creation_tokens"),
+		CacheCreation1hTokens: cacheCreation1h,
+		OutputTokens:          intValue(usage, "output_tokens", "output"),
+		ReasoningTokens:       intValue(usage, "reasoning_output_tokens", "reasoning_tokens", "thinking_tokens"),
+		TotalTokens:           intValue(usage, "total_tokens", "total"),
 	}
 	if counts.TotalTokens <= 0 {
 		counts.TotalTokens = counts.InputTokens + counts.CachedInputTokens + counts.CacheCreationTokens + counts.OutputTokens + counts.ReasoningTokens
@@ -42,20 +44,21 @@ func ParseClaudeUsageLine(line []byte, sourcePath string, pricing *PricingMap) (
 		model = firstString(obj, "model", "model_name")
 	}
 	event := UsageEvent{
-		Timestamp:           timeValue(obj, "timestamp", "ts"),
-		Source:              "claude",
-		Provider:            "anthropic",
-		SessionID:           firstString(obj, "sessionId", "session_id"),
-		RequestID:           firstString(obj, "requestId", "request_id"),
-		Model:               model,
-		InputTokens:         counts.InputTokens,
-		CachedInputTokens:   counts.CachedInputTokens,
-		CacheCreationTokens: counts.CacheCreationTokens,
-		OutputTokens:        counts.OutputTokens,
-		ReasoningTokens:     counts.ReasoningTokens,
-		TotalTokens:         counts.TotalTokens,
-		CostUSD:             floatValue(obj, "costUSD", "cost_usd"),
-		SourcePath:          sourcePath,
+		Timestamp:             timeValue(obj, "timestamp", "ts"),
+		Source:                "claude",
+		Provider:              "anthropic",
+		SessionID:             firstString(obj, "sessionId", "session_id"),
+		RequestID:             firstString(obj, "requestId", "request_id"),
+		Model:                 model,
+		InputTokens:           counts.InputTokens,
+		CachedInputTokens:     counts.CachedInputTokens,
+		CacheCreationTokens:   counts.CacheCreationTokens,
+		CacheCreation1hTokens: counts.CacheCreation1hTokens,
+		OutputTokens:          counts.OutputTokens,
+		ReasoningTokens:       counts.ReasoningTokens,
+		TotalTokens:           counts.TotalTokens,
+		CostUSD:               floatValue(obj, "costUSD", "cost_usd"),
+		SourcePath:            sourcePath,
 	}
 	if event.SessionID == "" {
 		event.SessionID = strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
@@ -166,7 +169,6 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 			Mode:                currentMode,
 			FastMode:            currentFastMode,
 			SpeedMode:           speed.Mode,
-			SpeedMultiplier:     speed.Multiplier,
 			SpeedSource:         speed.Source,
 			InputTokens:         counts.InputTokens,
 			CachedInputTokens:   counts.CachedInputTokens,
@@ -176,12 +178,13 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 			TotalTokens:         counts.TotalTokens,
 			SourcePath:          path,
 		}
-		costOptions := CostOptions{ReasoningBilledAsOutput: true}
+		costOptions := CostOptions{}
 		if currentFastMode != nil && *currentFastMode {
 			costOptions.CostMultiplier = codexFastModeCostMultiplier(event.Model)
-		} else if speed.Multiplier > 0 {
-			costOptions.CostMultiplier = speed.Multiplier
+		} else if speed.Mode == "fast" {
+			costOptions.CostMultiplier = codexFastModeCostMultiplier(event.Model)
 		}
+		event.SpeedMultiplier = costOptions.CostMultiplier
 		event.CostUSD = pricing.CalculateCost(event.Model, counts, costOptions)
 		events = append(events, event)
 	}
@@ -198,6 +201,12 @@ type codexSpeedInfo struct {
 }
 
 func codexSpeedContext(sessionPath string) codexSpeedInfo {
+	if codexSessionIsArchived(sessionPath) {
+		return codexSpeedInfo{}
+	}
+	if info := codexConfigSpeedContext(sessionPath); info.Mode != "" {
+		return info
+	}
 	statePath := codexGlobalStatePath(sessionPath)
 	if statePath == "" {
 		return codexSpeedInfo{}
@@ -213,13 +222,58 @@ func codexSpeedContext(sessionPath string) codexSpeedInfo {
 	atoms := object(state["electron-persisted-atom-state"])
 	tier := strings.ToLower(strings.TrimSpace(firstString(atoms, "default-service-tier", "service_tier", "serviceTier")))
 	switch tier {
-	case "fast":
-		return codexSpeedInfo{Mode: "fast", Multiplier: 1.5, Source: "codex_global_state"}
+	case "fast", "priority":
+		return codexSpeedInfo{Mode: "fast", Source: "codex_global_state"}
 	case "standard", "default", "auto":
 		return codexSpeedInfo{Mode: "standard", Source: "codex_global_state"}
 	default:
 		return codexSpeedInfo{}
 	}
+}
+
+func codexSessionIsArchived(sessionPath string) bool {
+	for dir := filepath.Clean(filepath.Dir(sessionPath)); ; dir = filepath.Dir(dir) {
+		if strings.EqualFold(filepath.Base(dir), "archived_sessions") {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+	}
+}
+
+func codexConfigSpeedContext(sessionPath string) codexSpeedInfo {
+	dir := filepath.Clean(filepath.Dir(sessionPath))
+	for {
+		configPath := filepath.Join(dir, "config.toml")
+		data, err := os.ReadFile(configPath)
+		if err == nil {
+			switch codexConfigServiceTier(string(data)) {
+			case "fast", "priority":
+				return codexSpeedInfo{Mode: "fast", Source: "codex_config"}
+			case "standard", "default", "auto":
+				return codexSpeedInfo{Mode: "standard", Source: "codex_config"}
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return codexSpeedInfo{}
+		}
+		dir = parent
+	}
+}
+
+func codexConfigServiceTier(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		setting := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+		key, value, ok := strings.Cut(setting, "=")
+		if !ok || strings.TrimSpace(key) != "service_tier" {
+			continue
+		}
+		return strings.ToLower(strings.Trim(strings.TrimSpace(value), `"'`))
+	}
+	return ""
 }
 
 func codexGlobalStatePath(sessionPath string) string {
@@ -645,7 +699,7 @@ func codexCounts(usage map[string]any) TokenCounts {
 		TotalTokens:         intValue(usage, "total_tokens", "total"),
 	}
 	if counts.TotalTokens <= 0 {
-		counts.TotalTokens = inputRaw + counts.CacheCreationTokens + counts.OutputTokens + counts.ReasoningTokens
+		counts.TotalTokens = inputRaw + counts.CacheCreationTokens + counts.OutputTokens
 	}
 	return counts
 }

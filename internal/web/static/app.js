@@ -6674,9 +6674,11 @@ const platformPricingPerMillion = {
   'claude-sonnet-4-5': { input: 3, cached: 0.30, cacheWrite: 3.75, output: 15 },
   'claude-sonnet-4-20250514': { input: 3, cached: 0.30, cacheWrite: 3.75, output: 15 },
   'claude-sonnet-4-6': { input: 3, cached: 0.30, cacheWrite: 3.75, output: 15 },
-  'claude-opus-4-7': { input: 15, cached: 1.50, cacheWrite: 18.75, output: 75 },
+  'claude-opus-4-7': { input: 5, cached: 0.50, cacheWrite: 6.25, output: 25 },
   'claude-haiku-4-5-20251001': { input: 1, cached: 0.10, cacheWrite: 1.25, output: 5 },
   'gpt-5.5': { input: 5, cached: 0.50, cacheWrite: 5, output: 30 },
+  'gpt-5.4': { input: 2.50, cached: 0.25, cacheWrite: 2.50, output: 15 },
+  'gpt-5.3-codex': { input: 1.75, cached: 0.175, cacheWrite: 1.75, output: 14 },
   'gpt-5.2-codex': { input: 1.75, cached: 0.175, cacheWrite: 1.75, output: 14 },
   'google/gemini-2.5-pro': { input: 1.25, cached: 0.125, cacheWrite: 1.5625, output: 10 },
   'gemini-2.5-pro': { input: 1.25, cached: 0.125, cacheWrite: 1.5625, output: 10 },
@@ -6693,6 +6695,11 @@ function getPlatformPricing(model) {
   if (platformPricingPerMillion[`google/${key}`]) return platformPricingPerMillion[`google/${key}`];
   const foundKey = Object.keys(platformPricingPerMillion).find(candidate => candidate.endsWith(`/${key}`));
   return foundKey ? platformPricingPerMillion[foundKey] : null;
+}
+
+function reasoningIncludedInOutput(model) {
+  const key = normalizeModelPricingKey(model);
+  return key.startsWith('gpt-') || key.startsWith('o1') || key.startsWith('o3') || key.startsWith('o4');
 }
 
 function computeRowCostBreakdown(row) {
@@ -6720,6 +6727,11 @@ function computeRowCostBreakdown(row) {
     const tokens = result[type].tokens;
     const rate = Number(pricing[meta.rateKey] || 0);
     result[type].ratePerMillion = rate;
+    if (type === 'reasoningTokens' && reasoningIncludedInOutput(row.model)) {
+      result[type].ratePerMillion = 0;
+      result[type].cost = 0;
+      return;
+    }
     result[type].cost = tokens * rate / 1000000;
     baseCost += result[type].cost;
   });

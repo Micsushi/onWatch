@@ -12,12 +12,13 @@ import (
 // TokenCounts stores provider token categories before they are collapsed into
 // the existing API integrations prompt/completion buckets.
 type TokenCounts struct {
-	InputTokens         int
-	CachedInputTokens   int
-	CacheCreationTokens int
-	OutputTokens        int
-	ReasoningTokens     int
-	TotalTokens         int
+	InputTokens           int
+	CachedInputTokens     int
+	CacheCreationTokens   int
+	CacheCreation1hTokens int
+	OutputTokens          int
+	ReasoningTokens       int
+	TotalTokens           int
 }
 
 type CostOptions struct {
@@ -27,27 +28,28 @@ type CostOptions struct {
 }
 
 type UsageEvent struct {
-	Timestamp           time.Time
-	Source              string
-	Provider            string
-	Account             string
-	SessionID           string
-	RequestID           string
-	Model               string
-	ReasoningEffort     string
-	Mode                string
-	FastMode            *bool
-	SpeedMode           string
-	SpeedMultiplier     float64
-	SpeedSource         string
-	InputTokens         int
-	CachedInputTokens   int
-	CacheCreationTokens int
-	OutputTokens        int
-	ReasoningTokens     int
-	TotalTokens         int
-	CostUSD             float64
-	SourcePath          string
+	Timestamp             time.Time
+	Source                string
+	Provider              string
+	Account               string
+	SessionID             string
+	RequestID             string
+	Model                 string
+	ReasoningEffort       string
+	Mode                  string
+	FastMode              *bool
+	SpeedMode             string
+	SpeedMultiplier       float64
+	SpeedSource           string
+	InputTokens           int
+	CachedInputTokens     int
+	CacheCreationTokens   int
+	CacheCreation1hTokens int
+	OutputTokens          int
+	ReasoningTokens       int
+	TotalTokens           int
+	CostUSD               float64
+	SourcePath            string
 }
 
 func (e UsageEvent) ToAPIIntegrationLine() ([]byte, error) {
@@ -78,6 +80,9 @@ func (e UsageEvent) ToAPIIntegrationLine() ([]byte, error) {
 		"reasoning_output_tokens":     e.ReasoningTokens,
 		"source_path":                 e.SourcePath,
 		"event_key":                   e.stableEventKey(ts, total),
+	}
+	if e.CacheCreation1hTokens > 0 {
+		metadata["cache_creation_1h_input_tokens"] = e.CacheCreation1hTokens
 	}
 	if strings.TrimSpace(e.ReasoningEffort) != "" {
 		metadata["reasoning_effort"] = strings.TrimSpace(e.ReasoningEffort)
@@ -123,7 +128,7 @@ func (e UsageEvent) ToAPIIntegrationLine() ([]byte, error) {
 		Model:            e.Model,
 		RequestID:        e.RequestID,
 		PromptTokens:     e.InputTokens + e.CachedInputTokens + e.CacheCreationTokens,
-		CompletionTokens: e.OutputTokens + e.ReasoningTokens,
+		CompletionTokens: e.OutputTokens,
 		TotalTokens:      total,
 		CostUSD:          cost,
 		Metadata:         metadata,

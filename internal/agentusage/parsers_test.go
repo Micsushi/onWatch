@@ -15,7 +15,8 @@ func testPricing(t *testing.T) *PricingMap {
 			"input_cost_per_token": 0.000003,
 			"output_cost_per_token": 0.000015,
 			"cache_read_input_token_cost": 0.0000003,
-			"cache_creation_input_token_cost": 0.00000375
+			"cache_creation_input_token_cost": 0.00000375,
+			"cache_creation_1h_input_token_cost": 0.000006
 		},
 		"gpt-5.2-codex": {
 			"input_cost_per_token": 0.000001,
@@ -65,6 +66,23 @@ func TestParseClaudeUsageLine(t *testing.T) {
 	}
 }
 
+func TestParseClaudeUsageLinePricesOneHourCacheCreation(t *testing.T) {
+	line := []byte(`{"timestamp":"2026-05-25T12:34:56Z","sessionId":"s1","requestId":"req_1","message":{"id":"m1","model":"claude-sonnet-4-5","usage":{"input_tokens":1000,"cache_creation_input_tokens":20,"cache_read_input_tokens":300,"output_tokens":80,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":15}}}}`)
+
+	event, err := ParseClaudeUsageLine(line, `C:\Users\sushi\.claude\projects\p\s1.jsonl`, testPricing(t))
+	if err != nil {
+		t.Fatalf("ParseClaudeUsageLine() error = %v", err)
+	}
+
+	if event.CacheCreationTokens != 20 || event.CacheCreation1hTokens != 15 {
+		t.Fatalf("bad cache creation fields: %+v", event)
+	}
+	const want = 0.00439875
+	if event.CostUSD != want {
+		t.Fatalf("cost = %.8f, want %.8f", event.CostUSD, want)
+	}
+}
+
 func TestParseCodexUsageFileSessionAndHeadlessLines(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "rollout-test.jsonl")
@@ -90,8 +108,8 @@ func TestParseCodexUsageFileSessionAndHeadlessLines(t *testing.T) {
 	if events[0].ReasoningEffort != "high" || events[0].Mode != "default" || events[0].FastMode == nil || !*events[0].FastMode {
 		t.Fatalf("bad first event effort metadata: %+v", events[0])
 	}
-	if events[0].CostUSD != 0.00365 {
-		t.Fatalf("first event cost = %.8f, want %.8f", events[0].CostUSD, 0.00365)
+	if events[0].CostUSD != 0.003275 {
+		t.Fatalf("first event cost = %.8f, want %.8f", events[0].CostUSD, 0.003275)
 	}
 	if events[1].InputTokens != 45 || events[1].CachedInputTokens != 5 || events[1].TotalTokens != 60 {
 		t.Fatalf("bad second event tokens: %+v", events[1])
@@ -190,11 +208,73 @@ func TestParseCodexUsageFileAnnotatesFastServiceTierFromGlobalState(t *testing.T
 	if len(events) != 1 {
 		t.Fatalf("events len = %d, want 1: %+v", len(events), events)
 	}
-	if events[0].SpeedMode != "fast" || events[0].SpeedMultiplier != 1.5 || events[0].SpeedSource != "codex_global_state" {
+	if events[0].SpeedMode != "fast" || events[0].SpeedMultiplier != 2.5 || events[0].SpeedSource != "codex_global_state" {
 		t.Fatalf("bad speed metadata: %+v", events[0])
 	}
-	if events[0].CostUSD != 0.00219 {
-		t.Fatalf("cost = %.8f, want %.8f", events[0].CostUSD, 0.00219)
+	if events[0].CostUSD != 0.003275 {
+		t.Fatalf("cost = %.8f, want %.8f", events[0].CostUSD, 0.003275)
+	}
+}
+
+func TestParseCodexUsageFileAnnotatesPriorityServiceTierFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	codexDir := filepath.Join(dir, ".codex")
+	sessionsDir := filepath.Join(codexDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte("service_tier = 'priority'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(sessionsDir, "rollout-priority.jsonl")
+	writeFixture(t, file, []string{
+		`{"type":"turn_context","timestamp":"2026-05-25T12:00:00Z","payload":{"model":"gpt-5.5","effort":"medium"}}`,
+		`{"type":"event_msg","timestamp":"2026-05-25T12:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":5,"total_tokens":135}}}}`,
+	})
+
+	events, err := ParseCodexUsageFile(file, testPricing(t))
+	if err != nil {
+		t.Fatalf("ParseCodexUsageFile() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1: %+v", len(events), events)
+	}
+	if events[0].SpeedMode != "fast" || events[0].SpeedMultiplier != 2.5 || events[0].SpeedSource != "codex_config" {
+		t.Fatalf("bad speed metadata: %+v", events[0])
+	}
+	if events[0].CostUSD != 0.003275 {
+		t.Fatalf("cost = %.8f, want %.8f", events[0].CostUSD, 0.003275)
+	}
+}
+
+func TestParseCodexUsageFileDoesNotApplyGlobalSpeedToArchivedSession(t *testing.T) {
+	dir := t.TempDir()
+	codexDir := filepath.Join(dir, ".codex")
+	archivedDir := filepath.Join(codexDir, "archived_sessions")
+	if err := os.MkdirAll(archivedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, ".codex-global-state.json"), []byte(`{"electron-persisted-atom-state":{"default-service-tier":"fast"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(archivedDir, "rollout-archived.jsonl")
+	writeFixture(t, file, []string{
+		`{"type":"turn_context","timestamp":"2026-05-25T12:00:00Z","payload":{"model":"gpt-5.5","effort":"medium"}}`,
+		`{"type":"event_msg","timestamp":"2026-05-25T12:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":5,"total_tokens":135}}}}`,
+	})
+
+	events, err := ParseCodexUsageFile(file, testPricing(t))
+	if err != nil {
+		t.Fatalf("ParseCodexUsageFile() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1: %+v", len(events), events)
+	}
+	if events[0].SpeedMode != "" || events[0].SpeedMultiplier != 0 || events[0].SpeedSource != "" {
+		t.Fatalf("archived event should not inherit global speed: %+v", events[0])
+	}
+	if events[0].CostUSD != 0.00131 {
+		t.Fatalf("cost = %.8f, want %.8f", events[0].CostUSD, 0.00131)
 	}
 }
 

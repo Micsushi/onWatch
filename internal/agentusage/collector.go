@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,6 +35,7 @@ type Source struct {
 }
 
 type Collector struct {
+	mu          sync.Mutex
 	outDir      string
 	pricing     *PricingMap
 	sources     []Source
@@ -64,6 +66,8 @@ func NewCollector(outDir string, pricing *PricingMap, sources []Source, logger *
 }
 
 func (c *Collector) CollectOnce() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := os.MkdirAll(c.outDir, 0o700); err != nil {
 		return err
 	}
@@ -514,7 +518,6 @@ func DefaultSources(home string) []Source {
 		}
 	}
 	addDir(SourceCodex, filepath.Join(home, ".codex", "sessions"), "codex", "openai", false)
-	addDir(SourceCodex, filepath.Join(home, ".codex", "archived_sessions"), "codex", "openai", true)
 	addDir(SourceClaude, filepath.Join(home, ".claude", "projects"), "claude", "anthropic", false)
 	if geminiDataDir := strings.TrimSpace(os.Getenv("GEMINI_DATA_DIR")); geminiDataDir != "" {
 		for _, rawPath := range strings.Split(geminiDataDir, ",") {
