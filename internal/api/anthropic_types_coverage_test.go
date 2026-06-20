@@ -132,6 +132,70 @@ func TestParseAnthropicResponse_InvalidJSON(t *testing.T) {
 	}
 }
 
+// TestParseAnthropicResponse_AggregateFields verifies the decoder tolerates the
+// aggregate fields Anthropic added to /api/oauth/usage (e.g. "limits" is an
+// array, "spend" is a nested object). Previously these non-quota-entry values
+// caused "cannot unmarshal array into ...AnthropicQuotaEntry" and froze the card.
+func TestParseAnthropicResponse_AggregateFields(t *testing.T) {
+	data := []byte(`{
+		"five_hour": {
+			"utilization": 21.0,
+			"resets_at": "2026-06-21T01:49:59.370966+00:00",
+			"limit_dollars": null,
+			"used_dollars": null
+		},
+		"seven_day": {
+			"utilization": 3.0,
+			"resets_at": "2026-06-26T02:59:59.370993+00:00"
+		},
+		"seven_day_opus": null,
+		"extra_usage": {
+			"is_enabled": true,
+			"monthly_limit": 2800,
+			"used_credits": 0.0,
+			"utilization": null,
+			"currency": "CAD"
+		},
+		"limits": [
+			{"kind": "session", "percent": 21, "is_active": true},
+			{"kind": "weekly_all", "percent": 3, "is_active": false}
+		],
+		"spend": {
+			"used": {"amount_minor": 0, "currency": "CAD"},
+			"limit": {"amount_minor": 2800, "currency": "CAD"},
+			"percent": 0
+		}
+	}`)
+
+	resp, err := ParseAnthropicResponse(data)
+	if err != nil {
+		t.Fatalf("ParseAnthropicResponse failed on real usage payload: %v", err)
+	}
+	entry := (*resp)["five_hour"]
+	if entry == nil || entry.Utilization == nil {
+		t.Fatal("five_hour entry/utilization should be present")
+	}
+	if *entry.Utilization != 21.0 {
+		t.Errorf("five_hour utilization = %f, want 21.0", *entry.Utilization)
+	}
+	if (*resp)["seven_day"] == nil || *(*resp)["seven_day"].Utilization != 3.0 {
+		t.Error("seven_day should parse to 3.0")
+	}
+
+	now := time.Now()
+	snap := resp.ToSnapshot(now)
+	names := map[string]bool{}
+	for _, q := range snap.Quotas {
+		names[q.Name] = true
+	}
+	if !names["five_hour"] || !names["seven_day"] {
+		t.Errorf("snapshot missing quotas, got %v", names)
+	}
+	if names["limits"] || names["spend"] {
+		t.Errorf("aggregate fields must not become quotas, got %v", names)
+	}
+}
+
 func TestRedactAnthropicToken(t *testing.T) {
 	tests := []struct {
 		name string

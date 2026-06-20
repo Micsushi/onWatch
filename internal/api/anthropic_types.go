@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"sort"
 	"time"
@@ -19,6 +20,42 @@ type AnthropicQuotaEntry struct {
 // AnthropicQuotaResponse is the full response from the Anthropic usage API.
 // Keys are dynamic (five_hour, seven_day, etc.).
 type AnthropicQuotaResponse map[string]*AnthropicQuotaEntry
+
+// UnmarshalJSON decodes the Anthropic usage response tolerantly. The API mixes
+// per-quota objects (five_hour, seven_day, extra_usage, ...) with aggregate
+// fields whose values are not quota entries - notably "limits" (a JSON array)
+// and "spend" (a differently-shaped object). Decoding those straight into
+// *AnthropicQuotaEntry fails ("cannot unmarshal array into ...") and froze the
+// dashboard, so any value that is not a quota-entry object is skipped. Null
+// values are preserved as nil to mirror the previous map decoding behavior.
+func (r *AnthropicQuotaResponse) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	result := make(AnthropicQuotaResponse, len(raw))
+	for key, msg := range raw {
+		trimmed := bytes.TrimSpace(msg)
+		switch {
+		case len(trimmed) == 0:
+			continue
+		case bytes.Equal(trimmed, []byte("null")):
+			result[key] = nil
+		case trimmed[0] == '{':
+			var entry AnthropicQuotaEntry
+			if err := json.Unmarshal(trimmed, &entry); err != nil {
+				// Object that does not match the quota-entry shape - skip it.
+				continue
+			}
+			result[key] = &entry
+		default:
+			// Arrays/scalars (e.g. "limits") are aggregate fields, not quotas.
+			continue
+		}
+	}
+	*r = result
+	return nil
+}
 
 // AnthropicQuota represents a single normalized quota for storage.
 type AnthropicQuota struct {
