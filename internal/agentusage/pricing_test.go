@@ -51,6 +51,25 @@ func TestPricingMapMatchesProviderPrefixedModel(t *testing.T) {
 	}
 }
 
+func TestPricingMapKnownReportsMissingModel(t *testing.T) {
+	pricing, err := NewPricingMapFromJSON([]byte(`{
+		"claude-opus-4-8": {"input_cost_per_token": 0.000005, "output_cost_per_token": 0.000025},
+		"google/gemini-2.5-pro": {"input_cost_per_token": 0.00000125, "output_cost_per_token": 0.00001}
+	}`))
+	if err != nil {
+		t.Fatalf("NewPricingMapFromJSON() error = %v", err)
+	}
+	if !pricing.Known("claude-opus-4-8", nil) {
+		t.Fatal("expected claude-opus-4-8 to be known")
+	}
+	if !pricing.Known("gemini-2.5-pro", []string{"google"}) {
+		t.Fatal("expected prefixed gemini-2.5-pro to be known")
+	}
+	if pricing.Known("claude-opus-9-9", []string{"google", "anthropic"}) {
+		t.Fatal("expected unknown model to be reported missing")
+	}
+}
+
 func TestPricingMapAppliesCostMultiplier(t *testing.T) {
 	pricing, err := NewPricingMapFromJSON([]byte(`{
 		"gpt-5.5": {

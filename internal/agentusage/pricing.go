@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+// GoogleFamilyProviderPrefixes is the union of every provider prefix the
+// Gemini/Antigravity parsers may apply when looking up model pricing. The
+// collector uses it to decide whether an unpriced model is genuinely absent
+// from the pricing map (vs. just missing a prefix), and the backfill script
+// uses it for the same gemini/antigravity lookups.
+var GoogleFamilyProviderPrefixes = []string{"google", "gemini", "vertex_ai", "openrouter/google", "anthropic", "openai"}
+
 type PricingMap struct {
 	entries map[string]pricingEntry
 }
@@ -70,6 +77,13 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_1h_input_token_cost": 0.000006
 		},
 		"claude-opus-4-7": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"cache_read_input_token_cost": 0.0000005,
+			"cache_creation_input_token_cost": 0.00000625,
+			"cache_creation_1h_input_token_cost": 0.00001
+		},
+		"claude-opus-4-8": {
 			"input_cost_per_token": 0.000005,
 			"output_cost_per_token": 0.000025,
 			"cache_read_input_token_cost": 0.0000005,
@@ -153,6 +167,16 @@ func (p *PricingMap) CalculateCost(model string, counts TokenCounts, opts CostOp
 		cost *= opts.CostMultiplier
 	}
 	return math.Round(cost*1e12) / 1e12
+}
+
+// Known reports whether a price exists for the model under any of the given
+// provider prefixes. Used to flag unpriced models so they do not silently cost $0.
+func (p *PricingMap) Known(model string, prefixes []string) bool {
+	if p == nil {
+		return false
+	}
+	_, ok := p.lookup(model, prefixes)
+	return ok
 }
 
 func (p *PricingMap) lookup(model string, prefixes []string) (pricingEntry, bool) {

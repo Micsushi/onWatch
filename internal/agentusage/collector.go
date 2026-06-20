@@ -35,15 +35,16 @@ type Source struct {
 }
 
 type Collector struct {
-	mu          sync.Mutex
-	outDir      string
-	pricing     *PricingMap
-	sources     []Source
-	seen        map[string]struct{}
-	fileStates  map[string]fileState
-	seenLoaded  bool
-	initialized bool
-	logger      *slog.Logger
+	mu             sync.Mutex
+	outDir         string
+	pricing        *PricingMap
+	sources        []Source
+	seen           map[string]struct{}
+	fileStates     map[string]fileState
+	unpricedWarned map[string]struct{}
+	seenLoaded     bool
+	initialized    bool
+	logger         *slog.Logger
 }
 
 type fileState struct {
@@ -56,12 +57,13 @@ func NewCollector(outDir string, pricing *PricingMap, sources []Source, logger *
 		logger = slog.Default()
 	}
 	return &Collector{
-		outDir:     outDir,
-		pricing:    pricing,
-		sources:    sources,
-		seen:       make(map[string]struct{}),
-		fileStates: make(map[string]fileState),
-		logger:     logger,
+		outDir:         outDir,
+		pricing:        pricing,
+		sources:        sources,
+		seen:           make(map[string]struct{}),
+		fileStates:     make(map[string]fileState),
+		unpricedWarned: make(map[string]struct{}),
+		logger:         logger,
 	}
 }
 
@@ -98,6 +100,7 @@ func (c *Collector) CollectOnce() error {
 		var lines [][]byte
 		var newKeys []string
 		for _, event := range events {
+			c.warnUnpricedModel(event)
 			line, err := event.ToAPIIntegrationLine()
 			if err != nil {
 				c.logger.Warn("agent usage collector skipped event", "path", source.Path, "error", err)
@@ -127,6 +130,25 @@ func (c *Collector) CollectOnce() error {
 	}
 	c.initialized = true
 	return nil
+}
+
+// warnUnpricedModel logs once per model when a token-bearing event has no
+// computed cost and the model is absent from the pricing map. This surfaces
+// new/unrecognized models that would otherwise silently count as $0.
+func (c *Collector) warnUnpricedModel(event UsageEvent) {
+	model := strings.TrimSpace(event.Model)
+	if model == "" || event.TotalTokens <= 0 || event.CostUSD > 0 {
+		return
+	}
+	if c.pricing.Known(model, GoogleFamilyProviderPrefixes) {
+		return
+	}
+	if _, ok := c.unpricedWarned[model]; ok {
+		return
+	}
+	c.unpricedWarned[model] = struct{}{}
+	c.logger.Warn("agent usage collector found unpriced model (cost counted as $0)",
+		"model", model, "provider", event.Provider, "source", event.Source)
 }
 
 func (c *Collector) outputPath(now time.Time) string {

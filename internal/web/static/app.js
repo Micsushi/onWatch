@@ -175,6 +175,7 @@ const State = {
   codexPlanType: '',
   codexQuotaNames: [],
   allProvidersCurrent: null,
+  allProvidersCurrentLoaded: false,
   allProvidersInsights: null,
   allProvidersHistory: null,
   providerVisibility: {},
@@ -3921,6 +3922,7 @@ function applyProviderCurrentPayload(provider, data, apiIntegrationsCurrentData 
       State.apiIntegrationsHealth = apiIntegrationsHealthData || null;
     }
     State.allProvidersCurrent = data;
+    State.allProvidersCurrentLoaded = true;
     renderAllProvidersView();
   } else if (provider === 'copilot') {
     if (data.quotas) {
@@ -4109,6 +4111,11 @@ async function fetchCurrent(options = {}) {
     const statusDot = document.getElementById('status-dot');
     if (statusDot) statusDot.classList.add('stale');
     setDashboardFreshness({ stale: true });
+    if (requestProvider === 'both') {
+      State.allProvidersCurrentLoaded = true;
+      renderAllProvidersView();
+      return;
+    }
     clearQuotaLoadingShell(requestProvider);
     clearPlatformCostLoadingShell(requestProvider);
   }
@@ -8019,6 +8026,10 @@ function renderAllProvidersView() {
   const entries = buildAllProviderEntries();
 
   if (entries.length === 0) {
+    if (getCurrentProvider() === 'both' && !State.allProvidersCurrentLoaded) {
+      container.innerHTML = '<p class="insight-text">Loading provider cards...</p>';
+      return;
+    }
     container.innerHTML = '<p class="insight-text">No provider data available yet.</p>';
     return;
   }

@@ -56,6 +56,7 @@ func main() {
 		  AND (metadata_json IS NULL OR json_extract(metadata_json, '$.cost_usd') IS NULL)
 		  AND model IN (
 			'claude-opus-4-7',
+			'claude-opus-4-8',
 			'claude-haiku-4-5-20251001',
 			'claude-sonnet-4-6',
 			'claude-sonnet-4-5',
@@ -156,7 +157,7 @@ func costOptionsForRow(r row) agentusage.CostOptions {
 		}
 	case "gemini cli", "antigravity":
 		opts.ReasoningBilledAsOutput = true
-		opts.ProviderPrefixes = []string{"google", "gemini", "vertex_ai", "openrouter/google", "anthropic", "openai"}
+		opts.ProviderPrefixes = agentusage.GoogleFamilyProviderPrefixes
 	}
 	if opts.CostMultiplier <= 0 && metadata != nil && strings.ToLower(strings.TrimSpace(r.integration)) != "codex cli" {
 		if multiplier, ok := metadata["speed_multiplier"].(float64); ok && multiplier > 0 {

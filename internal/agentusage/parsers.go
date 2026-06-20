@@ -67,9 +67,47 @@ func ParseClaudeUsageLine(line []byte, sourcePath string, pricing *PricingMap) (
 		event.RequestID = firstString(message, "id")
 	}
 	if event.CostUSD <= 0 {
-		event.CostUSD = pricing.CalculateCost(event.Model, counts, CostOptions{})
+		costOptions := CostOptions{}
+		if claudeUsageIsFast(usage) {
+			if multiplier := claudeFastModeCostMultiplier(event.Model); multiplier > 0 {
+				costOptions.CostMultiplier = multiplier
+				event.SpeedMode = "fast"
+				event.SpeedMultiplier = multiplier
+				event.SpeedSource = "claude_usage"
+			}
+		}
+		event.CostUSD = pricing.CalculateCost(event.Model, counts, costOptions)
 	}
 	return &event, nil
+}
+
+// claudeUsageIsFast reports whether a Claude Code usage block was billed at the
+// fast/priority tier. Claude Code records this in usage.speed ("fast") and/or
+// usage.service_tier ("priority").
+func claudeUsageIsFast(usage map[string]any) bool {
+	switch strings.ToLower(firstString(usage, "speed")) {
+	case "fast", "priority":
+		return true
+	}
+	return strings.ToLower(firstString(usage, "service_tier")) == "priority"
+}
+
+// claudeFastModeCostMultiplier returns the fast-mode cost multiplier for a
+// Claude model, relative to standard pricing. Per Anthropic's published fast-
+// mode rates: Opus 4.8 bills 2x ($10/$50 vs $5/$25); Opus 4.6 and 4.7 bill 6x
+// ($30/$150 vs $5/$25). The multiplier applies across all token categories,
+// since cache rates are defined as multipliers of the (raised) base input
+// price. Returns 0 (no adjustment) for models without a known fast tier.
+func claudeFastModeCostMultiplier(model string) float64 {
+	m := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case strings.HasPrefix(m, "claude-opus-4-8"):
+		return 2.0
+	case strings.HasPrefix(m, "claude-opus-4-7"), strings.HasPrefix(m, "claude-opus-4-6"):
+		return 6.0
+	default:
+		return 0
+	}
 }
 
 func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error) {

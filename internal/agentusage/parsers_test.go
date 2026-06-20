@@ -83,6 +83,80 @@ func TestParseClaudeUsageLinePricesOneHourCacheCreation(t *testing.T) {
 	}
 }
 
+func TestParseClaudeUsageLineAppliesFastModeMultiplier(t *testing.T) {
+	pricing, err := NewPricingMapFromJSON([]byte(`{
+		"claude-opus-4-8": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"cache_read_input_token_cost": 0.0000005,
+			"cache_creation_input_token_cost": 0.00000625
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("NewPricingMapFromJSON() error = %v", err)
+	}
+	usage := `"usage":{"input_tokens":1000,"output_tokens":100,"speed":"fast","service_tier":"priority"}`
+	line := []byte(`{"timestamp":"2026-05-25T12:34:56Z","message":{"model":"claude-opus-4-8",` + usage + `}}`)
+
+	event, err := ParseClaudeUsageLine(line, `s.jsonl`, pricing)
+	if err != nil {
+		t.Fatalf("ParseClaudeUsageLine() error = %v", err)
+	}
+	// standard: 1000*5e-6 + 100*25e-6 = 0.0075; fast = 2x = 0.015
+	const want = 0.015
+	if event.CostUSD != want {
+		t.Fatalf("fast cost = %.8f, want %.8f", event.CostUSD, want)
+	}
+	if event.SpeedMode != "fast" || event.SpeedMultiplier != 2.0 || event.SpeedSource != "claude_usage" {
+		t.Fatalf("speed metadata = %q/%v/%q", event.SpeedMode, event.SpeedMultiplier, event.SpeedSource)
+	}
+}
+
+func TestParseClaudeUsageLineFastModeOpus47Is6x(t *testing.T) {
+	pricing, err := NewPricingMapFromJSON([]byte(`{
+		"claude-opus-4-7": {"input_cost_per_token": 0.000005, "output_cost_per_token": 0.000025}
+	}`))
+	if err != nil {
+		t.Fatalf("NewPricingMapFromJSON() error = %v", err)
+	}
+	line := []byte(`{"timestamp":"2026-05-25T12:34:56Z","message":{"model":"claude-opus-4-7","usage":{"input_tokens":1000,"output_tokens":100,"speed":"fast"}}}`)
+
+	event, err := ParseClaudeUsageLine(line, `s.jsonl`, pricing)
+	if err != nil {
+		t.Fatalf("ParseClaudeUsageLine() error = %v", err)
+	}
+	// standard 0.0075; Opus 4.7 fast = 6x = 0.045
+	const want = 0.045
+	if event.CostUSD != want {
+		t.Fatalf("fast cost = %.8f, want %.8f", event.CostUSD, want)
+	}
+	if event.SpeedMultiplier != 6.0 {
+		t.Fatalf("speed multiplier = %v, want 6", event.SpeedMultiplier)
+	}
+}
+
+func TestParseClaudeUsageLineStandardSpeedUnchanged(t *testing.T) {
+	pricing, err := NewPricingMapFromJSON([]byte(`{
+		"claude-opus-4-8": {"input_cost_per_token": 0.000005, "output_cost_per_token": 0.000025}
+	}`))
+	if err != nil {
+		t.Fatalf("NewPricingMapFromJSON() error = %v", err)
+	}
+	line := []byte(`{"timestamp":"2026-05-25T12:34:56Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1000,"output_tokens":100,"speed":"standard","service_tier":"standard"}}}`)
+
+	event, err := ParseClaudeUsageLine(line, `s.jsonl`, pricing)
+	if err != nil {
+		t.Fatalf("ParseClaudeUsageLine() error = %v", err)
+	}
+	const want = 0.0075
+	if event.CostUSD != want {
+		t.Fatalf("standard cost = %.8f, want %.8f", event.CostUSD, want)
+	}
+	if event.SpeedMultiplier != 0 {
+		t.Fatalf("standard speed multiplier = %v, want 0", event.SpeedMultiplier)
+	}
+}
+
 func TestParseCodexUsageFileSessionAndHeadlessLines(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "rollout-test.jsonl")
