@@ -5153,8 +5153,15 @@ func anthropicUtilStatus(util float64) string {
 }
 
 const (
-	weeklyPaceWindow           = 7 * 24 * time.Hour
-	weeklyPaceWarningThreshold = 100.0 / 7.0
+	weeklyPaceWindow                     = 7 * 24 * time.Hour
+	weeklyPaceOverHardThreshold          = 10.0
+	weeklyPaceOverTimeSliceFraction      = 0.20
+	weeklyPaceVeryOverHardThreshold      = 15.0
+	weeklyPaceVeryOverTimeSliceFraction  = 0.30
+	weeklyPaceUnderHardThreshold         = 10.0
+	weeklyPaceUnderTimeSliceFraction     = 0.20
+	weeklyPaceVeryUnderHardThreshold     = 15.0
+	weeklyPaceVeryUnderTimeSliceFraction = 0.30
 )
 
 func applyWeeklyPaceStatus(qMap map[string]interface{}, quotaName string, utilization float64, resetsAt time.Time, now time.Time) {
@@ -5179,22 +5186,149 @@ func applyWeeklyPaceStatus(qMap map[string]interface{}, quotaName string, utiliz
 	}
 
 	delta := utilization - expectedUsed
+	remainingExpected := 100 - expectedUsed
+	overTimeThreshold := remainingExpected * weeklyPaceOverTimeSliceFraction
+	veryOverTimeThreshold := remainingExpected * weeklyPaceVeryOverTimeSliceFraction
+	underTimeThreshold := expectedUsed * weeklyPaceUnderTimeSliceFraction
+	veryUnderTimeThreshold := expectedUsed * weeklyPaceVeryUnderTimeSliceFraction
 	qMap["paceExpectedUsed"] = expectedUsed
 	qMap["paceDelta"] = delta
+	qMap["paceOverFlatThreshold"] = weeklyPaceOverHardThreshold
+	qMap["paceOverTimeThreshold"] = overTimeThreshold
+	qMap["paceVeryOverFlatThreshold"] = weeklyPaceVeryOverHardThreshold
+	qMap["paceVeryOverTimeThreshold"] = veryOverTimeThreshold
+	qMap["paceUnderFlatThreshold"] = weeklyPaceUnderHardThreshold
+	qMap["paceUnderTimeThreshold"] = underTimeThreshold
+	qMap["paceVeryUnderFlatThreshold"] = weeklyPaceVeryUnderHardThreshold
+	qMap["paceVeryUnderTimeThreshold"] = veryUnderTimeThreshold
+	qMap["paceTimeLeftOverPercent"] = weeklyPaceTimeLeftOverPercent(delta, remainingExpected)
+	qMap["paceElapsedUnderPercent"] = weeklyPaceElapsedUnderPercent(delta, expectedUsed)
 
-	switch {
-	case delta >= weeklyPaceWarningThreshold*2:
+	tier, trigger := weeklyOverPaceTier(delta, overTimeThreshold, veryOverTimeThreshold)
+	qMap["paceOverTrigger"] = trigger
+	underTier, underTrigger := weeklyUnderPaceTier(delta, underTimeThreshold, veryUnderTimeThreshold)
+	qMap["paceUnderTrigger"] = underTrigger
+
+	switch tier {
+	case "very":
 		qMap["status"] = "critical"
-		qMap["statusLabel"] = fmt.Sprintf("Over pace +%.0f%%", delta)
-	case delta >= weeklyPaceWarningThreshold:
+		qMap["statusLabel"] = weeklyOverPaceStatusLabel("Very overpace", delta, remainingExpected)
+	case "over":
 		qMap["status"] = "warning"
-		qMap["statusLabel"] = fmt.Sprintf("Over pace +%.0f%%", delta)
-	case delta <= -weeklyPaceWarningThreshold:
-		qMap["status"] = "underuse"
-		qMap["statusLabel"] = fmt.Sprintf("Under pace %.0f%%", delta)
+		qMap["statusLabel"] = weeklyOverPaceStatusLabel("Overpace", delta, remainingExpected)
 	default:
+		switch underTier {
+		case "very":
+			qMap["status"] = "very_underuse"
+			qMap["statusLabel"] = weeklyUnderPaceStatusLabel("Very under pace", delta, expectedUsed)
+			return
+		case "under":
+			qMap["status"] = "underuse"
+			qMap["statusLabel"] = weeklyUnderPaceStatusLabel("Under pace", delta, expectedUsed)
+			return
+		}
 		qMap["status"] = "healthy"
 		qMap["statusLabel"] = "On pace"
+	}
+}
+
+func weeklyOverPaceStatusLabel(prefix string, delta, remainingExpected float64) string {
+	return fmt.Sprintf("%s: extra +%.0f%% | time-left +%.0f%%", prefix, delta, weeklyPaceTimeLeftOverPercent(delta, remainingExpected))
+}
+
+func weeklyPaceTimeLeftOverPercent(delta, remainingExpected float64) float64 {
+	if delta <= 0 {
+		return 0
+	}
+	if remainingExpected <= 0 {
+		return 100
+	}
+	return (delta / remainingExpected) * 100
+}
+
+func weeklyUnderPaceStatusLabel(prefix string, delta, expectedUsed float64) string {
+	reserve := -delta
+	return fmt.Sprintf("%s: reserve +%.0f%% | elapsed +%.0f%%", prefix, reserve, weeklyPaceElapsedUnderPercent(delta, expectedUsed))
+}
+
+func weeklyPaceElapsedUnderPercent(delta, expectedUsed float64) float64 {
+	if delta >= 0 {
+		return 0
+	}
+	if expectedUsed <= 0 {
+		return 100
+	}
+	return (-delta / expectedUsed) * 100
+}
+
+func weeklyOverPaceTier(delta, overTimeThreshold, veryOverTimeThreshold float64) (string, string) {
+	if delta <= 0 {
+		return "", ""
+	}
+
+	flatTier := ""
+	switch {
+	case delta >= weeklyPaceVeryOverHardThreshold:
+		flatTier = "very"
+	case delta >= weeklyPaceOverHardThreshold:
+		flatTier = "over"
+	}
+
+	timeTier := ""
+	switch {
+	case delta >= veryOverTimeThreshold:
+		timeTier = "very"
+	case delta >= overTimeThreshold:
+		timeTier = "over"
+	}
+
+	switch {
+	case flatTier == "very":
+		return "very", "flat"
+	case timeTier == "very":
+		return "very", "time left"
+	case flatTier == "over":
+		return "over", "flat"
+	case timeTier == "over":
+		return "over", "time left"
+	default:
+		return "", ""
+	}
+}
+
+func weeklyUnderPaceTier(delta, underTimeThreshold, veryUnderTimeThreshold float64) (string, string) {
+	if delta >= 0 {
+		return "", ""
+	}
+	reserve := -delta
+
+	flatTier := ""
+	switch {
+	case reserve >= weeklyPaceVeryUnderHardThreshold:
+		flatTier = "very"
+	case reserve >= weeklyPaceUnderHardThreshold:
+		flatTier = "under"
+	}
+
+	timeTier := ""
+	switch {
+	case reserve >= veryUnderTimeThreshold:
+		timeTier = "very"
+	case reserve >= underTimeThreshold:
+		timeTier = "under"
+	}
+
+	switch {
+	case flatTier == "very":
+		return "very", "flat"
+	case timeTier == "very":
+		return "very", "elapsed"
+	case flatTier == "under":
+		return "under", "flat"
+	case timeTier == "under":
+		return "under", "elapsed"
+	default:
+		return "", ""
 	}
 }
 
@@ -7942,47 +8076,34 @@ func (h *Handler) buildAntigravityCurrent() map[string]interface{} {
 		response["monthlyCredits"] = latest.MonthlyCredits
 	}
 
-	groups := api.GroupAntigravityModelsByLogicalQuota(latest.Models)
-	quotas := make([]map[string]interface{}, 0, len(groups))
-	for _, g := range groups {
-		status := antigravityUsageStatus(g.UsagePercent)
-		qMap := map[string]interface{}{
-			"modelId":           g.GroupKey,
-			"quotaGroup":        g.GroupKey,
-			"label":             g.DisplayName,
-			"displayName":       g.DisplayName,
-			"remainingFraction": g.RemainingFraction,
-			"remainingPercent":  g.RemainingPercent,
-			"usagePercent":      g.UsagePercent,
-			"isExhausted":       g.IsExhausted,
-			"status":            status,
-			"models":            g.ModelIDs,
-			"modelLabels":       g.Labels,
-			"color":             g.Color,
-		}
-		if g.ResetTime != nil {
-			timeUntilReset := g.TimeUntilReset
-			if timeUntilReset < 0 {
-				timeUntilReset = 0
-			}
-			qMap["resetTime"] = g.ResetTime.Format(time.RFC3339)
-			qMap["timeUntilReset"] = formatDuration(timeUntilReset)
-			qMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
-		}
+	mode := h.getDisplayMode("antigravity")
+	response["displayMode"] = mode
 
-		if h.antigravityTracker != nil {
-			groupRate := 0.0
-			groupProjected := 0.0
-			for _, modelID := range g.ModelIDs {
-				if summary, err := h.antigravityTracker.UsageSummary(modelID); err == nil && summary != nil {
-					groupRate += summary.CurrentRate
-					groupProjected += summary.ProjectedUsage
-				}
-			}
-			qMap["currentRate"] = groupRate
-			qMap["projectedUsage"] = groupProjected
+	var quotas []map[string]interface{}
+	if len(latest.SummaryGroups) > 0 {
+		quotas = make([]map[string]interface{}, 0, len(latest.SummaryGroups))
+		for _, g := range latest.SummaryGroups {
+			quotas = append(quotas, antigravitySummaryGroupToMap(g, mode))
 		}
-		quotas = append(quotas, qMap)
+	} else {
+		groups := api.GroupAntigravityModelsByLogicalQuota(latest.Models)
+		quotas = make([]map[string]interface{}, 0, len(groups))
+		for _, g := range groups {
+			qMap := antigravityGroupedQuotaToMap(g, mode)
+			if h.antigravityTracker != nil {
+				groupRate := 0.0
+				groupProjected := 0.0
+				for _, modelID := range g.ModelIDs {
+					if summary, err := h.antigravityTracker.UsageSummary(modelID); err == nil && summary != nil {
+						groupRate += summary.CurrentRate
+						groupProjected += summary.ProjectedUsage
+					}
+				}
+				qMap["currentRate"] = groupRate
+				qMap["projectedUsage"] = groupProjected
+			}
+			quotas = append(quotas, qMap)
+		}
 	}
 	response["quotas"] = quotas
 	response["pools"] = quotas
@@ -8001,6 +8122,173 @@ func (h *Handler) buildAntigravityCurrent() map[string]interface{} {
 
 	applyDisplayModeToResponse(response, h.getDisplayMode("antigravity"))
 	return response
+}
+
+func antigravitySummaryGroupToMap(g api.AntigravityQuotaSummaryGroup, mode string) map[string]interface{} {
+	active := api.AntigravityQuotaSummaryBucket{RemainingFraction: 1, RemainingPercent: 100}
+	hasActive := false
+	windowMaps := make([]map[string]interface{}, 0, len(g.Buckets))
+	now := time.Now().UTC()
+	for _, b := range g.Buckets {
+		remaining := b.RemainingPercent
+		if remaining == 0 && b.RemainingFraction > 0 {
+			remaining = b.RemainingFraction * 100
+		}
+		usage := 100 - remaining
+		if usage < 0 {
+			usage = 0
+		}
+		if usage > 100 {
+			usage = 100
+		}
+		if !hasActive || remaining < active.RemainingPercent {
+			active = b
+			active.RemainingPercent = remaining
+			active.UsagePercent = usage
+			hasActive = true
+		}
+		wMap := map[string]interface{}{
+			"kind":              b.Window,
+			"label":             api.AntigravityQuotaWindowLabel(b.Window),
+			"bucketId":          b.BucketID,
+			"displayName":       b.DisplayName,
+			"description":       b.Description,
+			"remainingFraction": remaining / 100,
+			"remainingPercent":  remaining,
+			"usagePercent":      usage,
+			"isExhausted":       remaining <= 0,
+			"status":            antigravityRemainingStatus(remaining),
+		}
+		wMap["cardPercent"], wMap["cardLabel"] = antigravityCardDisplay(usage, remaining, mode)
+		if b.ResetTime != nil {
+			timeUntilReset := b.ResetTime.Sub(now)
+			if timeUntilReset < 0 {
+				timeUntilReset = 0
+			}
+			wMap["resetTime"] = b.ResetTime.Format(time.RFC3339)
+			wMap["timeUntilReset"] = formatDuration(timeUntilReset)
+			wMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+		}
+		windowMaps = append(windowMaps, wMap)
+	}
+
+	displayName := g.DisplayName
+	groupKey := g.GroupKey
+	if groupKey == "" {
+		groupKey = api.AntigravitySummaryGroupKey(displayName)
+	}
+	if displayName == "" {
+		displayName = api.AntigravityQuotaGroupDisplayName(groupKey)
+	}
+	qMap := map[string]interface{}{
+		"modelId":           groupKey,
+		"quotaGroup":        groupKey,
+		"label":             displayName,
+		"displayName":       displayName,
+		"description":       g.Description,
+		"windowKind":        active.Window,
+		"windowLabel":       api.AntigravityQuotaWindowLabel(active.Window),
+		"remainingFraction": active.RemainingPercent / 100,
+		"remainingPercent":  active.RemainingPercent,
+		"usagePercent":      active.UsagePercent,
+		"isExhausted":       active.RemainingPercent <= 0,
+		"status":            antigravityRemainingStatus(active.RemainingPercent),
+		"color":             api.AntigravityQuotaGroupColor(groupKey),
+		"windows":           windowMaps,
+	}
+	qMap["cardPercent"], qMap["cardLabel"] = antigravityCardDisplay(active.UsagePercent, active.RemainingPercent, mode)
+	if active.ResetTime != nil {
+		timeUntilReset := active.ResetTime.Sub(now)
+		if timeUntilReset < 0 {
+			timeUntilReset = 0
+		}
+		qMap["resetTime"] = active.ResetTime.Format(time.RFC3339)
+		qMap["timeUntilReset"] = formatDuration(timeUntilReset)
+		qMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+	}
+	return qMap
+}
+
+func antigravityGroupedQuotaToMap(g api.AntigravityGroupedQuota, mode string) map[string]interface{} {
+	status := antigravityRemainingStatus(g.RemainingPercent)
+	qMap := map[string]interface{}{
+		"modelId":           g.GroupKey,
+		"quotaGroup":        g.GroupKey,
+		"label":             g.DisplayName,
+		"displayName":       g.DisplayName,
+		"windowKind":        g.WindowKind,
+		"windowLabel":       g.WindowLabel,
+		"remainingFraction": g.RemainingFraction,
+		"remainingPercent":  g.RemainingPercent,
+		"usagePercent":      g.UsagePercent,
+		"isExhausted":       g.IsExhausted,
+		"status":            status,
+		"models":            g.ModelIDs,
+		"modelLabels":       g.Labels,
+		"color":             g.Color,
+	}
+	qMap["cardPercent"], qMap["cardLabel"] = antigravityCardDisplay(g.UsagePercent, g.RemainingPercent, mode)
+	if len(g.Windows) > 0 {
+		windowMaps := make([]map[string]interface{}, 0, len(g.Windows))
+		for _, window := range g.Windows {
+			wMap := map[string]interface{}{
+				"kind":              window.Kind,
+				"label":             window.Label,
+				"models":            window.ModelIDs,
+				"modelLabels":       window.Labels,
+				"remainingFraction": window.RemainingFraction,
+				"remainingPercent":  window.RemainingPercent,
+				"usagePercent":      window.UsagePercent,
+				"isExhausted":       window.IsExhausted,
+				"status":            antigravityRemainingStatus(window.RemainingPercent),
+			}
+			wMap["cardPercent"], wMap["cardLabel"] = antigravityCardDisplay(window.UsagePercent, window.RemainingPercent, mode)
+			if window.ResetTime != nil {
+				timeUntilReset := window.TimeUntilReset
+				if timeUntilReset < 0 {
+					timeUntilReset = 0
+				}
+				wMap["resetTime"] = window.ResetTime.Format(time.RFC3339)
+				wMap["timeUntilReset"] = formatDuration(timeUntilReset)
+				wMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+			}
+			windowMaps = append(windowMaps, wMap)
+		}
+		qMap["windows"] = windowMaps
+	}
+	if g.ResetTime != nil {
+		timeUntilReset := g.TimeUntilReset
+		if timeUntilReset < 0 {
+			timeUntilReset = 0
+		}
+		qMap["resetTime"] = g.ResetTime.Format(time.RFC3339)
+		qMap["timeUntilReset"] = formatDuration(timeUntilReset)
+		qMap["timeUntilResetSeconds"] = int64(timeUntilReset.Seconds())
+	}
+	return qMap
+}
+
+// antigravityCardDisplay returns the percent and label a card should show for the
+// given display mode. "available" surfaces remaining quota; anything else (the
+// default "usage") surfaces utilization, matching Codex/Anthropic cards.
+func antigravityCardDisplay(usagePercent, remainingPercent float64, mode string) (float64, string) {
+	if mode == "available" {
+		return remainingPercent, "Remaining"
+	}
+	return usagePercent, "Utilization"
+}
+
+func antigravityRemainingStatus(remainingPercent float64) string {
+	switch {
+	case remainingPercent <= 5:
+		return "critical"
+	case remainingPercent <= 20:
+		return "danger"
+	case remainingPercent <= 50:
+		return "warning"
+	default:
+		return "healthy"
+	}
 }
 
 func antigravityUsageStatus(usagePercent float64) string {

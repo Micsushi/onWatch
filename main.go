@@ -1351,11 +1351,11 @@ func run() error {
 			notifier.Check(notify.QuotaStatus{Provider: "codex", QuotaKey: quotaName, ResetOccurred: true})
 		})
 	}
-	if antigravityTr != nil {
-		antigravityTr.SetOnReset(func(modelID string) {
-			notifier.Check(notify.QuotaStatus{Provider: "antigravity", QuotaKey: modelID, ResetOccurred: true})
-		})
-	}
+	// Antigravity reset notifications are intentionally disabled: each model_id
+	// resets in the same window and resets are flappy, so wiring onReset to the
+	// notifier produced a burst of duplicate Discord pings per reset. Cycle
+	// tracking still happens inside antigravityTr.Process; only the notification
+	// side-effect is dropped.
 	if minimaxTr != nil {
 		minimaxTr.SetOnReset(func(modelName string) {
 			notifier.Check(notify.QuotaStatus{Provider: "minimax", QuotaKey: modelName, ResetOccurred: true})

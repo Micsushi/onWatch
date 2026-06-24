@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/api"
@@ -75,6 +76,34 @@ func (s *Store) InsertAntigravitySnapshot(snapshot *api.AntigravitySnapshot) (in
 		}
 	}
 
+	for _, g := range snapshot.SummaryGroups {
+		for _, b := range g.Buckets {
+			var resetTimeVal interface{}
+			if b.ResetTime != nil {
+				resetTimeVal = b.ResetTime.Format(time.RFC3339Nano)
+			}
+			_, err := tx.Exec(
+				`INSERT INTO antigravity_quota_summary_buckets
+				(snapshot_id, group_key, group_display_name, group_description, bucket_id, bucket_display_name, bucket_description, window_kind, remaining_fraction, remaining_percent, reset_time)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				snapshotID,
+				g.GroupKey,
+				g.DisplayName,
+				g.Description,
+				b.BucketID,
+				b.DisplayName,
+				b.Description,
+				b.Window,
+				b.RemainingFraction,
+				b.RemainingPercent,
+				resetTimeVal,
+			)
+			if err != nil {
+				return 0, fmt.Errorf("failed to insert antigravity summary bucket %s: %w", b.BucketID, err)
+			}
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("failed to commit: %w", err)
 	}
@@ -143,10 +172,19 @@ func (s *Store) QueryLatestAntigravity() (*api.AntigravitySnapshot, error) {
 				m.TimeUntilReset = 0
 			}
 		}
+		m.WindowKind = api.AntigravityQuotaWindowKind(m.ResetTime, snapshot.CapturedAt)
+		m.WindowLabel = api.AntigravityQuotaWindowLabel(m.WindowKind)
 		snapshot.Models = append(snapshot.Models, m)
 	}
 
-	return &snapshot, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.loadAntigravitySummaryBuckets(&snapshot); err != nil {
+		return nil, err
+	}
+
+	return &snapshot, nil
 }
 
 // QueryAntigravityRange returns Antigravity snapshots within a time range.
@@ -229,9 +267,14 @@ func (s *Store) QueryAntigravityRange(start, end time.Time, limit ...int) ([]*ap
 				t, _ := time.Parse(time.RFC3339Nano, resetTime.String)
 				m.ResetTime = &t
 			}
+			m.WindowKind = api.AntigravityQuotaWindowKind(m.ResetTime, snap.CapturedAt)
+			m.WindowLabel = api.AntigravityQuotaWindowLabel(m.WindowKind)
 			snap.Models = append(snap.Models, m)
 		}
 		mRows.Close()
+		if err := s.loadAntigravitySummaryBuckets(snap); err != nil {
+			return nil, err
+		}
 	}
 
 	return snapshots, nil
@@ -634,14 +677,82 @@ func (s *Store) QueryAntigravitySnapshotAtOrBefore(t time.Time) (*api.Antigravit
 				m.ResetTime = &parsed
 			}
 		}
+		m.WindowKind = api.AntigravityQuotaWindowKind(m.ResetTime, snapshot.CapturedAt)
+		m.WindowLabel = api.AntigravityQuotaWindowLabel(m.WindowKind)
 		snapshot.Models = append(snapshot.Models, m)
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed reading model values for snapshot %d: %w", snapshot.ID, err)
 	}
+	if err := s.loadAntigravitySummaryBuckets(&snapshot); err != nil {
+		return nil, err
+	}
 
 	return &snapshot, nil
+}
+
+func (s *Store) loadAntigravitySummaryBuckets(snapshot *api.AntigravitySnapshot) error {
+	rows, err := s.db.Query(
+		`SELECT group_key, group_display_name, group_description, bucket_id, bucket_display_name, bucket_description, window_kind, remaining_fraction, remaining_percent, reset_time
+		 FROM antigravity_quota_summary_buckets
+		 WHERE snapshot_id = ?
+		 ORDER BY group_key, window_kind`,
+		snapshot.ID,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		return fmt.Errorf("failed to query antigravity summary buckets: %w", err)
+	}
+	defer rows.Close()
+
+	groupIndex := map[string]int{}
+	for rows.Next() {
+		var groupKey, groupName, bucketID, bucketName, windowKind string
+		var groupDesc, bucketDesc sql.NullString
+		var remainingFraction, remainingPercent float64
+		var resetTime sql.NullString
+		if err := rows.Scan(&groupKey, &groupName, &groupDesc, &bucketID, &bucketName, &bucketDesc, &windowKind, &remainingFraction, &remainingPercent, &resetTime); err != nil {
+			return fmt.Errorf("failed to scan antigravity summary bucket: %w", err)
+		}
+		idx, ok := groupIndex[groupKey]
+		if !ok {
+			idx = len(snapshot.SummaryGroups)
+			groupIndex[groupKey] = idx
+			desc := ""
+			if groupDesc.Valid {
+				desc = groupDesc.String
+			}
+			snapshot.SummaryGroups = append(snapshot.SummaryGroups, api.AntigravityQuotaSummaryGroup{
+				GroupKey:    groupKey,
+				DisplayName: groupName,
+				Description: desc,
+			})
+		}
+		desc := ""
+		if bucketDesc.Valid {
+			desc = bucketDesc.String
+		}
+		bucket := api.AntigravityQuotaSummaryBucket{
+			BucketID:          bucketID,
+			DisplayName:       bucketName,
+			Description:       desc,
+			Window:            windowKind,
+			RemainingFraction: remainingFraction,
+			RemainingPercent:  remainingPercent,
+			UsagePercent:      100 - remainingPercent,
+		}
+		if resetTime.Valid && resetTime.String != "" {
+			if parsed, err := time.Parse(time.RFC3339Nano, resetTime.String); err == nil {
+				bucket.ResetTime = &parsed
+				bucket.ResetTimeRaw = parsed.Format(time.RFC3339)
+			}
+		}
+		snapshot.SummaryGroups[idx].Buckets = append(snapshot.SummaryGroups[idx].Buckets, bucket)
+	}
+	return rows.Err()
 }
 
 func (s *Store) getAntigravityGroupedCrossQuotasAt(referenceTime time.Time) ([]CrossQuotaEntry, error) {

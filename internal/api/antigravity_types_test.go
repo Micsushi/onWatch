@@ -419,14 +419,17 @@ func TestGroupAntigravityModelsByLogicalQuota(t *testing.T) {
 	if claudeGPT.DisplayName != "Claude + GPT Quota" {
 		t.Fatalf("expected Claude+GPT display name, got %q", claudeGPT.DisplayName)
 	}
-	if claudeGPT.RemainingFraction < 0.599 || claudeGPT.RemainingFraction > 0.601 {
-		t.Fatalf("expected averaged remaining fraction ~0.60, got %.4f", claudeGPT.RemainingFraction)
+	if claudeGPT.RemainingFraction < 0.499 || claudeGPT.RemainingFraction > 0.501 {
+		t.Fatalf("expected constrained remaining fraction ~0.50, got %.4f", claudeGPT.RemainingFraction)
 	}
-	if claudeGPT.UsagePercent < 39.9 || claudeGPT.UsagePercent > 40.1 {
-		t.Fatalf("expected usage percent ~40, got %.4f", claudeGPT.UsagePercent)
+	if claudeGPT.UsagePercent < 49.9 || claudeGPT.UsagePercent > 50.1 {
+		t.Fatalf("expected usage percent ~50, got %.4f", claudeGPT.UsagePercent)
+	}
+	if claudeGPT.WindowKind != AntigravityWindowFiveHour {
+		t.Fatalf("expected five-hour active window, got %q", claudeGPT.WindowKind)
 	}
 	if claudeGPT.ResetTime == nil || !claudeGPT.ResetTime.Equal(soon) {
-		t.Fatalf("expected earliest reset (%v), got %v", soon, claudeGPT.ResetTime)
+		t.Fatalf("expected constrained reset (%v), got %v", soon, claudeGPT.ResetTime)
 	}
 	if claudeGPT.Color != "#D97757" {
 		t.Fatalf("expected Claude+GPT color #D97757, got %q", claudeGPT.Color)
@@ -438,6 +441,60 @@ func TestGroupAntigravityModelsByLogicalQuota(t *testing.T) {
 	}
 	if geminiFlash.UsagePercent < 79.9 || geminiFlash.UsagePercent > 80.1 {
 		t.Fatalf("expected Gemini Flash usage percent ~80, got %.4f", geminiFlash.UsagePercent)
+	}
+}
+
+func TestAntigravityQuotaWindowKind(t *testing.T) {
+	now := time.Now().UTC()
+	fiveHour := now.Add(5 * time.Hour)
+	weekly := now.Add(36 * time.Hour)
+
+	if got := AntigravityQuotaWindowKind(&fiveHour, now); got != AntigravityWindowFiveHour {
+		t.Fatalf("expected five-hour window, got %q", got)
+	}
+	if got := AntigravityQuotaWindowKind(&weekly, now); got != AntigravityWindowWeekly {
+		t.Fatalf("expected weekly window, got %q", got)
+	}
+	if got := AntigravityQuotaWindowKind(nil, now); got != AntigravityWindowUnknown {
+		t.Fatalf("expected unknown window, got %q", got)
+	}
+}
+
+func TestGroupAntigravityModelsByLogicalQuota_WeeklyLimitWinsWhenMoreConstrained(t *testing.T) {
+	now := time.Now().UTC()
+	fiveHour := now.Add(3 * time.Hour)
+	weekly := now.Add(3 * 24 * time.Hour)
+
+	models := []AntigravityModelQuota{
+		{
+			ModelID:           "claude-4-5-sonnet",
+			Label:             "Claude Sonnet 4.6",
+			RemainingFraction: 1.0,
+			WindowKind:        AntigravityWindowFiveHour,
+			ResetTime:         &fiveHour,
+		},
+		{
+			ModelID:           "gpt-5",
+			Label:             "GPT 5",
+			RemainingFraction: 0.05,
+			WindowKind:        AntigravityWindowWeekly,
+			ResetTime:         &weekly,
+		},
+	}
+
+	groups := GroupAntigravityModelsByLogicalQuota(models)
+	claudeGPT := groups[0]
+	if claudeGPT.WindowKind != AntigravityWindowWeekly {
+		t.Fatalf("expected weekly limit to be active, got %q", claudeGPT.WindowKind)
+	}
+	if claudeGPT.WindowLabel != "Weekly limit" {
+		t.Fatalf("expected Weekly limit label, got %q", claudeGPT.WindowLabel)
+	}
+	if claudeGPT.RemainingFraction < 0.049 || claudeGPT.RemainingFraction > 0.051 {
+		t.Fatalf("expected weekly remaining fraction, got %.4f", claudeGPT.RemainingFraction)
+	}
+	if len(claudeGPT.Windows) != 2 {
+		t.Fatalf("expected two windows, got %d", len(claudeGPT.Windows))
 	}
 }
 

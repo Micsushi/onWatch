@@ -1,8 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" translate="no" class="notranslate">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta name="google" content="notranslate">
     <title>{{.Title}} - onWatch</title>
     <link rel="icon" type="image/svg+xml" href="{{.BasePath}}/static/favicon.svg">
     <link rel="manifest" href="{{.BasePath}}/manifest.json">
@@ -17,7 +19,7 @@
     <link rel="stylesheet" href="{{.BasePath}}/static/style.css?v={{.Version}}">
     <script src="{{.BasePath}}/static/theme-init.js?v={{.Version}}"></script>
 </head>
-<body>
+<body translate="no">
     {{if ne .Title "Login"}}<a href="#main-content" class="skip-link">Skip to dashboard</a>{{end}}
     {{template "content" .}}
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>

@@ -117,7 +117,7 @@ function getBothViewProviders() {
   if (tabs.length > 0) {
     return [...tabs]
       .map(el => el.dataset.provider)
-      .filter((provider) => provider && provider !== 'both');
+      .filter((provider) => provider && provider !== 'both' && provider !== 'api-integrations');
   }
   return [];
 }
@@ -396,7 +396,7 @@ function dashboardProvidersForWarmup() {
     .filter(Boolean);
   const current = getCurrentProvider();
   if (!providers.includes(current)) providers.unshift(current);
-  return [...new Set(providers)].filter(provider => provider !== 'api-integrations' || State.apiIntegrationsVisibility?.dashboard !== false);
+  return [...new Set(providers)].filter(provider => provider !== 'api-integrations');
 }
 
 function providerRequestParamFor(provider) {
@@ -1242,7 +1242,13 @@ function normalizeAPIIntegrationsMetric(metric) {
 }
 
 function normalizeGraphMode(mode) {
-  return String(mode || '').trim() === 'bucket' ? 'bucket' : 'cumulative';
+  const value = String(mode || '').trim();
+  if (value === 'bucket' || value.startsWith('bucket-')) return 'bucket';
+  return 'cumulative';
+}
+
+function isPeriodGraphMode(mode) {
+  return normalizeGraphMode(mode) !== 'cumulative';
 }
 
 function normalizeChartRange(range) {
@@ -1414,7 +1420,7 @@ function updateChartVisibility() {
   });
   
   // Recompute Y-axis based on visible datasets only
-  State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
+  State.chartYMax = computeYMax(State.chart.data.datasets, State.chart, { cap: !isPeriodGraphMode(State.graphMode) });
   State.chart.options.scales.y.max = State.chartYMax;
   State.chart.update('none'); // Update without animation
 }
@@ -1422,6 +1428,7 @@ function updateChartVisibility() {
 const statusConfig = {
   healthy: { label: 'Healthy', icon: 'M20 6L9 17l-5-5' },
   underuse: { label: 'Under pace', icon: 'M12 20V10M18 14l-6 6-6-6M4 4h16' },
+  very_underuse: { label: 'Very under pace', icon: 'M12 20V10M18 14l-6 6-6-6M4 4h16' },
   warning: { label: 'Warning', icon: 'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01' },
   danger: { label: 'Danger', icon: 'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01' },
   critical: { label: 'Critical', icon: 'M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z' }
@@ -1431,6 +1438,12 @@ function statusLabelFor(data) {
   if (data && data.statusLabel) return data.statusLabel;
   const status = data && data.status ? data.status : 'healthy';
   return (statusConfig[status] || statusConfig.healthy).label;
+}
+
+function paceTargetLabelFor(quota) {
+  const target = Number(quota && quota.paceExpectedUsed);
+  if (!Number.isFinite(target)) return '';
+  return `Pace target ${target.toFixed(1)}% by now`;
 }
 
 const quotaNames = {
@@ -2004,7 +2017,7 @@ async function loadAnthropicModalChart(quotaName) {
 
     const colors = getThemeColors();
     const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] || 0 }));
-    const processed = processDataWithGaps(rawData, range);
+    const processed = processCappedDataWithGaps(rawData, range);
     const maxVal = Math.max(...data.map(d => d[quotaName] || 0), 0);
     let yMax = maxVal <= 0 ? 10 : maxVal < 5 ? 10 : Math.min(Math.max(Math.ceil((maxVal * 1.2) / 5) * 5, 10), 100);
 
@@ -2422,7 +2435,7 @@ async function loadCopilotModalChart(quotaName) {
 
     const colors = getThemeColors();
     const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d.usagePercent }));
-    const processed = processDataWithGaps(rawData, range);
+    const processed = processCappedDataWithGaps(rawData, range);
     const maxVal = Math.max(...data.map(d => d.usagePercent), 10);
     const yMax = Math.min(Math.ceil(maxVal / 10) * 10 + 10, 110);
 
@@ -2511,6 +2524,135 @@ function getAntigravityGroupColumns(quota) {
   ];
 }
 
+// Remaining percent for an Antigravity quota window (5-hour / weekly bucket).
+function antigravityWindowRemaining(w) {
+  if (w.remainingPercent != null) return w.remainingPercent;
+  if (w.remainingFraction != null) return w.remainingFraction * 100;
+  return 0;
+}
+
+// Utilization (used) percent for a window - matches Codex/Anthropic cards where
+// the bar fills as quota is consumed (100% = used up, 0% = unused).
+function antigravityWindowUsage(w) {
+  if (w.usagePercent != null) return Math.max(0, Math.min(w.usagePercent, 100));
+  return Math.max(0, Math.min(100 - antigravityWindowRemaining(w), 100));
+}
+
+// Resolves the percent + label a window should display. The backend stamps
+// cardPercent/cardLabel per the global "Quota Display" setting (usage vs
+// available), so the card follows the same toggle as every other provider.
+function antigravityWindowDisplay(w) {
+  const pct = (w.cardPercent != null) ? w.cardPercent : antigravityWindowUsage(w);
+  return { pct: Math.max(0, Math.min(pct, 100)), label: w.cardLabel || 'Utilization' };
+}
+
+// Returns the window buckets for a pool quota. Antigravity pools that share
+// usage expose both a five-hour and a weekly window via q.windows; older
+// single-window payloads are synthesized into one bucket so the card still renders.
+function antigravityWindowsForQuota(q) {
+  if (Array.isArray(q.windows) && q.windows.length) return q.windows;
+  return [{
+    kind: q.windowKind || 'limit',
+    label: q.windowLabel || 'Quota limit',
+    cardPercent: q.cardPercent,
+    cardLabel: q.cardLabel,
+    remainingPercent: q.remainingPercent,
+    remainingFraction: q.remainingFraction,
+    usagePercent: q.usagePercent,
+    status: q.status,
+    resetTime: q.resetTime,
+    timeUntilResetSeconds: q.timeUntilResetSeconds,
+    isExhausted: q.isExhausted,
+  }];
+}
+
+// Renders stacked window rows (5-hour limit + weekly limit) for one shared-usage
+// pool. keyPrefix yields element ids percent-/progress-/status-/reset-/countdown-<keyPrefix>-<kind>
+// and registers each window in State.currentQuotas so the countdown ticker updates it.
+function antigravityWindowsHTML(keyPrefix, windows) {
+  return windows.map((w, idx) => {
+    const kind = w.kind || ('w' + idx);
+    const stateKey = `${keyPrefix}-${kind}`;
+    const disp = antigravityWindowDisplay(w);
+    const pctStr = disp.pct.toFixed(1);
+    const status = w.status || 'healthy';
+    const statusCfg = statusConfig[status] || statusConfig.healthy;
+    const timeUntil = w.timeUntilResetSeconds || 0;
+    State.currentQuotas[stateKey] = { timeUntilResetSeconds: timeUntil, status, percent: disp.pct };
+    const countdown = timeUntil > 0 ? formatDuration(timeUntil) : '--:--';
+    return `<div class="antigravity-window" data-window-kind="${kind}">
+      <div class="aw-window-head">
+        <span class="aw-window-label">${escapeHTML(w.label || 'Limit')}</span>
+        <span class="countdown" id="countdown-${stateKey}">${countdown}</span>
+      </div>
+      <div class="progress-stats">
+        <span class="usage-percent" id="percent-${stateKey}">${pctStr}%</span>
+        <span class="usage-fraction" id="label-${stateKey}">${escapeHTML(disp.label)}</span>
+      </div>
+      <div class="progress-wrapper">
+        <div class="progress-bar" role="progressbar" aria-valuenow="${Math.round(disp.pct)}" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress-fill" id="progress-${stateKey}" style="width: ${pctStr}%" data-status="${status}"></div>
+        </div>
+      </div>
+      <div class="aw-window-foot">
+        <span class="status-badge" id="status-${stateKey}" data-status="${status}">
+          <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
+          ${escapeHTML(statusLabelFor(w))}
+        </span>
+        <span class="reset-time" id="reset-${stateKey}">${w.resetTime ? 'Resets: ' + escapeHTML(formatDateTime(w.resetTime)) : ''}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Patches stacked window rows in place using the same id scheme as antigravityWindowsHTML.
+function antigravityUpdateWindows(keyPrefix, windows) {
+  windows.forEach((w, idx) => {
+    const kind = w.kind || ('w' + idx);
+    const stateKey = `${keyPrefix}-${kind}`;
+    const disp = antigravityWindowDisplay(w);
+    const pctStr = disp.pct.toFixed(1);
+    const status = w.status || 'healthy';
+    const timeUntil = w.timeUntilResetSeconds || 0;
+    const prev = State.currentQuotas[stateKey];
+    State.currentQuotas[stateKey] = { timeUntilResetSeconds: timeUntil, status, percent: disp.pct };
+
+    const progressEl = document.getElementById(`progress-${stateKey}`);
+    if (progressEl) {
+      progressEl.style.width = `${pctStr}%`;
+      progressEl.setAttribute('data-status', status);
+      const bar = progressEl.parentElement;
+      if (bar) bar.setAttribute('aria-valuenow', Math.round(disp.pct));
+    }
+    const percentEl = document.getElementById(`percent-${stateKey}`);
+    if (percentEl) {
+      const oldVal = prev && prev.percent != null ? prev.percent : disp.pct;
+      if (Math.abs(oldVal - disp.pct) > 0.2) animateValue(percentEl, oldVal, disp.pct, 400, v => `${v.toFixed(1)}%`);
+      else percentEl.textContent = `${pctStr}%`;
+    }
+    const labelEl = document.getElementById(`label-${stateKey}`);
+    if (labelEl) labelEl.textContent = disp.label;
+    const statusEl = document.getElementById(`status-${stateKey}`);
+    if (statusEl) {
+      const cfg = statusConfig[status] || statusConfig.healthy;
+      statusEl.setAttribute('data-status', status);
+      statusEl.innerHTML = `<svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${cfg.icon}"/></svg>${escapeHTML(statusLabelFor(w))}`;
+    }
+    const resetEl = document.getElementById(`reset-${stateKey}`);
+    if (resetEl) resetEl.textContent = w.resetTime ? `Resets: ${formatDateTime(w.resetTime)}` : '';
+    const countdownEl = document.getElementById(`countdown-${stateKey}`);
+    if (countdownEl) {
+      if (timeUntil > 0) {
+        countdownEl.textContent = formatDuration(timeUntil);
+        countdownEl.classList.toggle('imminent', timeUntil < 1800);
+        countdownEl.style.display = '';
+      } else {
+        countdownEl.style.display = 'none';
+      }
+    }
+  });
+}
+
 function renderAntigravityQuotaCards(quotas, containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -2518,48 +2660,18 @@ function renderAntigravityQuotaCards(quotas, containerId) {
   container.innerHTML = quotas.map((q, i) => {
     const icon = getAntigravityIcon(q.modelId);
     const displayName = q.displayName || q.label || q.modelId;
-    const displayPct = q.cardPercent != null ? q.cardPercent : (q.usagePercent || 0);
-    const usagePct = displayPct.toFixed(1);
-    const cardLabel = q.cardLabel || 'Usage';
-    const status = q.status || 'healthy';
-    const statusCfg = statusConfig[status] || statusConfig.healthy;
-    const statusLabel = statusLabelFor(q);
-    const countdownId = `countdown-antigravity-${q.modelId}`;
-    const progressId = `progress-antigravity-${q.modelId}`;
-    const percentId = `percent-antigravity-${q.modelId}`;
-    const fractionId = `fraction-antigravity-${q.modelId}`;
-    const statusId = `status-antigravity-${q.modelId}`;
-    const resetId = `reset-antigravity-${q.modelId}`;
+    const windows = antigravityWindowsForQuota(q);
+    const windowsHTML = antigravityWindowsHTML(`antigravity-${q.modelId}`, windows);
 
-    // Format the remaining percent (leave as-is - separate fallback computation)
-    const remainingPct = (q.remainingPercent || 0).toFixed(1);
-    const fractionText = q.cardPercent != null ? `${cardLabel}` : `${remainingPct}% remaining`;
-
-    return `<article class="quota-card antigravity-card" data-quota="${q.modelId}" data-provider="antigravity" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
+    return `<article class="quota-card antigravity-card multi-window" data-quota="${q.modelId}" data-provider="antigravity" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
       <header class="card-header">
         <h2 class="quota-title">
           <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icon}</svg>
           ${displayName}
           ${q.isExhausted ? '<span class="exhausted-badge">Exhausted</span>' : ''}
         </h2>
-        <span class="countdown" id="${countdownId}">${q.timeUntilResetSeconds > 0 ? formatDuration(q.timeUntilResetSeconds) : '--:--'}</span>
       </header>
-      <div class="progress-stats">
-        <span class="usage-percent" id="${percentId}">${usagePct}%</span>
-        <span class="usage-fraction" id="${fractionId}">${fractionText}</span>
-      </div>
-      <div class="progress-wrapper">
-        <div class="progress-bar" role="progressbar" aria-valuenow="${Math.round(displayPct)}" aria-valuemin="0" aria-valuemax="100">
-          <div class="progress-fill" id="${progressId}" style="width: ${usagePct}%" data-status="${status}"></div>
-        </div>
-      </div>
-      <footer class="card-footer">
-        <span class="status-badge" id="${statusId}" data-status="${status}">
-          <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
-          ${statusLabel}
-        </span>
-        <span class="reset-time" id="${resetId}">${q.resetTime ? 'Resets: ' + formatDateTime(q.resetTime) : ''}</span>
-      </footer>
+      <div class="antigravity-windows">${windowsHTML}</div>
     </article>`;
   }).join('');
 
@@ -2587,6 +2699,9 @@ function updateAntigravityCard(quota) {
     isExhausted: quota.isExhausted,
     status: quota.status || 'healthy',
     statusLabel: quota.statusLabel || '',
+    windowKind: quota.windowKind || 'unknown',
+    windowLabel: quota.windowLabel || 'Quota limit',
+    windows: quota.windows || [],
     resetTime: quota.resetTime,
     timeUntilReset: quota.timeUntilReset,
     timeUntilResetSeconds: quota.timeUntilResetSeconds || 0,
@@ -2595,55 +2710,12 @@ function updateAntigravityCard(quota) {
     displayName: quota.displayName
   };
 
-  const progressEl = document.getElementById(`progress-antigravity-${quota.modelId}`);
-  const percentEl = document.getElementById(`percent-antigravity-${quota.modelId}`);
-  const fractionEl = document.getElementById(`fraction-antigravity-${quota.modelId}`);
-  const statusEl = document.getElementById(`status-antigravity-${quota.modelId}`);
-  const resetEl = document.getElementById(`reset-antigravity-${quota.modelId}`);
-  const countdownEl = document.getElementById(`countdown-antigravity-${quota.modelId}`);
-
-  const displayPct = quota.cardPercent != null ? quota.cardPercent : (quota.usagePercent || 0);
-  const usagePct = displayPct.toFixed(1);
-  const status = quota.status || 'healthy';
-
-  if (progressEl) {
-    progressEl.style.width = `${usagePct}%`;
-    progressEl.setAttribute('data-status', status);
-    const bar = progressEl.parentElement;
-    if (bar) bar.setAttribute('aria-valuenow', Math.round(displayPct));
-  }
-  if (percentEl) {
-    const oldVal = prev ? prev.percent : 0;
-    if (Math.abs(oldVal - displayPct) > 0.2) {
-      animateValue(percentEl, oldVal, displayPct, 400, v => `${v.toFixed(1)}%`);
-    } else {
-      percentEl.textContent = `${usagePct}%`;
-    }
-  }
-  if (fractionEl) {
-    // remainingPercent stays as-is - separate computation, not the display toggle
-    const remainingPct = (quota.remainingPercent || 0).toFixed(1);
-    fractionEl.textContent = quota.cardPercent != null
-      ? (quota.cardLabel || 'Usage')
-      : `${remainingPct}% remaining`;
-  }
-  if (statusEl) {
-    const config = statusConfig[status] || statusConfig.healthy;
-    statusEl.setAttribute('data-status', status);
-    statusEl.innerHTML = `<svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${config.icon}"/></svg>${statusLabelFor(quota)}`;
-  }
-  if (resetEl) {
-    resetEl.textContent = quota.resetTime ? `Resets: ${formatDateTime(quota.resetTime)}` : '';
-  }
-  if (countdownEl) {
-    if (quota.timeUntilResetSeconds > 0) {
-      countdownEl.textContent = formatDuration(quota.timeUntilResetSeconds);
-      countdownEl.classList.toggle('imminent', quota.timeUntilResetSeconds < 1800);
-      countdownEl.style.display = '';
-    } else {
-      countdownEl.style.display = 'none';
-    }
-  }
+  const windows = antigravityWindowsForQuota(quota);
+  const firstKind = (windows[0] && (windows[0].kind || 'w0')) || 'w0';
+  // If the per-window DOM is not present yet (first paint / structure change),
+  // skip the in-place patch; the next full render rebuilds the card.
+  if (!document.getElementById(`progress-antigravity-${quota.modelId}-${firstKind}`)) return;
+  antigravityUpdateWindows(`antigravity-${quota.modelId}`, windows);
 }
 
 // Gemini Quota Cards
@@ -2915,9 +2987,27 @@ function openAntigravityModal(groupKey, providerOverride) {
 
   const usagePct = (data.percent || 0).toFixed(1);
   const remainingPct = (data.remainingPercent || 0).toFixed(1);
+  const windowLabel = data.windowLabel || 'Quota limit';
+  const windowRows = Array.isArray(data.windows) && data.windows.length
+    ? `<h4 class="modal-section-title">Limit Windows</h4>
+      <table class="modal-cycles-table">
+        <thead><tr><th>Limit</th><th>Used</th><th>Remaining</th><th>Reset</th></tr></thead>
+        <tbody>${data.windows.map(w => `
+          <tr>
+            <td>${w.label || 'Quota limit'}</td>
+            <td>${Number(w.usagePercent || 0).toFixed(1)}%</td>
+            <td>${Number(w.remainingPercent || 0).toFixed(1)}%</td>
+            <td>${w.resetTime ? formatDateTime(w.resetTime) : '--'}</td>
+          </tr>`).join('')}</tbody>
+      </table>`
+    : '';
 
   bodyEl.innerHTML = `
     <div class="modal-stats-grid">
+      <div class="modal-stat">
+        <span class="modal-stat-label">Active Limit</span>
+        <span class="modal-stat-value">${windowLabel}</span>
+      </div>
       <div class="modal-stat">
         <span class="modal-stat-label">Usage</span>
         <span class="modal-stat-value">${usagePct}%</span>
@@ -2938,6 +3028,7 @@ function openAntigravityModal(groupKey, providerOverride) {
     <div class="modal-chart-container">
       <canvas id="modal-chart" height="200"></canvas>
     </div>
+    ${windowRows}
     <h4 class="modal-section-title">Recent Cycles</h4>
     <table class="modal-cycles-table">
       <thead><tr><th>Cycle</th><th>Duration</th><th>Peak Used</th><th>Total Delta</th></tr></thead>
@@ -2974,7 +3065,7 @@ async function loadAntigravityModalChart(groupKey) {
 
     const labels = data.labels || [];
     const rawData = (modelDataset.data || []).map((y, i) => ({ x: new Date(labels[i]), y }));
-    const processed = processDataWithGaps(rawData, range);
+    const processed = processCappedDataWithGaps(rawData, range);
     const borderColor = '#6e40c9';
 
     State.modalChart = new Chart(ctx, {
@@ -3331,7 +3422,7 @@ async function loadCodexModalChart(quotaName) {
 
     const colors = getThemeColors();
     const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] || 0 }));
-    const processed = processDataWithGaps(rawData, range);
+    const processed = processCappedDataWithGaps(rawData, range);
     const maxVal = Math.max(...data.map(d => d[quotaName] || 0), 0);
     const yMax = maxVal <= 0 ? 10 : maxVal < 5 ? 10 : Math.min(Math.max(Math.ceil((maxVal * 1.2) / 5) * 5, 10), 100);
 
@@ -4833,6 +4924,13 @@ function datasetsHaveNonZeroValue(datasets) {
   }));
 }
 
+function datasetsHaveFiniteValue(datasets) {
+  return (datasets || []).some((dataset) => (dataset.data || []).some((point) => {
+    const value = typeof point === 'number' ? point : Number(point && point.y);
+    return Number.isFinite(value);
+  }));
+}
+
 function isHistoryQuotaKey(key) {
   return Boolean(key) && key !== 'capturedAt' && key !== 'captured_at' && !String(key).startsWith('_');
 }
@@ -4848,34 +4946,95 @@ function setChartEmptyState(canvasID, empty, message) {
   }
 }
 
-function graphBucketIntervalMs(range) {
-  const rangeKey = String(range || '6h').toLowerCase();
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  const intervals = {
-    '1h': 10 * minute,
-    '6h': hour,
-    '24h': 3 * hour,
-    '7d': day,
-    '15d': 2 * day,
-    '30d': 3 * day,
-    all: day,
-  };
-  return intervals[rangeKey] || hour;
+const graphBucketTargets = {
+  bucket: 50,
+};
+
+const graphBucketNiceIntervals = [
+  15 * 1000,
+  20 * 1000,
+  30 * 1000,
+  45 * 1000,
+  60 * 1000,
+  90 * 1000,
+  2 * 60 * 1000,
+  3 * 60 * 1000,
+  5 * 60 * 1000,
+  10 * 60 * 1000,
+  15 * 60 * 1000,
+  20 * 60 * 1000,
+  30 * 60 * 1000,
+  45 * 60 * 1000,
+  60 * 60 * 1000,
+  90 * 60 * 1000,
+  2 * 60 * 60 * 1000,
+  3 * 60 * 60 * 1000,
+  4 * 60 * 60 * 1000,
+  6 * 60 * 60 * 1000,
+  8 * 60 * 60 * 1000,
+  12 * 60 * 60 * 1000,
+  24 * 60 * 60 * 1000,
+  2 * 24 * 60 * 60 * 1000,
+  3 * 24 * 60 * 60 * 1000,
+  7 * 24 * 60 * 60 * 1000,
+];
+
+function graphBucketTargetCount(mode = State.graphMode) {
+  return graphBucketTargets[normalizeGraphMode(mode)] || graphBucketTargets.bucket;
 }
 
-function graphBucketCount(range) {
+function graphBucketMinCount(mode = State.graphMode) {
+  return Math.floor(graphBucketTargetCount(mode) * 0.8);
+}
+
+function graphBucketMaxCount(mode = State.graphMode) {
+  return Math.ceil(graphBucketTargetCount(mode) * 1.2);
+}
+
+function graphRangeDurationMs(range, points = []) {
   const rangeKey = String(range || '6h').toLowerCase();
-  const counts = {
-    '1h': 6,
-    '6h': 6,
-    '24h': 8,
-    '7d': 7,
-    '15d': 8,
-    '30d': 10,
+  const hour = 60 * 60 * 1000;
+  const durations = {
+    '1h': hour,
+    '6h': 6 * hour,
+    '24h': 24 * hour,
+    '7d': 7 * 24 * hour,
+    '15d': 15 * 24 * hour,
+    '30d': 30 * 24 * hour,
   };
-  return counts[rangeKey] || null;
+  if (rangeKey !== 'all') return durations[rangeKey] || durations['6h'];
+  const validTimes = points
+    .map(point => point && point.x instanceof Date ? point.x.getTime() : new Date(point && point.x).getTime())
+    .filter(time => Number.isFinite(time) && time <= Date.now());
+  if (validTimes.length < 2) return durations['30d'];
+  return Math.max(hour, Math.max(...validTimes) - Math.min(...validTimes));
+}
+
+function graphBucketIntervalMs(range, mode = State.graphMode, points = []) {
+  const target = graphBucketTargetCount(mode);
+  const duration = graphRangeDurationMs(range, points);
+  const idealInterval = Math.max(1000, Math.ceil(duration / Math.max(1, target - 1)));
+  const minCount = graphBucketMinCount(mode);
+  const maxCount = graphBucketMaxCount(mode);
+  const candidates = graphBucketNiceIntervals
+    .map(interval => ({ interval, count: Math.ceil(duration / interval) }))
+    .filter(candidate => candidate.count >= minCount && candidate.count <= maxCount);
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => {
+      const aDistance = Math.abs(a.interval - idealInterval);
+      const bDistance = Math.abs(b.interval - idealInterval);
+      if (aDistance !== bDistance) return aDistance - bDistance;
+      return Math.abs(a.count - target) - Math.abs(b.count - target);
+    });
+    return candidates[0].interval;
+  }
+  return Math.ceil(idealInterval / 1000) * 1000;
+}
+
+function graphBucketCount(range, mode = State.graphMode, points = []) {
+  const intervalMs = graphBucketIntervalMs(range, mode, points);
+  const count = Math.ceil(graphRangeDurationMs(range, points) / intervalMs);
+  return Math.max(1, Math.min(graphBucketMaxCount(mode), count));
 }
 
 function graphBarSizing(range, datasetCount = 2) {
@@ -4889,21 +5048,21 @@ function graphBarSizing(range, datasetCount = 2) {
   };
 }
 
-function graphBucketUnit(range) {
-  return graphBucketIntervalMs(range) >= 24 * 60 * 60 * 1000 ? 'day' : 'hour';
+function graphBucketUnit(range, mode = State.graphMode) {
+  return graphBucketIntervalMs(range, mode) >= 24 * 60 * 60 * 1000 ? 'day' : 'hour';
 }
 
-function graphBucketTimeUnit(range) {
-  const intervalMs = graphBucketIntervalMs(range);
+function graphBucketTimeUnit(range, mode = State.graphMode, points = []) {
+  const intervalMs = graphBucketIntervalMs(range, mode, points);
+  if (intervalMs < 60 * 1000) return 'second';
   if (intervalMs < 60 * 60 * 1000) return 'minute';
   if (intervalMs < 24 * 60 * 60 * 1000) return 'hour';
   return 'day';
 }
 
-function graphBucketStart(date, range) {
+function graphBucketStart(date, range, mode = State.graphMode, intervalMs = graphBucketIntervalMs(range, mode)) {
   const source = date instanceof Date ? date : new Date(date);
   if (Number.isNaN(source.getTime())) return null;
-  const intervalMs = graphBucketIntervalMs(range);
   if (intervalMs === 24 * 60 * 60 * 1000) {
     const bucket = new Date(source);
     bucket.setHours(0, 0, 0, 0);
@@ -4917,8 +5076,9 @@ function graphBucketEnd(date, range) {
   return start ? new Date(start.getTime() + graphBucketIntervalMs(range)) : null;
 }
 
-function graphBucketRange(range, points = []) {
-  const intervalMs = graphBucketIntervalMs(range);
+function graphBucketRange(range, points = [], mode = State.graphMode) {
+  const intervalMs = graphBucketIntervalMs(range, mode, points);
+  const maxCount = graphBucketMaxCount(mode);
   const rangeKey = String(range || '6h').toLowerCase();
   const now = Date.now();
   const validTimes = points
@@ -4930,12 +5090,12 @@ function graphBucketRange(range, points = []) {
     start = new Date(Math.min(...validTimes));
     end = new Date(Math.max(...validTimes, now));
   } else {
-    const count = graphBucketCount(range) || 6;
-    end = graphBucketStart(new Date(), range) || new Date();
+    const count = graphBucketCount(range, mode, points) || 6;
+    end = graphBucketStart(new Date(), range, mode, intervalMs) || new Date();
     start = new Date(end.getTime() - (count - 1) * intervalMs);
   }
-  const startBucket = graphBucketStart(start, range) || start;
-  const endBucket = graphBucketStart(end, range) || end;
+  const startBucket = graphBucketStart(start, range, mode, intervalMs) || start;
+  const endBucket = graphBucketStart(end, range, mode, intervalMs) || end;
   const buckets = [];
   for (let time = startBucket.getTime(); time <= endBucket.getTime(); time += intervalMs) {
     const periodStart = new Date(time);
@@ -4947,7 +5107,7 @@ function graphBucketRange(range, points = []) {
       periodStart,
       periodEnd,
     });
-    if (buckets.length > 400) break;
+    if (buckets.length >= maxCount) break;
   }
   return buckets;
 }
@@ -4970,17 +5130,18 @@ function formatPeriodTooltipTitle(point) {
     : `${startDate}, ${startTime} - ${endDate}, ${endTime}`;
 }
 
-function aggregateDatasetForBuckets(dataset, range) {
+function aggregateDatasetForBuckets(dataset, range, mode = State.graphMode) {
   const strategy = dataset._barStrategy || 'delta';
   const points = (dataset.data || [])
     .filter(point => point && point.x != null && point.y != null && Number.isFinite(Number(point.y)))
     .map(point => ({ x: point.x instanceof Date ? point.x : new Date(point.x), y: Number(point.y) }))
     .filter(point => !Number.isNaN(point.x.getTime()))
     .sort((a, b) => a.x.getTime() - b.x.getTime());
-  const buckets = new Map(graphBucketRange(range, points).map(bucket => [bucket.periodStart.toISOString(), bucket]));
+  const intervalMs = graphBucketIntervalMs(range, mode, points);
+  const buckets = new Map(graphBucketRange(range, points, mode).map(bucket => [bucket.periodStart.toISOString(), bucket]));
   let previous = null;
   points.forEach((point) => {
-    const bucketStart = graphBucketStart(point.x, range);
+    const bucketStart = graphBucketStart(point.x, range, mode, intervalMs);
     if (!bucketStart) return;
     let value = point.y;
     if (strategy === 'delta') {
@@ -4988,7 +5149,6 @@ function aggregateDatasetForBuckets(dataset, range) {
       previous = point.y;
     }
     const key = bucketStart.toISOString();
-    const intervalMs = graphBucketIntervalMs(range);
     const existing = buckets.get(key) || {
       x: new Date(bucketStart.getTime() + intervalMs / 2),
       y: 0,
@@ -5010,39 +5170,45 @@ function aggregateDatasetForBuckets(dataset, range) {
     }));
 }
 
+function downsampleDatasetForCumulative(dataset, range, mode = 'bucket') {
+  const points = (dataset.data || [])
+    .filter(point => point && point.x != null && point.y != null && Number.isFinite(Number(point.y)))
+    .map(point => ({ ...point, x: point.x instanceof Date ? point.x : new Date(point.x), y: Number(point.y) }))
+    .filter(point => !Number.isNaN(point.x.getTime()))
+    .sort((a, b) => a.x.getTime() - b.x.getTime());
+  return downsamplePointSeriesForCumulative(points, range, mode);
+}
+
 function applyGraphModeToDatasets(datasets, range, mode = State.graphMode) {
   const graphMode = normalizeGraphMode(mode);
-  const barSizing = graphBarSizing(range, (datasets || []).length);
   return (datasets || []).map((dataset) => {
-    if (graphMode !== 'bucket') {
+    if (!isPeriodGraphMode(graphMode)) {
+      const sampledData = downsampleDatasetForCumulative(dataset, range);
       return {
         ...dataset,
         type: 'line',
+        data: sampledData,
         fill: dataset.fill !== undefined ? dataset.fill : true,
         tension: dataset.tension !== undefined ? dataset.tension : 0.4,
-        pointRadius: dataset.pointRadius !== undefined ? dataset.pointRadius : 0,
+        pointRadius: 2,
         pointHoverRadius: dataset.pointHoverRadius !== undefined ? dataset.pointHoverRadius : 4,
       };
     }
     const color = dataset.borderColor || dataset.backgroundColor || '#14B8A6';
+    const bucketData = aggregateDatasetForBuckets(dataset, range, graphMode);
     return {
       ...dataset,
-      type: 'bar',
-      data: aggregateDatasetForBuckets(dataset, range),
+      type: 'line',
+      data: bucketData,
       fill: false,
-      tension: 0,
-      borderWidth: 1,
+      tension: 0.25,
+      borderWidth: 2,
       borderColor: color,
       backgroundColor: dataset.backgroundColor || color,
-      pointRadius: 0,
-      pointHoverRadius: 0,
+      pointRadius: 2,
+      pointHoverRadius: 4,
       spanGaps: false,
       segment: undefined,
-      barPercentage: barSizing.barPercentage,
-      categoryPercentage: barSizing.categoryPercentage,
-      maxBarThickness: barSizing.maxBarThickness,
-      borderRadius: 4,
-      borderSkipped: false,
     };
   });
 }
@@ -5124,13 +5290,16 @@ function renderUsageSummary(datasets, range, mode = State.graphMode) {
   });
 
   const graphMode = normalizeGraphMode(mode);
-  const countLabel = graphMode === 'bucket' ? 'Periods' : 'Samples';
-  const latestLabel = graphMode === 'bucket' ? 'Latest Period' : 'Current Usage';
+  const periodMode = isPeriodGraphMode(graphMode);
+  const countLabel = periodMode ? 'Periods' : 'Samples';
+  const latestLabel = periodMode ? 'Latest Period Used' : 'Current Usage';
+  const weeklyAverageLabel = periodMode ? 'Avg Weekly Period' : 'Avg Weekly All-Model';
+  const fiveHourAverageLabel = periodMode ? 'Avg 5-Hour Period' : 'Avg 5-Hour Usage';
 
   if (points.length === 0) {
     summaryEl.innerHTML = `
       <div class="platform-cost-metric primary">
-        <span class="platform-cost-label">Avg Weekly All-Model</span>
+        <span class="platform-cost-label">${weeklyAverageLabel}</span>
         <strong>--</strong>
       </div>
       <div class="platform-cost-metric">
@@ -5138,7 +5307,7 @@ function renderUsageSummary(datasets, range, mode = State.graphMode) {
         <strong>--</strong>
       </div>
       <div class="platform-cost-metric">
-        <span class="platform-cost-label">Avg 5-Hour Usage</span>
+        <span class="platform-cost-label">${fiveHourAverageLabel}</span>
         <strong>--</strong>
       </div>
       <div class="platform-cost-metric">
@@ -5162,7 +5331,7 @@ function renderUsageSummary(datasets, range, mode = State.graphMode) {
 
   summaryEl.innerHTML = `
     <div class="platform-cost-metric primary">
-      <span class="platform-cost-label">Avg Weekly All-Model</span>
+      <span class="platform-cost-label">${weeklyAverageLabel}</span>
       <strong>${averages.weekly == null ? '--' : formatUsagePercent(averages.weekly)}</strong>
     </div>
     <div class="platform-cost-metric">
@@ -5170,7 +5339,7 @@ function renderUsageSummary(datasets, range, mode = State.graphMode) {
       <strong>${formatUsagePercent(latest)}</strong>
     </div>
     <div class="platform-cost-metric">
-      <span class="platform-cost-label">Avg 5-Hour Usage</span>
+      <span class="platform-cost-label">${fiveHourAverageLabel}</span>
       <strong>${averages.daily == null ? '--' : formatUsagePercent(averages.daily)}</strong>
     </div>
     <div class="platform-cost-metric">
@@ -5187,10 +5356,10 @@ function renderUsageSummary(datasets, range, mode = State.graphMode) {
 function applyChartGraphMode(chart, range, mode = State.graphMode) {
   if (!chart) return;
   const graphMode = normalizeGraphMode(mode);
-  chart.config.type = graphMode === 'bucket' ? 'bar' : 'line';
+  chart.config.type = 'line';
   if (chart.options?.scales?.x) {
-    chart.options.scales.x.offset = graphMode === 'bucket';
-    if (graphMode === 'bucket') {
+    chart.options.scales.x.offset = false;
+    if (isPeriodGraphMode(graphMode)) {
       const datasets = chart.data?.datasets || [];
       const firstDataset = datasets.find(dataset => Array.isArray(dataset.data) && dataset.data.length > 0);
       const first = firstDataset?.data?.[0];
@@ -5208,8 +5377,10 @@ function setMainChartDatasets(datasets, range, options = {}) {
   if (!State.chart) return;
   const mode = normalizeGraphMode(options.mode || State.graphMode);
   const chartDatasets = applyGraphModeToDatasets(datasets, range, mode);
-  const cap = options.cap !== undefined ? options.cap : mode !== 'bucket';
-  if (!datasetsHaveNonZeroValue(chartDatasets)) {
+  const cap = options.cap !== undefined ? options.cap : !isPeriodGraphMode(mode);
+  const hasPeriodPoints = isPeriodGraphMode(mode)
+    && chartDatasets.some(dataset => Array.isArray(dataset.data) && dataset.data.length > 0);
+  if (!datasetsHaveFiniteValue(chartDatasets) && !hasPeriodPoints) {
     const existingDatasets = State.chart.data?.datasets || [];
     const canPreserveExisting = options.preserveExistingOnEmpty !== false
       && State.currentChartProvider === getCurrentProvider()
@@ -5268,15 +5439,15 @@ function initChart() {
     defaultDatasets = []; // OpenRouter datasets are dynamic - populated when history data arrives
   } else if (provider === 'zai') {
     defaultDatasets = [
-      { label: 'Tokens Limit', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-subscription').trim() || '#0D9488', backgroundColor: 'rgba(13, 148, 136, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('tokensLimit') },
-      { label: 'Time Limit', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-search').trim() || '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('timeLimit') },
-      { label: 'Tool Calls', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', backgroundColor: 'rgba(59, 130, 246, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('toolCalls') }
+      { label: 'Tokens Limit', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-subscription').trim() || '#0D9488', backgroundColor: 'rgba(13, 148, 136, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('tokensLimit') },
+      { label: 'Time Limit', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-search').trim() || '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('timeLimit') },
+      { label: 'Tool Calls', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', backgroundColor: 'rgba(59, 130, 246, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('toolCalls') }
     ];
   } else {
     defaultDatasets = [
-      { label: 'Subscription', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-subscription').trim() || '#0D9488', backgroundColor: 'rgba(13, 148, 136, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('subscription') },
-      { label: 'Search', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-search').trim() || '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('search') },
-      { label: 'Tool Calls', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', backgroundColor: 'rgba(59, 130, 246, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('toolCalls') }
+      { label: 'Subscription', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-subscription').trim() || '#0D9488', backgroundColor: 'rgba(13, 148, 136, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('subscription') },
+      { label: 'Search', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-search').trim() || '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('search') },
+      { label: 'Tool Calls', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', backgroundColor: 'rgba(59, 130, 246, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('toolCalls') }
     ];
   }
   const quotaMap = provider === 'zai'
@@ -5295,7 +5466,7 @@ function initChart() {
 
   const isAPIIntegrations = provider === 'api-integrations';
   State.chart = new Chart(ctx, {
-    type: normalizeGraphMode(State.graphMode) === 'bucket' ? 'bar' : 'line',
+    type: 'line',
     data: {
       labels: [],
       datasets: defaultDatasets
@@ -5326,7 +5497,7 @@ function initChart() {
             meta.hidden = meta.hidden === null ? !ci.data.datasets[index].hidden : null;
             ci.update('none');
             // Recalculate Y-axis based on visible datasets
-            State.chartYMax = computeYMax(ci.data.datasets, ci);
+            State.chartYMax = computeYMax(ci.data.datasets, ci, { cap: !isPeriodGraphMode(State.graphMode) });
             ci.options.scales.y.max = State.chartYMax;
             ci.update();
           }
@@ -5356,7 +5527,8 @@ function initChart() {
                 }
                 return `${ctx.dataset.label}: ${formatNumber(Number(ctx.parsed.y || 0))}`;
               }
-              return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`;
+              const suffix = isPeriodGraphMode(State.graphMode) ? ' used in period' : '';
+              return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%${suffix}`;
             }
           }
         }
@@ -5364,7 +5536,7 @@ function initChart() {
       scales: {
         x: {
           type: 'time',
-          offset: normalizeGraphMode(State.graphMode) === 'bucket',
+          offset: false,
           time: { unit: 'hour', displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' } },
           grid: { color: colors.grid, drawBorder: false },
           ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' }
@@ -6013,6 +6185,9 @@ function normalizeBothQuotas(provider, payload) {
       : (quota.usagePercent != null
         ? quota.usagePercent
         : (quota.utilization != null ? quota.utilization : (quota.percent ?? 0)));
+    const cardLabel = provider === 'antigravity'
+      ? (quota.cardLabel || `${quota.windowLabel || 'Quota limit'} remaining`)
+      : (quota.cardLabel || 'Utilization');
     return {
       ...quota,
       cardPercent: percent,
@@ -6023,10 +6198,10 @@ function normalizeBothQuotas(provider, payload) {
         || minimaxDisplayNames[quota.name]
         || geminiDisplayNames[quota.name]
         || getQuotaDisplayName(quota.name, provider),
-      cardLabel: quota.cardLabel || 'Utilization',
+      cardLabel,
       status: quota.status || 'healthy',
       timeUntilResetSeconds: quota.timeUntilResetSeconds || 0,
-      resetsAt: quota.resetsAt || quota.renewsAt || '',
+      resetsAt: quota.resetsAt || quota.renewsAt || quota.resetTime || '',
     };
   });
 }
@@ -6039,6 +6214,7 @@ function buildAllProviderEntries() {
   const providerSet = new Set(configuredOrder);
   const addProviderFromKey = (key) => {
     if (!key) return;
+    if (key === 'api-integrations' || key === 'apiIntegrations') return;
     if (key === 'codex' || key === 'codexAccounts') {
       providerSet.add('codex');
       return;
@@ -6075,24 +6251,6 @@ function buildAllProviderEntries() {
 
   const addProviderEntry = (provider) => {
     if (provider === 'api-integrations') {
-      const payload = current.apiIntegrations;
-      if (!payload || State.apiIntegrationsVisibility?.dashboard === false) return;
-      const summaryCurrent = payload.current && typeof payload.current === 'object' ? payload.current : {};
-      const integrationEntries = Object.entries(summaryCurrent);
-      const summary = integrationEntries.reduce((acc, [, integration]) => {
-        acc.integrationCount++;
-        acc.requestCount += Number(integration.requestCount || 0);
-        acc.totalTokens += Number(integration.totalTokens || 0);
-        return acc;
-      }, { integrationCount: 0, requestCount: 0, totalTokens: 0 });
-      entries.push({
-        provider: 'api-integrations',
-        cardKey: sanitizeProviderCardKey('api-integrations-summary'),
-        title: 'Cost',
-        summary,
-        health: payload.health || null,
-        summaryOnly: true,
-      });
       return;
     }
 
@@ -6217,12 +6375,34 @@ function renderProviderKPIHTML(quotas, cardKey) {
     const usageFraction = Number.isFinite(Number(quota.used)) && Number.isFinite(Number(quota.total)) && Number(quota.total) > 0
       ? `${formatNumber(quota.used)} / ${formatNumber(quota.total)}`
       : label;
+    const paceTargetLabel = paceTargetLabelFor(quota);
     const icon = anthropicQuotaIcons[quota.name]
       || quotaIcons[quota.name]
       || '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>';
     const resetText = quota.resetsAt ? `Resets: ${formatDateTime(quota.resetsAt)}` : '';
     const timeUntil = quota.timeUntilResetSeconds || 0;
     const countdown = timeUntil > 0 ? formatDuration(timeUntil) : '--:--';
+
+    // Shared-usage pools (Antigravity) expose multiple quota windows (5-hour +
+    // weekly). Render them stacked inside the one card so both limits are visible.
+    const windows = Array.isArray(quota.windows) ? quota.windows : [];
+    if (windows.length > 0) {
+      const kpiName = quota.name || quota.modelId || quota.quotaGroup || '';
+      const safeName = sanitizeProviderCardKey(kpiName);
+      const keyPrefix = cardKey ? `kpiv-${cardKey}-${safeName}` : `kpiq-${safeName}`;
+      return `<article class="quota-card provider-kpi-card multi-window" data-quota="${escapeHTML(kpiName)}">
+        <header class="card-header">
+          <div class="quota-title-block">
+            <h2 class="quota-title">
+              <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icon}</svg>
+              ${escapeHTML(displayName)}
+            </h2>
+            ${subtitle ? `<div class="quota-subtitle">${escapeHTML(subtitle)}</div>` : ''}
+          </div>
+        </header>
+        <div class="antigravity-windows">${antigravityWindowsHTML(keyPrefix, windows)}</div>
+      </article>`;
+    }
 
     // Register in State.currentQuotas so startCountdowns can tick this down.
     // Key format: kpiv-<cardKey>-<quotaName> -> countdown element id: countdown-kpiv-<cardKey>-<quotaName>
@@ -6241,6 +6421,7 @@ function renderProviderKPIHTML(quotas, cardKey) {
     const progressId   = stateKey ? ` id="progress-${stateKey}"` : '';
     const statusId     = stateKey ? ` id="status-${stateKey}"` : '';
     const resetId      = stateKey ? ` id="reset-${stateKey}"` : '';
+    const paceTargetId = stateKey ? ` id="pace-target-${stateKey}"` : '';
 
     return `<article class="quota-card provider-kpi-card" data-quota="${escapeHTML(quota.name || '')}">
       <header class="card-header">
@@ -6257,6 +6438,7 @@ function renderProviderKPIHTML(quotas, cardKey) {
         <span class="usage-percent"${percentId}>${percent.toFixed(1)}%</span>
         <span class="usage-fraction">${escapeHTML(usageFraction)}</span>
       </div>
+      ${paceTargetLabel ? `<div class="pace-target"${paceTargetId}>${escapeHTML(paceTargetLabel)}</div>` : ''}
       <div class="progress-wrapper">
         <div class="progress-bar" role="progressbar" aria-valuenow="${Math.round(percent)}" aria-valuemin="0" aria-valuemax="100">
           <div class="progress-fill"${progressId} style="width: ${Math.max(0, Math.min(percent, 100)).toFixed(1)}%" data-status="${status}"></div>
@@ -6276,6 +6458,17 @@ function renderProviderKPIHTML(quotas, cardKey) {
 // In-place update for a single KPI card in the All view. Uses the same stateKey
 // scheme as renderProviderKPIHTML so the countdown ticker keeps working too.
 function updateProviderKPICard(quota, cardKey) {
+  // Multi-window pools (Antigravity) patch each stacked window in place.
+  const windows = Array.isArray(quota.windows) ? quota.windows : [];
+  if (windows.length > 0) {
+    const kpiName = quota.name || quota.modelId || quota.quotaGroup || '';
+    const safeName = sanitizeProviderCardKey(kpiName);
+    const keyPrefix = cardKey ? `kpiv-${cardKey}-${safeName}` : `kpiq-${safeName}`;
+    const firstKind = (windows[0] && (windows[0].kind || 'w0')) || 'w0';
+    if (!document.getElementById(`progress-${keyPrefix}-${firstKind}`)) return;
+    antigravityUpdateWindows(keyPrefix, windows);
+    return;
+  }
   const safeQuotaName = sanitizeProviderCardKey(quota.name || '');
   const stateKey = `kpiv-${cardKey}-${safeQuotaName}`;
 
@@ -6296,6 +6489,7 @@ function updateProviderKPICard(quota, cardKey) {
   const statusEl   = document.getElementById(`status-${stateKey}`);
   const resetEl    = document.getElementById(`reset-${stateKey}`);
   const countdownEl = document.getElementById(`countdown-${stateKey}`);
+  const paceTargetEl = document.getElementById(`pace-target-${stateKey}`);
 
   if (progressEl) {
     progressEl.style.width = `${Math.max(0, Math.min(percent, 100)).toFixed(1)}%`;
@@ -6318,6 +6512,9 @@ function updateProviderKPICard(quota, cardKey) {
   }
   if (resetEl) {
     resetEl.textContent = quota.resetsAt ? `Resets: ${formatDateTime(quota.resetsAt)}` : '';
+  }
+  if (paceTargetEl) {
+    paceTargetEl.textContent = paceTargetLabelFor(quota);
   }
   if (countdownEl) {
     if (timeUntil > 0) {
@@ -7194,8 +7391,9 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const subtitle = document.getElementById('platform-cost-chart-subtitle');
   const title = document.getElementById('platform-cost-chart-title');
   const graphMode = normalizeGraphMode(State.platformCostGraphMode);
+  const periodMode = isPeriodGraphMode(graphMode);
   if (title) {
-    title.textContent = graphMode === 'bucket'
+    title.textContent = periodMode
       ? 'Token & Cost per Period'
       : 'Token & Cost Growth';
   }
@@ -7209,20 +7407,22 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     return;
   }
   const cumulative = buildPlatformCumulativeSeries(rows, range);
-  const bucketed = buildPlatformBucketSeries(rows, range);
-  const timeScale = graphMode === 'bucket'
+  const bucketed = buildPlatformBucketSeries(rows, range, graphMode);
+  const timeScale = periodMode
     ? {
-      unit: graphBucketTimeUnit(range),
-      displayFormats: { hour: 'MMM d, HH:mm', day: 'MMM d', minute: 'HH:mm' },
+      unit: graphBucketTimeUnit(range, graphMode, rows.map(row => ({ x: new Date(row.capturedAt) }))),
+      displayFormats: { second: 'HH:mm:ss', minute: 'HH:mm', hour: 'MMM d, HH:mm', day: 'MMM d' },
     }
     : platformCostTimeScale(range);
   const hasUsageInRange = rows.some(row => Number(row.totalCostUsd || 0) > 0
     || Number(row.totalTokens || 0) > 0
     || Number(row.requestCount || 0) > 0)
     || hasPlatformCostUsage(rangeTotals);
+  const hasPeriodCostPoints = periodMode
+    && ((bucketed.cost || []).length > 0 || (bucketed.tokens || []).length > 0);
   if (subtitle) {
-    subtitle.textContent = hasUsageInRange
-      ? (graphMode === 'bucket'
+    subtitle.textContent = hasUsageInRange || hasPeriodCostPoints
+      ? (periodMode
         ? `${formatNumber(bucketed.cost.length)} periods`
         : `${formatNumber(cumulative.cost.length)} chats`)
       : noUsageMessage(range);
@@ -7230,7 +7430,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   setPlatformCostChartLoading(false);
   setPlatformCostRangeControlsLoading(range, false);
   updatePlatformCostSummaryForRange(provider, range, rows);
-  if (!hasUsageInRange) {
+  if (!hasUsageInRange && !hasPeriodCostPoints) {
     setChartEmptyState('platform-cost-chart', true, noUsageMessage(range));
     if (State.platformCostChart) {
       State.platformCostChart.data = { datasets: [] };
@@ -7242,59 +7442,50 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
 
   Chart.register(crosshairPlugin);
   const colors = getThemeColors();
-  const chartType = graphMode === 'bucket' ? 'bar' : 'line';
-  const barSizing = graphBarSizing(range, 2);
+  const chartType = 'line';
   const costColor = '#14B8A6';
   const tokensColor = '#38BDF8';
-  const costFill = graphMode === 'bucket' ? 'rgba(20, 184, 166, 0.18)' : 'rgba(20, 184, 166, 0.12)';
-  const tokensFill = graphMode === 'bucket' ? 'rgba(56, 189, 248, 0.16)' : 'rgba(56, 189, 248, 0.12)';
-  const activeMaxCost = graphMode === 'bucket' ? bucketed.maxCost : cumulative.maxCost;
-  const activeMaxTokens = graphMode === 'bucket' ? bucketed.maxTokens : cumulative.maxTokens;
+  const costFill = periodMode ? 'rgba(20, 184, 166, 0.04)' : 'rgba(20, 184, 166, 0.12)';
+  const tokensFill = periodMode ? 'rgba(56, 189, 248, 0.04)' : 'rgba(56, 189, 248, 0.12)';
+  const activeMaxCost = periodMode ? bucketed.maxCost : cumulative.maxCost;
+  const activeMaxTokens = periodMode ? bucketed.maxTokens : cumulative.maxTokens;
   const yMaxCost = niceAxisMax(activeMaxCost * 1.18);
   const yMaxTokens = niceAxisMax(activeMaxTokens * 1.18);
+  const costPoints = periodMode ? bucketed.cost : cumulative.cost;
+  const tokenPoints = periodMode ? bucketed.tokens : cumulative.tokens;
   const chartData = {
     datasets: [
         {
           type: chartType,
-          label: graphMode === 'bucket' ? 'Cost' : 'Cumulative Cost',
-          data: graphMode === 'bucket' ? bucketed.cost : cumulative.cost,
+          label: periodMode ? 'Cost per Period' : 'Cumulative Cost',
+          data: costPoints,
           yAxisID: 'y',
           borderColor: costColor,
           backgroundColor: costFill,
           hoverBackgroundColor: costFill,
           hoverBorderColor: costColor,
-          fill: graphMode !== 'bucket',
-          tension: graphMode === 'bucket' ? 0 : 0.4,
+          fill: !periodMode,
+          tension: periodMode ? 0.25 : 0.4,
           borderWidth: 2,
           hoverBorderWidth: 2,
-          pointRadius: graphMode === 'bucket' ? 0 : (cumulative.cost.length <= 24 ? 2 : 0),
-          pointHoverRadius: graphMode === 'bucket' ? 0 : 4,
-          barPercentage: barSizing.barPercentage,
-          categoryPercentage: barSizing.categoryPercentage,
-          maxBarThickness: barSizing.maxBarThickness,
-          borderRadius: 4,
-          borderSkipped: false,
+          pointRadius: 2,
+          pointHoverRadius: 4,
         },
         {
           type: chartType,
-          label: graphMode === 'bucket' ? 'Tokens' : 'Cumulative Tokens',
-          data: graphMode === 'bucket' ? bucketed.tokens : cumulative.tokens,
+          label: periodMode ? 'Tokens per Period' : 'Cumulative Tokens',
+          data: tokenPoints,
           yAxisID: 'y1',
           borderColor: tokensColor,
           backgroundColor: tokensFill,
           hoverBackgroundColor: tokensFill,
           hoverBorderColor: tokensColor,
-          fill: graphMode !== 'bucket',
-          tension: graphMode === 'bucket' ? 0 : 0.4,
+          fill: !periodMode,
+          tension: periodMode ? 0.25 : 0.4,
           borderWidth: 2,
           hoverBorderWidth: 2,
-          pointRadius: graphMode === 'bucket' ? 0 : (cumulative.tokens.length <= 24 ? 2 : 0),
-          pointHoverRadius: graphMode === 'bucket' ? 0 : 4,
-          barPercentage: barSizing.barPercentage,
-          categoryPercentage: barSizing.categoryPercentage,
-          maxBarThickness: barSizing.maxBarThickness,
-          borderRadius: 4,
-          borderSkipped: false,
+          pointRadius: 2,
+          pointHoverRadius: 4,
         },
       ],
     };
@@ -7341,9 +7532,9 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
       scales: {
         x: {
           type: 'time',
-          offset: graphMode === 'bucket',
-          min: graphMode === 'bucket' && bucketed.cost.length > 0 ? bucketed.cost[0].periodStart : undefined,
-          max: graphMode === 'bucket' && bucketed.cost.length > 0 ? bucketed.cost[bucketed.cost.length - 1].periodEnd : undefined,
+          offset: false,
+          min: periodMode && bucketed.cost.length > 0 ? bucketed.cost[0].periodStart : undefined,
+          max: periodMode && bucketed.cost.length > 0 ? bucketed.cost[bucketed.cost.length - 1].periodEnd : undefined,
           time: timeScale,
           grid: { color: colors.grid, drawBorder: false },
           ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' },
@@ -7423,20 +7614,59 @@ function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || 
       costPoints.push({ x, y: cost });
       tokenPoints.push({ x, y: tokens });
     });
+  const costSeries = downsamplePointSeriesForCumulative(costPoints, range);
+  const tokenSeries = downsamplePointSeriesForCumulative(tokenPoints, range);
   return {
-    cost: costPoints,
-    tokens: tokenPoints,
-    maxCost: cost,
-    maxTokens: tokens,
+    cost: costSeries,
+    tokens: tokenSeries,
+    maxCost: Math.max(cost, costSeries.reduce((max, point) => Math.max(max, Number(point.y || 0)), 0)),
+    maxTokens: Math.max(tokens, tokenSeries.reduce((max, point) => Math.max(max, Number(point.y || 0)), 0)),
   };
 }
 
-function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h') {
+function downsamplePointSeriesForCumulative(points, range, mode = 'bucket') {
+  const cleanPoints = [...(points || [])]
+    .filter(point => point && point.x != null && point.y != null && Number.isFinite(Number(point.y)))
+    .map(point => ({ ...point, x: point.x instanceof Date ? point.x : new Date(point.x), y: Number(point.y) }))
+    .filter(point => !Number.isNaN(point.x.getTime()))
+    .sort((a, b) => a.x.getTime() - b.x.getTime());
+  if (cleanPoints.length <= 1) return cleanPoints;
+
+  const buckets = graphBucketRange(range, cleanPoints, mode);
+  if (buckets.length === 0) return cleanPoints;
+
+  const sampled = [];
+  let pointIndex = 0;
+  let latestPoint = null;
+  buckets.forEach((bucket) => {
+    while (pointIndex < cleanPoints.length && cleanPoints[pointIndex].x.getTime() <= bucket.periodEnd.getTime()) {
+      latestPoint = cleanPoints[pointIndex];
+      pointIndex += 1;
+    }
+    if (!latestPoint) return;
+    sampled.push({
+      ...latestPoint,
+      x: bucket.x,
+      y: latestPoint.y,
+      periodStart: bucket.periodStart,
+      periodEnd: bucket.periodEnd,
+    });
+  });
+
+  return sampled.length > 0 ? sampled : cleanPoints;
+}
+
+function processCappedDataWithGaps(dataPoints, range = '6h') {
+  return processDataWithGaps(downsamplePointSeriesForCumulative(dataPoints, range), range);
+}
+
+function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h', mode = State.platformCostGraphMode) {
   const rowPoints = [...rows]
     .filter(row => row && row.capturedAt)
     .map(row => ({ x: new Date(row.capturedAt) }))
     .filter(point => !Number.isNaN(point.x.getTime()));
-  const buckets = new Map(graphBucketRange(range, rowPoints).map(bucket => [bucket.periodStart.toISOString(), {
+  const intervalMs = graphBucketIntervalMs(range, mode, rowPoints);
+  const buckets = new Map(graphBucketRange(range, rowPoints, mode).map(bucket => [bucket.periodStart.toISOString(), {
     ...bucket,
     cost: 0,
     tokens: 0,
@@ -7444,10 +7674,9 @@ function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h'
   [...rows]
     .filter(row => row && row.capturedAt)
     .forEach((row) => {
-      const bucketStart = graphBucketStart(row.capturedAt, range);
+      const bucketStart = graphBucketStart(row.capturedAt, range, mode, intervalMs);
       if (!bucketStart) return;
       const key = bucketStart.toISOString();
-      const intervalMs = graphBucketIntervalMs(range);
       const bucket = buckets.get(key) || {
         x: new Date(bucketStart.getTime() + intervalMs / 2),
         cost: 0,
@@ -7903,7 +8132,7 @@ function buildFixedDatasetsForRows(rows, range, configs) {
   const datasets = [];
   configs.forEach((cfg) => {
     const rawData = rows.map(d => ({ x: new Date(d.capturedAt), y: d[cfg.key] }));
-    const processed = processDataWithGaps(rawData, range);
+    const processed = processCappedDataWithGaps(rawData, range);
     datasets.push({
       label: cfg.label,
       data: processed.data,
@@ -7934,7 +8163,7 @@ function buildDynamicDatasetsForRows(rows, range, labelMap, colorMap, colorFallb
   sortQuotaKeysForProvider(keys, providerKey).forEach((key) => {
     const color = colorMap[key] || colorFallback[idx++ % colorFallback.length];
     const rawData = rows.map(d => ({ x: new Date(d.capturedAt), y: d[key] || 0 }));
-    const processed = processDataWithGaps(rawData, range);
+    const processed = processCappedDataWithGaps(rawData, range);
     datasets.push({
       label: (labelMap[key] || getQuotaDisplayName(key, providerKey) || key),
       data: processed.data,
@@ -8215,7 +8444,7 @@ function updateBothCharts(data, range = '6h') {
     const datasets = [];
     configs.forEach(cfg => {
       const rawData = rows.map(d => ({ x: new Date(d.capturedAt), y: d[cfg.key] }));
-      const processed = processDataWithGaps(rawData, range);
+      const processed = processCappedDataWithGaps(rawData, range);
       datasets.push({
         label: cfg.label,
         data: processed.data,
@@ -8244,7 +8473,7 @@ function updateBothCharts(data, range = '6h') {
     sorted.forEach((key) => {
       const color = colorMap[key] || colorFallback[idx++ % colorFallback.length];
       const rawData = rows.map(d => ({ x: new Date(d.capturedAt), y: d[key] || 0 }));
-      const processed = processDataWithGaps(rawData, range);
+      const processed = processCappedDataWithGaps(rawData, range);
       datasets.push({
         label: (labelMap[key] || getQuotaDisplayName(key, providerKey) || key),
         data: processed.data,
@@ -8415,10 +8644,8 @@ function processDataWithGaps(dataPoints, range = '6h') {
       gapSegments.add(i);
     }
 
-    // Show point if isolated or at edge of a short burst
-    const isIsolated = prevGap > gapThresholdMs && nextGap > gapThresholdMs;
-    const isEdgeOfBurst = (prevGap > gapThresholdMs || nextGap > gapThresholdMs);
-    pointRadii.push(isIsolated ? 2 : (isEdgeOfBurst ? 1 : 0));
+    // Keep sample points visible; segment styling still marks real data gaps.
+    pointRadii.push(2);
   }
 
   return { data: dataPoints, gapSegments, pointRadii };
@@ -8443,10 +8670,17 @@ function getSegmentStyle(gapSegments, baseColor) {
 function updateTimeScale(chart, range) {
   if (!chart || !chart.options || !chart.options.scales || !chart.options.scales.x) return;
   const rangeKey = (range || '6h').toLowerCase();
-  const timeUnit = ['7d', '30d', '15d', 'all'].includes(rangeKey) ? 'day' : 'hour';
+  const graphMode = normalizeGraphMode(State.graphMode);
+  const points = (chart.data?.datasets || [])
+    .flatMap(dataset => Array.isArray(dataset.data) ? dataset.data : [])
+    .filter(point => point && point.x);
+  const timeUnit = isPeriodGraphMode(graphMode)
+    ? graphBucketTimeUnit(range, graphMode, points)
+    : (['7d', '30d', '15d', 'all'].includes(rangeKey) ? 'day' : 'hour');
   chart.options.scales.x.time = {
     unit: timeUnit,
     displayFormats: {
+      second: 'HH:mm:ss',
       minute: 'HH:mm',
       hour: ['7d', '30d', '15d', '24h', '3d', 'all'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm',
       day: 'MMM d'
@@ -8654,14 +8888,14 @@ function renderCyclesTable() {
         <th data-sort-key="id" role="button" tabindex="0"># <span class="sort-arrow"></span></th>
         <th data-sort-key="start" role="button" tabindex="0">Time <span class="sort-arrow"></span></th>`;
   } else {
-    // Cycle-based: full header with Start, End, Duration, Total Δ
+    // Cycle-based: full header with Start, End, Duration, Total Delta
     headerHtml = `
       <tr>
         <th data-sort-key="id" role="button" tabindex="0">Cycle <span class="sort-arrow"></span></th>
         <th data-sort-key="start" role="button" tabindex="0">Start <span class="sort-arrow"></span></th>
         <th data-sort-key="end" role="button" tabindex="0">End <span class="sort-arrow"></span></th>
         <th data-sort-key="duration" role="button" tabindex="0">Duration <span class="sort-arrow"></span></th>
-        <th data-sort-key="totalDelta" role="button" tabindex="0">Total Δ${deltaUsesPercent ? ' %' : ''} <span class="sort-arrow"></span></th>`;
+        <th data-sort-key="totalDelta" role="button" tabindex="0">Total Delta${deltaUsesPercent ? ' %' : ''} <span class="sort-arrow"></span></th>`;
   }
 
   quotaNames.forEach(qn => {
@@ -8756,13 +8990,13 @@ function renderCyclesTable() {
   const startIdx = pageSize > 0 ? (page - 1) * pageSize : 0;
   const pageData = pageSize > 0 ? data.slice(startIdx, startIdx + pageSize) : data;
 
-  // Format value with rate: "45.2% [⚡5.2%/hr]"
+  // Format value with rate: "45.2% [rate 5.2%/hr]"
   const fmtCyclesWithRate = (val, durationHrs, suffix) => {
     if (typeof val !== 'number') return '--';
     const valStr = val.toFixed(1) + suffix;
     if (durationHrs > 0) {
       const rate = val / durationHrs;
-      return `${valStr} <span class="rate-indicator">[⚡${rate.toFixed(1)}${suffix}/hr]</span>`;
+      return `${valStr} <span class="rate-indicator">[rate ${rate.toFixed(1)}${suffix}/hr]</span>`;
     }
     return valStr;
   };
@@ -8789,7 +9023,7 @@ function renderCyclesTable() {
           <td>${row.cycleId}</td>
           <td>${start ? formatDateTime(start) : '--'}</td>`;
       } else {
-        // Cycle view: full row with Start, End, Duration, Total Δ
+        // Cycle view: full row with Start, End, Duration, Total Delta
         // Calculate duration: for buckets > 1, use bucket window; otherwise use actual span
         let durationHrs, duration;
         if (bucketMinutes > 1) {
@@ -9603,7 +9837,7 @@ async function loadModalChart(quotaType, effectiveProvider) {
 
     const colors = getThemeColors();
     const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[datasetKey] }));
-    const processed = processDataWithGaps(rawData, range);
+    const processed = processCappedDataWithGaps(rawData, range);
     const maxVal = Math.max(...historyRows.map(d => d[datasetKey]), 0);
 
     // Dynamic Y-axis: if max is 0 or very low, show up to 10%
@@ -10106,13 +10340,13 @@ function renderOverviewTable() {
   const startIdx = pageSize > 0 ? (page - 1) * pageSize : 0;
   const pageData = pageSize > 0 ? data.slice(startIdx, startIdx + pageSize) : data;
 
-  // Format value with rate: "45.2% [⚡5.2%/hr]"
+  // Format value with rate: "45.2% [rate 5.2%/hr]"
   const fmtOverviewWithRate = (val, durationHrs, suffix) => {
     if (typeof val !== 'number') return '--';
     const valStr = val.toFixed(1) + suffix;
     if (durationHrs > 0) {
       const rate = val / durationHrs;
-      return `${valStr} <span class="rate-indicator">[⚡${rate.toFixed(1)}${suffix}/hr]</span>`;
+      return `${valStr} <span class="rate-indicator">[rate ${rate.toFixed(1)}${suffix}/hr]</span>`;
     }
     return valStr;
   };

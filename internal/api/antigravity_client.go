@@ -208,7 +208,63 @@ func (c *AntigravityClient) FetchQuotas(ctx context.Context) (*AntigravityUserSt
 		)
 	}
 
+	if summary, raw, err := c.fetchQuotaSummary(ctx, conn); err == nil && summary != nil {
+		quotaResp.QuotaSummary = summary
+		quotaResp.SummaryRawJSON = raw
+		c.logger.Debug("Antigravity quota summary fetched successfully",
+			"groups", len(summary.Groups),
+			"email", quotaResp.UserStatus.Email,
+		)
+	} else if err != nil {
+		c.logger.Debug("Antigravity quota summary unavailable", "error", err)
+	}
+
 	return &quotaResp, nil
+}
+
+func (c *AntigravityClient) fetchQuotaSummary(ctx context.Context, conn *AntigravityConnection) (*AntigravityQuotaSummary, string, error) {
+	endpoint := conn.BaseURL + "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, strings.NewReader(`{}`))
+	if err != nil {
+		return nil, "", fmt.Errorf("antigravity: creating quota summary request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Connect-Protocol-Version", "1")
+	if conn.CSRFToken != "" {
+		req.Header.Set("X-Codeium-Csrf-Token", conn.CSRFToken)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("antigravity: quota summary status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if err != nil {
+		return nil, "", err
+	}
+	if len(body) == 0 {
+		return nil, "", ErrAntigravityInvalidResponse
+	}
+
+	var summaryResp AntigravityQuotaSummaryResponse
+	if err := json.Unmarshal(body, &summaryResp); err != nil {
+		return nil, "", err
+	}
+	if summaryResp.Response == nil {
+		if summaryResp.Message != "" {
+			return nil, "", fmt.Errorf("antigravity: quota summary unavailable: %s", summaryResp.Message)
+		}
+		return nil, "", ErrAntigravityInvalidResponse
+	}
+	NormalizeAntigravityQuotaSummary(summaryResp.Response)
+	return summaryResp.Response, string(body), nil
 }
 
 // IsConnected returns true if a valid connection exists.

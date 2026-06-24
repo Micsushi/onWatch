@@ -12,6 +12,10 @@ const (
 	AntigravityQuotaGroupClaudeGPT   = "antigravity_claude_gpt"
 	AntigravityQuotaGroupGeminiPro   = "antigravity_gemini_pro"
 	AntigravityQuotaGroupGeminiFlash = "antigravity_gemini_flash"
+
+	AntigravityWindowFiveHour = "five_hour"
+	AntigravityWindowWeekly   = "weekly"
+	AntigravityWindowUnknown  = "unknown"
 )
 
 var antigravityQuotaGroupOrder = []string{
@@ -38,6 +42,9 @@ type AntigravityGroupedQuota struct {
 	DisplayName       string
 	ModelIDs          []string
 	Labels            []string
+	WindowKind        string
+	WindowLabel       string
+	Windows           []AntigravityQuotaWindow
 	RemainingFraction float64
 	RemainingPercent  float64
 	UsagePercent      float64
@@ -45,6 +52,20 @@ type AntigravityGroupedQuota struct {
 	ResetTime         *time.Time
 	TimeUntilReset    time.Duration
 	Color             string
+}
+
+// AntigravityQuotaWindow represents one reset horizon inside a logical quota group.
+type AntigravityQuotaWindow struct {
+	Kind              string
+	Label             string
+	ModelIDs          []string
+	Labels            []string
+	RemainingFraction float64
+	RemainingPercent  float64
+	UsagePercent      float64
+	IsExhausted       bool
+	ResetTime         *time.Time
+	TimeUntilReset    time.Duration
 }
 
 func AntigravityQuotaGroupOrder() []string {
@@ -67,6 +88,80 @@ func AntigravityQuotaGroupColor(groupKey string) string {
 	return "#6e40c9"
 }
 
+func AntigravityQuotaWindowKind(resetTime *time.Time, capturedAt time.Time) string {
+	if resetTime == nil {
+		return AntigravityWindowUnknown
+	}
+	if capturedAt.IsZero() {
+		capturedAt = time.Now().UTC()
+	}
+	until := resetTime.Sub(capturedAt.UTC())
+	if until < 0 {
+		until = 0
+	}
+	if until > 6*time.Hour {
+		return AntigravityWindowWeekly
+	}
+	return AntigravityWindowFiveHour
+}
+
+func AntigravityQuotaWindowLabel(kind string) string {
+	switch kind {
+	case AntigravityWindowFiveHour:
+		return "5-hour limit"
+	case AntigravityWindowWeekly:
+		return "Weekly limit"
+	default:
+		return "Quota limit"
+	}
+}
+
+func AntigravitySummaryGroupKey(displayName string) string {
+	text := strings.ToLower(strings.TrimSpace(displayName))
+	switch {
+	case strings.Contains(text, "gemini"):
+		return AntigravityQuotaGroupGeminiPro
+	case strings.Contains(text, "claude"), strings.Contains(text, "gpt"):
+		return AntigravityQuotaGroupClaudeGPT
+	default:
+		return displayName
+	}
+}
+
+func AntigravitySummaryWindowKind(window, bucketID, displayName string) string {
+	text := strings.ToLower(strings.TrimSpace(window + " " + bucketID + " " + displayName))
+	switch {
+	case strings.Contains(text, "weekly"):
+		return AntigravityWindowWeekly
+	case strings.Contains(text, "5h"), strings.Contains(text, "five hour"), strings.Contains(text, "five-hour"):
+		return AntigravityWindowFiveHour
+	default:
+		return AntigravityWindowUnknown
+	}
+}
+
+func NormalizeAntigravityQuotaSummary(summary *AntigravityQuotaSummary) {
+	if summary == nil {
+		return
+	}
+	for gi := range summary.Groups {
+		group := &summary.Groups[gi]
+		group.GroupKey = AntigravitySummaryGroupKey(group.DisplayName)
+		for bi := range group.Buckets {
+			bucket := &group.Buckets[bi]
+			bucket.Window = AntigravitySummaryWindowKind(bucket.Window, bucket.BucketID, bucket.DisplayName)
+			bucket.RemainingFraction = clampAntigravityFraction(bucket.RemainingFraction)
+			bucket.RemainingPercent = bucket.RemainingFraction * 100
+			bucket.UsagePercent = 100 - bucket.RemainingPercent
+			if bucket.ResetTime == nil && bucket.ResetTimeRaw != "" {
+				if t, err := time.Parse(time.RFC3339, bucket.ResetTimeRaw); err == nil {
+					bucket.ResetTime = &t
+				}
+			}
+		}
+	}
+}
+
 func AntigravityQuotaGroupForModel(modelID, label string) string {
 	modelLower := strings.ToLower(strings.TrimSpace(modelID))
 	labelLower := strings.ToLower(strings.TrimSpace(label))
@@ -85,25 +180,31 @@ func AntigravityQuotaGroupForModel(modelID, label string) string {
 }
 
 func GroupAntigravityModelsByLogicalQuota(models []AntigravityModelQuota) []AntigravityGroupedQuota {
+	type windowAccumulator struct {
+		modelIDs          []string
+		labels            []string
+		remainingFraction float64
+		hasRemaining      bool
+		anyExhausted      bool
+		resetTime         *time.Time
+	}
 	type accumulator struct {
-		modelIDs      []string
-		labels        []string
-		remainingSum  float64
-		remainingCnt  int
-		anyExhausted  bool
-		earliestReset *time.Time
+		modelIDs     []string
+		labels       []string
+		anyExhausted bool
+		windows      map[string]*windowAccumulator
 	}
 
 	accByGroup := map[string]*accumulator{}
 	for _, key := range antigravityQuotaGroupOrder {
-		accByGroup[key] = &accumulator{}
+		accByGroup[key] = &accumulator{windows: map[string]*windowAccumulator{}}
 	}
 
 	for _, m := range models {
 		groupKey := AntigravityQuotaGroupForModel(m.ModelID, m.Label)
 		acc := accByGroup[groupKey]
 		if acc == nil {
-			acc = &accumulator{}
+			acc = &accumulator{windows: map[string]*windowAccumulator{}}
 			accByGroup[groupKey] = acc
 		}
 
@@ -116,16 +217,35 @@ func GroupAntigravityModelsByLogicalQuota(models []AntigravityModelQuota) []Anti
 			acc.labels = appendUniqueString(acc.labels, label)
 		}
 
-		acc.remainingSum += m.RemainingFraction
-		acc.remainingCnt++
 		acc.anyExhausted = acc.anyExhausted || m.IsExhausted || m.RemainingFraction <= 0
 
-		if m.ResetTime != nil {
-			if acc.earliestReset == nil || m.ResetTime.Before(*acc.earliestReset) {
+		windowKind := m.WindowKind
+		if windowKind == "" {
+			windowKind = AntigravityQuotaWindowKind(m.ResetTime, time.Now().UTC())
+		}
+		w := acc.windows[windowKind]
+		if w == nil {
+			w = &windowAccumulator{remainingFraction: 1.0}
+			acc.windows[windowKind] = w
+		}
+		w.modelIDs = appendUniqueString(w.modelIDs, m.ModelID)
+		if label != "" {
+			w.labels = appendUniqueString(w.labels, label)
+		}
+		if !w.hasRemaining || m.RemainingFraction < w.remainingFraction {
+			w.remainingFraction = m.RemainingFraction
+			w.hasRemaining = true
+			if m.ResetTime != nil {
 				t := *m.ResetTime
-				acc.earliestReset = &t
+				w.resetTime = &t
+			}
+		} else if m.RemainingFraction == w.remainingFraction && m.ResetTime != nil {
+			if w.resetTime == nil || m.ResetTime.After(*w.resetTime) {
+				t := *m.ResetTime
+				w.resetTime = &t
 			}
 		}
+		w.anyExhausted = w.anyExhausted || m.IsExhausted || m.RemainingFraction <= 0
 	}
 
 	now := time.Now().UTC()
@@ -133,8 +253,46 @@ func GroupAntigravityModelsByLogicalQuota(models []AntigravityModelQuota) []Anti
 	for _, key := range antigravityQuotaGroupOrder {
 		acc := accByGroup[key]
 		remaining := 1.0
-		if acc != nil && acc.remainingCnt > 0 {
-			remaining = acc.remainingSum / float64(acc.remainingCnt)
+		windowKind := AntigravityWindowUnknown
+		windowLabel := AntigravityQuotaWindowLabel(windowKind)
+		var resetTime *time.Time
+		windows := make([]AntigravityQuotaWindow, 0, 3)
+
+		if acc != nil && len(acc.windows) > 0 {
+			orderedKinds := []string{AntigravityWindowWeekly, AntigravityWindowFiveHour, AntigravityWindowUnknown}
+			for _, kind := range orderedKinds {
+				w, ok := acc.windows[kind]
+				if !ok {
+					continue
+				}
+				wRemaining := clampAntigravityFraction(w.remainingFraction)
+				wUsage := 100 - wRemaining*100
+				window := AntigravityQuotaWindow{
+					Kind:              kind,
+					Label:             AntigravityQuotaWindowLabel(kind),
+					ModelIDs:          append([]string(nil), w.modelIDs...),
+					Labels:            append([]string(nil), w.labels...),
+					RemainingFraction: wRemaining,
+					RemainingPercent:  wRemaining * 100,
+					UsagePercent:      wUsage,
+					IsExhausted:       w.anyExhausted || wRemaining <= 0,
+					ResetTime:         w.resetTime,
+				}
+				if window.ResetTime != nil {
+					d := window.ResetTime.Sub(now)
+					if d < 0 {
+						d = 0
+					}
+					window.TimeUntilReset = d
+				}
+				windows = append(windows, window)
+				if wRemaining < remaining || (wRemaining == remaining && kind == AntigravityWindowWeekly) {
+					remaining = wRemaining
+					windowKind = kind
+					windowLabel = window.Label
+					resetTime = window.ResetTime
+				}
+			}
 		}
 		if remaining < 0 {
 			remaining = 0
@@ -155,6 +313,9 @@ func GroupAntigravityModelsByLogicalQuota(models []AntigravityModelQuota) []Anti
 		group := AntigravityGroupedQuota{
 			GroupKey:          key,
 			DisplayName:       AntigravityQuotaGroupDisplayName(key),
+			WindowKind:        windowKind,
+			WindowLabel:       windowLabel,
+			Windows:           windows,
 			RemainingFraction: remaining,
 			RemainingPercent:  remainingPercent,
 			UsagePercent:      usagePercent,
@@ -164,10 +325,10 @@ func GroupAntigravityModelsByLogicalQuota(models []AntigravityModelQuota) []Anti
 		if acc != nil {
 			group.ModelIDs = append(group.ModelIDs, acc.modelIDs...)
 			group.Labels = append(group.Labels, acc.labels...)
-			group.IsExhausted = acc.anyExhausted || (acc.remainingCnt > 0 && remaining <= 0)
-			if acc.earliestReset != nil {
-				group.ResetTime = acc.earliestReset
-				d := acc.earliestReset.Sub(now)
+			group.IsExhausted = acc.anyExhausted || (len(acc.windows) > 0 && remaining <= 0)
+			if resetTime != nil {
+				group.ResetTime = resetTime
+				d := resetTime.Sub(now)
 				if d < 0 {
 					d = 0
 				}
@@ -179,6 +340,16 @@ func GroupAntigravityModelsByLogicalQuota(models []AntigravityModelQuota) []Anti
 	}
 
 	return groups
+}
+
+func clampAntigravityFraction(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 func appendUniqueString(values []string, value string) []string {
@@ -241,15 +412,48 @@ type AntigravityUserStatus struct {
 
 // AntigravityUserStatusResponse is the full API response.
 type AntigravityUserStatusResponse struct {
-	UserStatus *AntigravityUserStatus `json:"userStatus"`
-	Message    string                 `json:"message,omitempty"`
-	Code       string                 `json:"code,omitempty"`
+	UserStatus     *AntigravityUserStatus   `json:"userStatus"`
+	QuotaSummary   *AntigravityQuotaSummary `json:"-"`
+	SummaryRawJSON string                   `json:"-"`
+	Message        string                   `json:"message,omitempty"`
+	Code           string                   `json:"code,omitempty"`
+}
+
+type AntigravityQuotaSummaryResponse struct {
+	Response *AntigravityQuotaSummary `json:"response,omitempty"`
+	Message  string                   `json:"message,omitempty"`
+	Code     string                   `json:"code,omitempty"`
+}
+
+type AntigravityQuotaSummary struct {
+	Groups []AntigravityQuotaSummaryGroup `json:"groups"`
+}
+
+type AntigravityQuotaSummaryGroup struct {
+	GroupKey    string                          `json:"-"`
+	DisplayName string                          `json:"displayName"`
+	Description string                          `json:"description"`
+	Buckets     []AntigravityQuotaSummaryBucket `json:"buckets"`
+}
+
+type AntigravityQuotaSummaryBucket struct {
+	BucketID          string     `json:"bucketId"`
+	DisplayName       string     `json:"displayName"`
+	Description       string     `json:"description"`
+	Window            string     `json:"window"`
+	RemainingFraction float64    `json:"remainingFraction"`
+	RemainingPercent  float64    `json:"-"`
+	UsagePercent      float64    `json:"-"`
+	ResetTime         *time.Time `json:"-"`
+	ResetTimeRaw      string     `json:"resetTime"`
 }
 
 // AntigravityModelQuota represents a single normalized model quota for storage.
 type AntigravityModelQuota struct {
 	ModelID           string
 	Label             string
+	WindowKind        string
+	WindowLabel       string
 	RemainingFraction float64
 	RemainingPercent  float64
 	IsExhausted       bool
@@ -266,6 +470,7 @@ type AntigravitySnapshot struct {
 	PromptCredits  float64
 	MonthlyCredits int
 	Models         []AntigravityModelQuota
+	SummaryGroups  []AntigravityQuotaSummaryGroup
 	RawJSON        string
 }
 
@@ -463,7 +668,8 @@ func (r AntigravityUserStatusResponse) ActiveModelIDs() []string {
 // ToSnapshot converts an AntigravityUserStatusResponse to an AntigravitySnapshot.
 func (r AntigravityUserStatusResponse) ToSnapshot(capturedAt time.Time) *AntigravitySnapshot {
 	snapshot := &AntigravitySnapshot{
-		CapturedAt: capturedAt,
+		CapturedAt:    capturedAt,
+		SummaryGroups: nil,
 	}
 
 	if r.UserStatus == nil {
@@ -481,7 +687,6 @@ func (r AntigravityUserStatusResponse) ToSnapshot(capturedAt time.Time) *Antigra
 	}
 
 	if r.UserStatus.CascadeModelConfigData != nil {
-		now := time.Now()
 		for _, cfg := range r.UserStatus.CascadeModelConfigData.ClientModelConfigs {
 			if cfg.QuotaInfo == nil {
 				continue
@@ -503,12 +708,14 @@ func (r AntigravityUserStatusResponse) ToSnapshot(capturedAt time.Time) *Antigra
 			if cfg.QuotaInfo.ResetTime != "" {
 				if t, err := time.Parse(time.RFC3339, cfg.QuotaInfo.ResetTime); err == nil {
 					quota.ResetTime = &t
-					quota.TimeUntilReset = t.Sub(now)
+					quota.TimeUntilReset = t.Sub(capturedAt)
 					if quota.TimeUntilReset < 0 {
 						quota.TimeUntilReset = 0
 					}
 				}
 			}
+			quota.WindowKind = AntigravityQuotaWindowKind(quota.ResetTime, capturedAt)
+			quota.WindowLabel = AntigravityQuotaWindowLabel(quota.WindowKind)
 
 			snapshot.Models = append(snapshot.Models, quota)
 		}
@@ -517,6 +724,13 @@ func (r AntigravityUserStatusResponse) ToSnapshot(capturedAt time.Time) *Antigra
 	// Store raw JSON for debugging/auditing
 	if raw, err := json.Marshal(r); err == nil {
 		snapshot.RawJSON = string(raw)
+	}
+	if r.QuotaSummary != nil {
+		NormalizeAntigravityQuotaSummary(r.QuotaSummary)
+		snapshot.SummaryGroups = append(snapshot.SummaryGroups, r.QuotaSummary.Groups...)
+		if r.SummaryRawJSON != "" {
+			snapshot.RawJSON = r.SummaryRawJSON
+		}
 	}
 
 	return snapshot

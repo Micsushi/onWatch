@@ -507,6 +507,22 @@ func (s *Store) createTables() error {
 			FOREIGN KEY (snapshot_id) REFERENCES antigravity_snapshots(id)
 		);
 
+		CREATE TABLE IF NOT EXISTS antigravity_quota_summary_buckets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			snapshot_id INTEGER NOT NULL,
+			group_key TEXT NOT NULL,
+			group_display_name TEXT NOT NULL,
+			group_description TEXT,
+			bucket_id TEXT NOT NULL,
+			bucket_display_name TEXT NOT NULL,
+			bucket_description TEXT,
+			window_kind TEXT NOT NULL,
+			remaining_fraction REAL NOT NULL DEFAULT 0,
+			remaining_percent REAL NOT NULL DEFAULT 0,
+			reset_time TEXT,
+			FOREIGN KEY (snapshot_id) REFERENCES antigravity_snapshots(id)
+		);
+
 		CREATE TABLE IF NOT EXISTS antigravity_reset_cycles (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			model_id TEXT NOT NULL,
@@ -522,6 +538,8 @@ func (s *Store) createTables() error {
 		CREATE INDEX IF NOT EXISTS idx_antigravity_model_values_snapshot ON antigravity_model_values(snapshot_id);
 		CREATE INDEX IF NOT EXISTS idx_antigravity_model_values_model_id ON antigravity_model_values(model_id);
 		CREATE INDEX IF NOT EXISTS idx_antigravity_model_values_model_snapshot ON antigravity_model_values(model_id, snapshot_id);
+		CREATE INDEX IF NOT EXISTS idx_antigravity_summary_buckets_snapshot ON antigravity_quota_summary_buckets(snapshot_id);
+		CREATE INDEX IF NOT EXISTS idx_antigravity_summary_buckets_group ON antigravity_quota_summary_buckets(group_key, window_kind);
 		CREATE INDEX IF NOT EXISTS idx_antigravity_cycles_model_start ON antigravity_reset_cycles(model_id, cycle_start);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_antigravity_cycles_model_active_unique ON antigravity_reset_cycles(model_id) WHERE cycle_end IS NULL;
 
@@ -770,8 +788,25 @@ func (s *Store) migrateSchema() error {
 
 	// Ensure newer Antigravity indexes exist for grouped queries.
 	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS antigravity_quota_summary_buckets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			snapshot_id INTEGER NOT NULL,
+			group_key TEXT NOT NULL,
+			group_display_name TEXT NOT NULL,
+			group_description TEXT,
+			bucket_id TEXT NOT NULL,
+			bucket_display_name TEXT NOT NULL,
+			bucket_description TEXT,
+			window_kind TEXT NOT NULL,
+			remaining_fraction REAL NOT NULL DEFAULT 0,
+			remaining_percent REAL NOT NULL DEFAULT 0,
+			reset_time TEXT,
+			FOREIGN KEY (snapshot_id) REFERENCES antigravity_snapshots(id)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_antigravity_model_values_model_id ON antigravity_model_values(model_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_antigravity_model_values_model_snapshot ON antigravity_model_values(model_id, snapshot_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_antigravity_summary_buckets_snapshot ON antigravity_quota_summary_buckets(snapshot_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_antigravity_summary_buckets_group ON antigravity_quota_summary_buckets(group_key, window_kind)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_antigravity_cycles_model_active_unique ON antigravity_reset_cycles(model_id) WHERE cycle_end IS NULL`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil {

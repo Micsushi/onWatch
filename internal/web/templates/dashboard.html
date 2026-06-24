@@ -822,11 +822,11 @@
                             <th data-sort-key="tool" role="button" tabindex="0">Gemini Flash Quota <span class="sort-arrow"></span></th>
                             {{else if eq .CurrentProvider "gemini"}}
                             <th data-sort-key="sub" role="button" tabindex="0">Peak Usage <span class="sort-arrow"></span></th>
-                            <th data-sort-key="search" role="button" tabindex="0">Session Δ <span class="sort-arrow"></span></th>
+                            <th data-sort-key="search" role="button" tabindex="0">Session Delta <span class="sort-arrow"></span></th>
                             <th data-sort-key="tool" role="button" tabindex="0">Snapshots <span class="sort-arrow"></span></th>
                             {{else if eq .CurrentProvider "openrouter"}}
                             <th data-sort-key="sub" role="button" tabindex="0">Credits Used <span class="sort-arrow"></span></th>
-                            <th data-sort-key="search" role="button" tabindex="0">Session Δ <span class="sort-arrow"></span></th>
+                            <th data-sort-key="search" role="button" tabindex="0">Session Delta <span class="sort-arrow"></span></th>
                             <th data-sort-key="tool" role="button" tabindex="0">Snapshots <span class="sort-arrow"></span></th>
                             {{else}}
                             <th data-sort-key="sub" role="button" tabindex="0">Sub Usage <span class="sort-arrow"></span></th>
@@ -906,7 +906,7 @@
                             <th data-sort-key="start" role="button" tabindex="0">Start <span class="sort-arrow"></span></th>
                             <th data-sort-key="end" role="button" tabindex="0">End <span class="sort-arrow"></span></th>
                             <th data-sort-key="duration" role="button" tabindex="0">Duration <span class="sort-arrow"></span></th>
-                            <th data-sort-key="totalDelta" role="button" tabindex="0">Total Δ <span class="sort-arrow"></span></th>
+                            <th data-sort-key="totalDelta" role="button" tabindex="0">Total Delta <span class="sort-arrow"></span></th>
                         </tr>
                     </thead>
                     <tbody id="cycles-tbody">
@@ -918,7 +918,7 @@
             </div>
             <div class="table-footer">
                 <span class="table-info" id="cycles-info">Showing 0-0 of 0</span>
-                <span class="table-legend">{{if eq .CurrentProvider "cursor"}}Δ = change since previous sample{{else}}⚡ = consumption rate per hour{{end}}</span>
+                <span class="table-legend">{{if eq .CurrentProvider "cursor"}}Delta = change since previous sample{{else}}Rate = consumption rate per hour{{end}}</span>
                 <div class="table-pagination" id="cycles-pagination"></div>
             </div>
         </section>
@@ -954,7 +954,7 @@
             </div>
             <div class="table-footer">
                 <span class="table-info" id="overview-info">Showing 0-0 of 0</span>
-                <span class="table-legend">{{if eq .CurrentProvider "cursor"}}Monthly cycle comparison by quota{{else}}⚡ = consumption rate per hour{{end}}</span>
+                <span class="table-legend">{{if eq .CurrentProvider "cursor"}}Monthly cycle comparison by quota{{else}}Rate = consumption rate per hour{{end}}</span>
                 <div class="table-pagination" id="overview-pagination"></div>
             </div>
         </section>

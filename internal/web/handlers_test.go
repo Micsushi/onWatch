@@ -3283,12 +3283,18 @@ func TestApplyWeeklyPaceStatus(t *testing.T) {
 		label       string
 	}{
 		{name: "on pace", utilization: 43, status: "healthy", label: "On pace"},
-		{name: "over by one day", utilization: 58, status: "warning", label: "Over pace +15%"},
-		{name: "over by two days", utilization: 72, status: "critical", label: "Over pace +29%"},
-		{name: "under by one day", utilization: 28, status: "underuse", label: "Under pace -15%"},
-		{name: "under by hourly reset", utilization: 56, resetIn: 33 * time.Hour, status: "underuse", label: "Under pace -24%"},
-		{name: "weekly prefix", utilization: 58, status: "warning", label: "Over pace +15%"},
-		{name: "wkly prefix", utilization: 58, status: "warning", label: "Over pace +15%"},
+		{name: "over by one day", utilization: 53, status: "warning", label: "Overpace: extra +10% | time-left +18%"},
+		{name: "over by two days", utilization: 72, status: "critical", label: "Very overpace: extra +29% | time-left +51%"},
+		{name: "flat wins same tier", utilization: 61, status: "critical", label: "Very overpace: extra +18% | time-left +32%"},
+		{name: "under by one day", utilization: 28, status: "very_underuse", label: "Very under pace: reserve +15% | elapsed +35%"},
+		{name: "under by hourly reset", utilization: 56, resetIn: 33 * time.Hour, status: "very_underuse", label: "Very under pace: reserve +24% | elapsed +30%"},
+		{name: "late week over remaining cap", utilization: 89, resetIn: 24 * time.Hour, status: "warning", label: "Overpace: extra +3% | time-left +23%"},
+		{name: "late week critical remaining cap", utilization: 91, resetIn: 24 * time.Hour, status: "critical", label: "Very overpace: extra +5% | time-left +37%"},
+		{name: "time tier beats flat tier", utilization: 97, resetIn: 24 * time.Hour, status: "critical", label: "Very overpace: extra +11% | time-left +79%"},
+		{name: "late week under hard cap still on pace", utilization: 76, resetIn: 24 * time.Hour, status: "healthy", label: "On pace"},
+		{name: "early week under elapsed cap", utilization: 11, resetIn: 6 * 24 * time.Hour, status: "underuse", label: "Under pace: reserve +3% | elapsed +23%"},
+		{name: "weekly prefix", utilization: 53, status: "warning", label: "Overpace: extra +10% | time-left +18%"},
+		{name: "wkly prefix", utilization: 53, status: "warning", label: "Overpace: extra +10% | time-left +18%"},
 	}
 
 	for _, tt := range tests {
