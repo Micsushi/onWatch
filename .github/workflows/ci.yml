@@ -20,10 +20,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Style
+        run: sh scripts/check-gofmt.sh
+
       - name: Lint
-        run: |
-          go fmt ./...
-          go vet ./...
+        run: go vet ./...
 
       - name: Test with coverage
         run: go test -race -coverprofile=coverage.out -covermode=atomic -count=1 ./...

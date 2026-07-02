@@ -6,6 +6,7 @@ import (
 	"github.com/onllm-dev/onwatch/v2/internal/config"
 	"github.com/onllm-dev/onwatch/v2/internal/store"
 )
+
 // applyDisplayModeToQuotaMap unit tests
 func TestApplyDisplayModeToQuotaMap_UsageMode_NoChange(t *testing.T) {
 	t.Parallel()
@@ -112,6 +113,7 @@ func TestApplyDisplayModeToQuotaMap_AcceptsIntUsage(t *testing.T) {
 		t.Errorf("int usage should produce float cardPercent=50, got %v ok=%v", q["cardPercent"], ok)
 	}
 }
+
 // applyDisplayModeToResponse walker tests
 func TestApplyDisplayModeToResponse_QuotasArrayOfMaps(t *testing.T) {
 	t.Parallel()
@@ -181,6 +183,7 @@ func TestApplyDisplayModeToResponse_NilNoCrash(t *testing.T) {
 	t.Parallel()
 	applyDisplayModeToResponse(nil, "available")
 }
+
 // getDisplayMode precedence tests
 func TestHandler_GetDisplayMode_DefaultUsage(t *testing.T) {
 	t.Parallel()
@@ -279,6 +282,7 @@ func TestHandler_GetDisplayMode_InvalidValuesIgnored(t *testing.T) {
 		t.Errorf("invalid db value should fall through to default, got %q", got)
 	}
 }
+
 // sanitizeProviderSettings: global enum field
 func TestSanitizeProviderSettings_GlobalDisplayMode_Valid(t *testing.T) {
 	t.Parallel()

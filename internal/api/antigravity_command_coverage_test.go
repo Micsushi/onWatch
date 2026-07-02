@@ -33,6 +33,9 @@ func discardLoggerCommands() *slog.Logger {
 }
 
 func TestAntigravityCommandHelpers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake POSIX helper commands are not executable on Windows")
+	}
 	client := NewAntigravityClient(discardLoggerCommands())
 	ctx := context.Background()
 

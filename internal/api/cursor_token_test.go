@@ -2,6 +2,7 @@ package api
 
 import (
 	"log/slog"
+	"path/filepath"
 	"testing"
 )
 
@@ -91,17 +92,17 @@ func TestCursorStateDBPathForOS(t *testing.T) {
 		{
 			name: "darwin path",
 			goos: "darwin",
-			want: "/tmp/testhome/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+			want: filepath.Join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb"),
 		},
 		{
 			name: "linux path",
 			goos: "linux",
-			want: "/tmp/testhome/.config/Cursor/User/globalStorage/state.vscdb",
+			want: filepath.Join(home, ".config", "Cursor", "User", "globalStorage", "state.vscdb"),
 		},
 		{
 			name: "windows path",
 			goos: "windows",
-			want: "/tmp/testhome/AppData/Roaming/Cursor/User/globalStorage/state.vscdb",
+			want: filepath.Join(home, "AppData", "Roaming", "Cursor", "User", "globalStorage", "state.vscdb"),
 		},
 	}
 

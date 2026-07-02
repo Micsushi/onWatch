@@ -731,9 +731,16 @@ func TestFindUnitFile_UserLevelPath(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	origHome := os.Getenv("HOME")
-	defer os.Setenv("HOME", origHome)
+	origUserProfile := os.Getenv("USERPROFILE")
+	defer func() {
+		_ = os.Setenv("HOME", origHome)
+		_ = os.Setenv("USERPROFILE", origUserProfile)
+	}()
 	if err := os.Setenv("HOME", tmpHome); err != nil {
 		t.Fatalf("Setenv HOME: %v", err)
+	}
+	if err := os.Setenv("USERPROFILE", tmpHome); err != nil {
+		t.Fatalf("Setenv USERPROFILE: %v", err)
 	}
 
 	userDir := filepath.Join(tmpHome, ".config", "systemd", "user")
@@ -903,6 +910,10 @@ func TestReplaceBinary_SwapRenameFailsRestoresBackup(t *testing.T) {
 }
 
 func TestMigrateSystemdUnit_UpdatesUserUnitAndReloads(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("systemd unit migration uses Unix shell/systemctl semantics")
+	}
+
 	origRead := readCgroupFile
 	defer func() { readCgroupFile = origRead }()
 

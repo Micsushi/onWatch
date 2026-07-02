@@ -25,8 +25,22 @@ type updateExitPanic struct {
 func fakeExecCommandSuccess(t *testing.T) func(name string, arg ...string) *exec.Cmd {
 	t.Helper()
 	return func(name string, arg ...string) *exec.Cmd {
-		return exec.Command("sh", "-c", "exit 0")
+		cmd := exec.Command(os.Args[0], "-test.run=TestUpdateCommandHelper", "--")
+		cmd.Env = append(os.Environ(), "ONWATCH_UPDATE_COMMAND_HELPER=1")
+		return cmd
 	}
+}
+
+func TestUpdateCommandHelper(t *testing.T) {
+	if os.Getenv("ONWATCH_UPDATE_COMMAND_HELPER") != "1" {
+		return
+	}
+	if marker := os.Getenv("ONWATCH_SPAWN_MARKER"); marker != "" {
+		if err := os.WriteFile(marker, []byte("spawned"), 0o644); err != nil {
+			os.Exit(1)
+		}
+	}
+	os.Exit(0)
 }
 
 func newUpdateVersionServer(t *testing.T, latest string) *httptest.Server {
@@ -163,8 +177,8 @@ func TestRestart_SpawnsAppliedBinary(t *testing.T) {
 		if name != exePath {
 			t.Fatalf("spawn name = %q, want %q", name, exePath)
 		}
-		cmd := exec.Command("sh", "-c", "printf spawned > \"$ONWATCH_SPAWN_MARKER\"")
-		cmd.Env = append(os.Environ(), "ONWATCH_SPAWN_MARKER="+markerPath)
+		cmd := exec.Command(os.Args[0], "-test.run=TestUpdateCommandHelper", "--")
+		cmd.Env = append(os.Environ(), "ONWATCH_UPDATE_COMMAND_HELPER=1", "ONWATCH_SPAWN_MARKER="+markerPath)
 		return cmd
 	}
 
@@ -441,7 +455,7 @@ func TestRestart_UsesExecutableWhenLastAppliedPathEmpty(t *testing.T) {
 	execCommand = func(name string, arg ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = append([]string(nil), arg...)
-		return exec.Command("sh", "-c", "exit 0")
+		return fakeExecCommandSuccess(t)(name, arg...)
 	}
 
 	u := NewUpdater("1.0.0", slog.Default())
@@ -515,7 +529,7 @@ func TestFallbackSystemctlRestart_UserLevelSuccess(t *testing.T) {
 		if calls%2 == 1 {
 			return exec.Command("/definitely/missing/systemctl")
 		}
-		return exec.Command("sh", "-c", "exit 0")
+		return fakeExecCommandSuccess(t)(name, arg...)
 	}
 	sleepFn = func(time.Duration) {}
 	exitFn = func(code int) { panic(updateExitPanic{code: code}) }

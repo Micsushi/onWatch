@@ -1,6 +1,7 @@
 // Debug helper: print a valid (unexpired) dashboard session token from the DB.
 // Read-only. Used to verify the live dashboard during development.
-//   go run ./scripts/dbtoken "C:/Users/sushi/.onwatch/data/onwatch.db"
+//
+//	go run ./scripts/dbtoken "C:/Users/sushi/.onwatch/data/onwatch.db"
 package main
 
 import (

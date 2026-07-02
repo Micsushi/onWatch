@@ -33,7 +33,7 @@ func writeAnthropicCredentialsFile(t *testing.T, home string, content string) st
 
 func TestGetCredentialsFilePath_UsesHomeEnvironment(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	got := getCredentialsFilePath()
 	want := filepath.Join(home, ".claude", ".credentials.json")
@@ -43,7 +43,7 @@ func TestGetCredentialsFilePath_UsesHomeEnvironment(t *testing.T) {
 }
 
 func TestDetectAnthropicCredentialsPlatform_ReturnsNilForMissingFile(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 
 	creds := detectAnthropicCredentialsPlatform(discardAnthropicTokenLogger())
 	if creds != nil {
@@ -53,7 +53,7 @@ func TestDetectAnthropicCredentialsPlatform_ReturnsNilForMissingFile(t *testing.
 
 func TestDetectAnthropicCredentialsPlatform_ParsesCredentialsFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	writeAnthropicCredentialsFile(t, home, `{
 		"claudeAiOauth": {
@@ -81,7 +81,7 @@ func TestDetectAnthropicCredentialsPlatform_ParsesCredentialsFile(t *testing.T) 
 
 func TestDetectAnthropicTokenPlatform_FileFallbackWithTrimmedToken(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("PATH", "")
 
 	writeAnthropicCredentialsFile(t, home, `{
@@ -98,7 +98,7 @@ func TestDetectAnthropicTokenPlatform_FileFallbackWithTrimmedToken(t *testing.T)
 
 func TestDetectAnthropicTokenPlatform_ReturnsEmptyForInvalidFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("PATH", "")
 
 	writeAnthropicCredentialsFile(t, home, `{invalid json}`)
@@ -111,7 +111,7 @@ func TestDetectAnthropicTokenPlatform_ReturnsEmptyForInvalidFile(t *testing.T) {
 
 func TestDetectAnthropicToken_WrapperUsesPlatformDetection(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("PATH", "")
 
 	writeAnthropicCredentialsFile(t, home, `{
@@ -128,7 +128,7 @@ func TestDetectAnthropicToken_WrapperUsesPlatformDetection(t *testing.T) {
 
 func TestDetectAnthropicCredentials_WrapperUsesPlatformDetection(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	writeAnthropicCredentialsFile(t, home, `{
 		"claudeAiOauth": {
@@ -152,7 +152,7 @@ func TestDetectAnthropicCredentials_WrapperUsesPlatformDetection(t *testing.T) {
 
 func TestWriteAnthropicCredentials_UpdatesAndPreservesFields(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	credPath := writeAnthropicCredentialsFile(t, home, `{
 		"claudeAiOauth": {
@@ -226,7 +226,7 @@ func TestWriteAnthropicCredentials_UpdatesAndPreservesFields(t *testing.T) {
 
 func TestWriteAnthropicCredentials_CreatesOAuthSectionWhenMissing(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	credPath := writeAnthropicCredentialsFile(t, home, `{"other": "value"}`)
 
@@ -261,7 +261,7 @@ func TestWriteAnthropicCredentials_CreatesOAuthSectionWhenMissing(t *testing.T) 
 
 func TestWriteAnthropicCredentials_ReturnsErrorForInvalidJSON(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	writeAnthropicCredentialsFile(t, home, `{invalid json}`)
 

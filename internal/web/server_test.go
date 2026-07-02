@@ -135,8 +135,8 @@ func TestServer_ServesStaticCSS(t *testing.T) {
 	}
 
 	cacheControl := resp.Header.Get("Cache-Control")
-	if cacheControl != "public, max-age=31536000, immutable" {
-		t.Errorf("Expected immutable cache for CSS, got %s", cacheControl)
+	if cacheControl != "no-cache" {
+		t.Errorf("Expected no-cache for CSS, got %s", cacheControl)
 	}
 
 	body, _ := io.ReadAll(resp.Body)

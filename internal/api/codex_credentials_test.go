@@ -16,7 +16,7 @@ func discardLoggerCredentials() *slog.Logger {
 
 func TestDetectCodexCredentials_ParsesOAuthTokens(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 
 	authPath := filepath.Join(os.Getenv("CODEX_HOME"), "auth.json")
 	if err := os.WriteFile(authPath, []byte(`{
@@ -50,7 +50,7 @@ func TestDetectCodexCredentials_ParsesOAuthTokens(t *testing.T) {
 
 func TestDetectCodexCredentials_ParsesAPIKey(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CODEX_HOME", "")
 
 	codexDir := filepath.Join(home, ".codex")
@@ -77,7 +77,7 @@ func TestDetectCodexCredentials_ParsesAPIKey(t *testing.T) {
 // This ensures the fallback path works when no auth file is available.
 func TestDetectCodexCredentials_EnvVarFallback(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("CODEX_TOKEN", "env_access_token")
 
 	creds := DetectCodexCredentials(discardLoggerCredentials())
@@ -100,7 +100,7 @@ func TestDetectCodexCredentials_EnvVarFallback(t *testing.T) {
 
 func TestDetectCodexToken_PrefersAccessToken(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 
 	authPath := filepath.Join(os.Getenv("CODEX_HOME"), "auth.json")
 	if err := os.WriteFile(authPath, []byte(`{
@@ -118,7 +118,7 @@ func TestDetectCodexToken_PrefersAccessToken(t *testing.T) {
 
 func TestDetectCodexToken_RejectsAPIKeyOnly(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CODEX_HOME", "")
 
 	codexDir := filepath.Join(home, ".codex")
@@ -311,7 +311,7 @@ func TestWriteCodexCredentials_NewFile(t *testing.T) {
 
 func TestDetectCodexCredentials_ParsesUserIDFromIDToken(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 
 	header := "eyJhbGciOiJub25lIn0"
 	payloadJSON := `{"https://api.openai.com/auth":{"chatgpt_user_id":"user-123"}}`
@@ -361,7 +361,7 @@ func TestCodexCredentials_CompositeExternalID(t *testing.T) {
 			want: "", // user_id missing -> ambiguous identity, caller must dedupe at account level
 		},
 		{
-			name: "neither present",
+			name:  "neither present",
 			creds: CodexCredentials{},
 			want:  "",
 		},

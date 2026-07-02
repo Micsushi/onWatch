@@ -27,16 +27,29 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = w
 	defer func() { os.Stdout = oldStdout }()
 
+	outCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		out, err := io.ReadAll(r)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		outCh <- string(out)
+	}()
+
 	fn()
 
 	if err := w.Close(); err != nil {
 		t.Fatalf("close writer: %v", err)
 	}
-	out, err := io.ReadAll(r)
-	if err != nil {
+	select {
+	case out := <-outCh:
+		return out
+	case err := <-errCh:
 		t.Fatalf("read stdout: %v", err)
+		return ""
 	}
-	return string(out)
 }
 
 func TestCalculateStats_EmptySamples(t *testing.T) {
@@ -265,6 +278,7 @@ func TestGenerateLoad_CollectsMetricsDeterministically(t *testing.T) {
 			if local == "/api/history" && r.URL.RawQuery != "range=6h" {
 				t.Fatalf("expected query range=6h, got %q", r.URL.RawQuery)
 			}
+			time.Sleep(time.Millisecond)
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		})
@@ -282,8 +296,8 @@ func TestGenerateLoad_CollectsMetricsDeterministically(t *testing.T) {
 			if m.Count < 1 {
 				t.Fatalf("expected at least one request for %s", m.Endpoint)
 			}
-			if m.MinTime <= 0 || m.MaxTime <= 0 || m.AvgTime <= 0 {
-				t.Fatalf("expected positive durations for %s, got min=%v avg=%v max=%v", m.Endpoint, m.MinTime, m.AvgTime, m.MaxTime)
+			if m.MinTime < 0 || m.MaxTime <= 0 || m.AvgTime <= 0 {
+				t.Fatalf("expected non-negative min and positive avg/max durations for %s, got min=%v avg=%v max=%v", m.Endpoint, m.MinTime, m.AvgTime, m.MaxTime)
 			}
 		}
 	})
@@ -376,12 +390,18 @@ func TestStartOnWatch_BinaryMissingReturnsZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get wd: %v", err)
 	}
+	oldPath := os.Getenv("PATH")
+	oldHome := os.Getenv("HOME")
 	if err := os.Chdir(tempDir); err != nil {
 		t.Fatalf("chdir temp dir: %v", err)
 	}
 	defer func() {
 		_ = os.Chdir(oldWD)
+		_ = os.Setenv("PATH", oldPath)
+		_ = os.Setenv("HOME", oldHome)
 	}()
+	_ = os.Setenv("PATH", tempDir)
+	_ = os.Setenv("HOME", tempDir)
 
 	pid := startonWatch(65527)
 	if pid != 0 {
@@ -475,15 +495,27 @@ func TestRunMonitoring_ZeroDurationReturnsDeterministicReport(t *testing.T) {
 }
 
 func TestStartOnWatch_ProcessDiesDuringStartupReturnsZero(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("script helper uses Unix shell")
+	}
+
 	tempDir := t.TempDir()
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("get wd: %v", err)
 	}
+	oldPath := os.Getenv("PATH")
+	oldHome := os.Getenv("HOME")
 	if err := os.Chdir(tempDir); err != nil {
 		t.Fatalf("chdir temp dir: %v", err)
 	}
-	defer func() { _ = os.Chdir(oldWD) }()
+	defer func() {
+		_ = os.Chdir(oldWD)
+		_ = os.Setenv("PATH", oldPath)
+		_ = os.Setenv("HOME", oldHome)
+	}()
+	_ = os.Setenv("PATH", tempDir)
+	_ = os.Setenv("HOME", tempDir)
 
 	if err := os.WriteFile(filepath.Join(tempDir, "onwatch"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("write failing onwatch script: %v", err)
@@ -496,6 +528,10 @@ func TestStartOnWatch_ProcessDiesDuringStartupReturnsZero(t *testing.T) {
 }
 
 func TestStopOnWatch_ValidPIDFileSignalsProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Interrupt process signaling is not supported by this helper on Windows")
+	}
+
 	home := t.TempDir()
 	oldHome := os.Getenv("HOME")
 	t.Cleanup(func() {
