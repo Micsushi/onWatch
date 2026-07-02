@@ -2104,13 +2104,19 @@ func (s *Store) GetLastNotification(provider, quotaKey, notifType string) (time.
 	return sentAt, util, nil
 }
 
-// ClearNotificationLog removes all notification log entries for a provider+quota key.
-// Called on quota reset to allow notifications to fire again in the new cycle.
+// ClearNotificationLog removes threshold notification log entries for a provider+quota key.
+// Called on quota reset to allow warning and critical notifications to fire again
+// in the new cycle. Reset notification rows are kept so bursty reset callbacks
+// can still be deduped.
 func (s *Store) ClearNotificationLog(provider, quotaKey string) error {
 	if provider == "" {
 		provider = "legacy"
 	}
-	_, err := s.db.Exec(`DELETE FROM notification_log WHERE provider = ? AND quota_key = ?`, provider, quotaKey)
+	_, err := s.db.Exec(
+		`DELETE FROM notification_log WHERE provider = ? AND quota_key = ? AND notification_type != 'reset'`,
+		provider,
+		quotaKey,
+	)
 	if err != nil {
 		return fmt.Errorf("store.ClearNotificationLog: %w", err)
 	}

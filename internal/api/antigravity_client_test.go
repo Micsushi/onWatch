@@ -19,7 +19,7 @@ func TestAntigravityClient_FetchQuotas_Success(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
-		if !strings.HasSuffix(r.URL.Path, "/GetUserStatus") {
+		if !strings.HasSuffix(r.URL.Path, "/RetrieveUserQuotaSummary") {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		if r.Header.Get("Connect-Protocol-Version") != "1" {

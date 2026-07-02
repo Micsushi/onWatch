@@ -21,17 +21,25 @@ func SetTestMode(enabled bool) {
 	testMode = enabled
 }
 
+// getCredentialsFilePath returns the path to the Claude credentials file.
+func getCredentialsFilePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude", ".credentials.json")
+}
+
 // detectAnthropicCredentialsPlatform tries to detect full OAuth credentials on Windows.
 func detectAnthropicCredentialsPlatform(logger *slog.Logger) *AnthropicCredentials {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
+	credPath := getCredentialsFilePath()
+	if credPath == "" {
 		return nil
 	}
-	credPath := filepath.Join(home, ".claude", ".credentials.json")
 	data, err := os.ReadFile(credPath)
 	if err != nil {
 		return nil
@@ -57,11 +65,10 @@ func detectAnthropicCredentialsPlatform(logger *slog.Logger) *AnthropicCredentia
 //
 // Related: https://github.com/onllm-dev/onWatch/issues/16
 func WriteAnthropicCredentials(accessToken, refreshToken string, expiresIn int) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
+	credPath := getCredentialsFilePath()
+	if credPath == "" {
+		return os.ErrNotExist
 	}
-	credPath := filepath.Join(home, ".claude", ".credentials.json")
 	data, err := os.ReadFile(credPath)
 	if err != nil {
 		return err
@@ -109,11 +116,10 @@ func detectAnthropicTokenPlatform(logger *slog.Logger) string {
 		logger = slog.Default()
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
+	credPath := getCredentialsFilePath()
+	if credPath == "" {
 		return ""
 	}
-	credPath := filepath.Join(home, ".claude", ".credentials.json")
 	data, err := os.ReadFile(credPath)
 	if err != nil {
 		return ""

@@ -538,7 +538,7 @@ func (e *NotificationEngine) Check(status QuotaStatus) {
 			e.logger.Error("failed to clear notification log on reset", "error", err)
 		}
 		if cfg.Types.Reset && shouldSendResetNotification(cfg.Types, status) && !(hasOverride && override.DisableReset) {
-			e.sendNotification(mailer, pushSender, cfg.Channels, status, "reset")
+			e.sendNotification(mailer, pushSender, cfg.Channels, resetNotificationStatus(status), "reset")
 		}
 		return
 	}
@@ -587,6 +587,14 @@ func shouldSendResetNotification(types NotificationTypes, status QuotaStatus) bo
 func isFiveHourQuota(quotaKey string) bool {
 	key := strings.ToLower(strings.TrimSpace(quotaKey))
 	return key == "five_hour" || key == "5_hour" || key == "five-hour" || key == "5-hour"
+}
+
+func resetNotificationStatus(status QuotaStatus) QuotaStatus {
+	provider := normalizeNotificationProvider(status.Provider)
+	if provider == "gemini" {
+		status.QuotaKey = "model families"
+	}
+	return status
 }
 
 // SendTestEmail sends a test email to verify SMTP configuration.

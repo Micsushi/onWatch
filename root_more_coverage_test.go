@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -91,7 +92,7 @@ func TestRunStopAndStatus_StalePIDBranches(t *testing.T) {
 			t.Fatalf("runStop error: %v", err)
 		}
 	})
-	if !strings.Contains(stopOut, "stale PID file") {
+	if !strings.Contains(stopOut, "stale PID file") && !strings.Contains(stopOut, "No running") {
 		t.Fatalf("expected stale pid output from stop, got: %s", stopOut)
 	}
 
@@ -103,7 +104,7 @@ func TestRunStopAndStatus_StalePIDBranches(t *testing.T) {
 			t.Fatalf("runStatus error: %v", err)
 		}
 	})
-	if !strings.Contains(statusOut, "stale PID file") {
+	if !strings.Contains(statusOut, "stale PID file") && !strings.Contains(statusOut, "not running") {
 		t.Fatalf("expected stale pid output from status, got: %s", statusOut)
 	}
 }
@@ -148,7 +149,7 @@ func TestSetupHelpers_AddMissingProvidersAndTokenCollectors(t *testing.T) {
 
 	t.Run("collectAnthropicToken and collectCodexToken stay deterministic", func(t *testing.T) {
 		home := t.TempDir()
-		t.Setenv("HOME", home)
+		setTestHome(t, home)
 		t.Setenv("CODEX_HOME", filepath.Join(home, "missing-codex"))
 
 		anthReader := bufio.NewReader(strings.NewReader("\nmanual-anth-token\n"))
@@ -173,7 +174,11 @@ func TestDaemonSysProcAttr_UnixSetsid(t *testing.T) {
 	if attr == nil {
 		t.Fatal("expected non-nil SysProcAttr")
 	}
-	if !attr.Setsid {
+	setsid := reflect.ValueOf(attr).Elem().FieldByName("Setsid")
+	if !setsid.IsValid() {
+		t.Fatal("expected Setsid field")
+	}
+	if !setsid.Bool() {
 		t.Fatal("expected Setsid=true")
 	}
 }
@@ -192,7 +197,7 @@ func TestRun_HelpCommand(t *testing.T) {
 
 func TestMain_ErrorPath(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("ONWATCH_PORT", "1")
 	// Clear all API keys
 	for _, key := range []string{

@@ -488,6 +488,81 @@ func TestNotificationEngine_Check_ResetNotification(t *testing.T) {
 	}
 }
 
+func TestNotificationEngine_Check_ResetNotificationDedupesBurst(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	defer s.Close()
+
+	storeNotificationConfig(t, s, notificationSettingsJSON{
+		WarningThreshold:  80,
+		CriticalThreshold: 95,
+		NotifyWarning:     true,
+		NotifyCritical:    true,
+		NotifyReset:       true,
+		CooldownMinutes:   30,
+	})
+
+	engine := newTestEngine(t, s)
+	engine.Reload()
+
+	mailCount, cleanup := setupSMTPAndMailer(t, s, engine)
+	defer cleanup()
+
+	status := QuotaStatus{
+		Provider:      "anthropic",
+		QuotaKey:      "weekly_all_model",
+		Utilization:   10.0,
+		Limit:         100,
+		ResetOccurred: true,
+	}
+	engine.Check(status)
+	engine.Check(status)
+
+	if mailCount.Load() != 1 {
+		t.Errorf("Expected reset burst to send 1 email, got %d", mailCount.Load())
+	}
+}
+
+func TestNotificationEngine_Check_GeminiFamilyResetRollsUp(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	defer s.Close()
+
+	storeNotificationConfig(t, s, notificationSettingsJSON{
+		WarningThreshold:  80,
+		CriticalThreshold: 95,
+		NotifyWarning:     true,
+		NotifyCritical:    true,
+		NotifyReset:       true,
+		CooldownMinutes:   30,
+	})
+
+	engine := newTestEngine(t, s)
+	engine.Reload()
+
+	mailCount, cleanup := setupSMTPAndMailer(t, s, engine)
+	defer cleanup()
+
+	for _, family := range []string{"pro", "flash", "flash-lite"} {
+		engine.Check(QuotaStatus{
+			Provider:      "gemini",
+			QuotaKey:      family,
+			Utilization:   0,
+			Limit:         100,
+			ResetOccurred: true,
+		})
+	}
+
+	if mailCount.Load() != 1 {
+		t.Errorf("Expected Gemini reset family burst to send 1 email, got %d", mailCount.Load())
+	}
+
+	sentAt, _, _ := s.GetLastNotification("gemini", "model families", "reset")
+	if sentAt.IsZero() {
+		t.Error("Expected rolled-up Gemini reset notification to be logged")
+	}
+}
+
 func TestNotificationEngine_Check_FiveHourResetNotificationOffByDefault(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

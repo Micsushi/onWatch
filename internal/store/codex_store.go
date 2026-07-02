@@ -596,20 +596,30 @@ func (s *Store) QueryCodexCycleOverview(accountID int64, groupBy string, limit i
 		if c.CycleEnd != nil {
 			endBoundary = *c.CycleEnd
 		} else {
-			endBoundary = time.Now().Add(time.Minute)
+			endBoundary = time.Now().UTC().Add(time.Minute)
 		}
 
 		var snapshotID int64
 		var capturedAt string
 		err := s.db.QueryRow(
-			`SELECT s.id, s.captured_at FROM codex_snapshots s
-			JOIN codex_quota_values qv ON qv.snapshot_id = s.id
-			WHERE s.account_id = ? AND qv.quota_name = ? AND s.captured_at >= ? AND s.captured_at < ?
-			ORDER BY qv.utilization DESC LIMIT 1`,
+			`SELECT s.id, s.captured_at
+			FROM codex_snapshots s
+			WHERE s.account_id = ? AND s.captured_at >= ? AND s.captured_at < ?
+				AND EXISTS (
+					SELECT 1 FROM codex_quota_values qv
+					WHERE qv.snapshot_id = s.id AND qv.quota_name = ?
+				)
+			ORDER BY (
+				SELECT qv.utilization FROM codex_quota_values qv
+				WHERE qv.snapshot_id = s.id AND qv.quota_name = ?
+				LIMIT 1
+			) DESC
+			LIMIT 1`,
 			accountID,
-			groupBy,
 			c.CycleStart.Format(time.RFC3339Nano),
 			endBoundary.Format(time.RFC3339Nano),
+			groupBy,
+			groupBy,
 		).Scan(&snapshotID, &capturedAt)
 
 		if err == sql.ErrNoRows {

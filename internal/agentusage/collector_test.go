@@ -156,3 +156,44 @@ func TestCollectorPersistsSeenKeysWhenQueueFileIsRemoved(t *testing.T) {
 		t.Fatalf("expected removed queue file to stay absent after seen-key reload, err=%v", err)
 	}
 }
+
+func TestCollectorAntigravitySettingsEmitsDeltasAfterBaseline(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "session-a.settings.json")
+	if err := os.WriteFile(source, []byte(`{"providerLock":"google","providerLockTimestamp":"2026-05-25T15:00:00Z","model":"custom:Gemini-2.5-Pro-[Google]","tokenUsage":{"inputTokens":100,"outputTokens":20,"totalTokens":120}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "out")
+	collector := NewCollector(outDir, testPricing(t), []Source{
+		{Kind: SourceAntigravity, Path: source, Source: "antigravity", Provider: "gemini", InitialBackfill: true},
+	}, nil)
+
+	if err := collector.CollectOnce(); err != nil {
+		t.Fatalf("CollectOnce baseline error = %v", err)
+	}
+	outPath := filepath.Join(outDir, "agent-usage-"+time.Now().UTC().Format("2006-01-02")+".jsonl")
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("expected baseline not to emit output, err=%v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(source, []byte(`{"providerLock":"google","providerLockTimestamp":"2026-05-25T15:01:00Z","model":"custom:Gemini-2.5-Pro-[Google]","tokenUsage":{"inputTokens":140,"outputTokens":35,"totalTokens":175}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := collector.CollectOnce(); err != nil {
+		t.Fatalf("CollectOnce delta error = %v", err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("line count = %d, want 1: %s", len(lines), string(data))
+	}
+	line := lines[0]
+	if !strings.Contains(line, `"prompt_tokens":40`) || !strings.Contains(line, `"completion_tokens":15`) || !strings.Contains(line, `"total_tokens":55`) {
+		t.Fatalf("expected Antigravity delta tokens, got: %s", line)
+	}
+}

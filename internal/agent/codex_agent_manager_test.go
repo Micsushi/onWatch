@@ -29,7 +29,7 @@ func newCodexManagerFixture(t *testing.T) *codexManagerFixture {
 	t.Helper()
 
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CODEX_HOME", "")
 
 	str, err := store.New(":memory:")
@@ -116,7 +116,7 @@ func makeCodexIDToken(t *testing.T, exp time.Time, accountID, userID string) str
 
 func TestNewCodexAgentManager_Defaults(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	manager := NewCodexAgentManager(nil, nil, 15*time.Second, nil)
 	if manager.logger == nil {

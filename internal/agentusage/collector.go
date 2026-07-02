@@ -41,6 +41,7 @@ type Collector struct {
 	sources        []Source
 	seen           map[string]struct{}
 	fileStates     map[string]fileState
+	antigravity    map[string]antigravityUsageState
 	unpricedWarned map[string]struct{}
 	seenLoaded     bool
 	initialized    bool
@@ -62,6 +63,7 @@ func NewCollector(outDir string, pricing *PricingMap, sources []Source, logger *
 		sources:        sources,
 		seen:           make(map[string]struct{}),
 		fileStates:     make(map[string]fileState),
+		antigravity:    make(map[string]antigravityUsageState),
 		unpricedWarned: make(map[string]struct{}),
 		logger:         logger,
 	}
@@ -392,13 +394,67 @@ func (c *Collector) collectSource(source Source) ([]UsageEvent, error) {
 				return nil, err
 			}
 			if event != nil {
-				events = append(events, *event)
+				if delta := c.antigravityDeltaEvent(path, *event); delta != nil {
+					events = append(events, *delta)
+				}
 			}
 		default:
 			return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
 		}
 	}
 	return events, nil
+}
+
+type antigravityUsageState struct {
+	Model  string
+	Counts TokenCounts
+}
+
+func (c *Collector) antigravityDeltaEvent(path string, event UsageEvent) *UsageEvent {
+	current := antigravityUsageState{
+		Model: event.Model,
+		Counts: TokenCounts{
+			InputTokens:         event.InputTokens,
+			CachedInputTokens:   event.CachedInputTokens,
+			CacheCreationTokens: event.CacheCreationTokens,
+			OutputTokens:        event.OutputTokens,
+			ReasoningTokens:     event.ReasoningTokens,
+			TotalTokens:         event.TotalTokens,
+		},
+	}
+	previous, ok := c.antigravity[path]
+	c.antigravity[path] = current
+	if !ok || previous.Model != current.Model {
+		return nil
+	}
+	delta := TokenCounts{
+		InputTokens:         current.Counts.InputTokens - previous.Counts.InputTokens,
+		CachedInputTokens:   current.Counts.CachedInputTokens - previous.Counts.CachedInputTokens,
+		CacheCreationTokens: current.Counts.CacheCreationTokens - previous.Counts.CacheCreationTokens,
+		OutputTokens:        current.Counts.OutputTokens - previous.Counts.OutputTokens,
+		ReasoningTokens:     current.Counts.ReasoningTokens - previous.Counts.ReasoningTokens,
+		TotalTokens:         current.Counts.TotalTokens - previous.Counts.TotalTokens,
+	}
+	if delta.InputTokens < 0 || delta.CachedInputTokens < 0 || delta.CacheCreationTokens < 0 || delta.OutputTokens < 0 || delta.ReasoningTokens < 0 || delta.TotalTokens < 0 {
+		return nil
+	}
+	if delta.TotalTokens <= 0 {
+		delta.TotalTokens = delta.InputTokens + delta.CachedInputTokens + delta.CacheCreationTokens + delta.OutputTokens + delta.ReasoningTokens
+	}
+	if delta.TotalTokens <= 0 {
+		return nil
+	}
+	event.InputTokens = delta.InputTokens
+	event.CachedInputTokens = delta.CachedInputTokens
+	event.CacheCreationTokens = delta.CacheCreationTokens
+	event.OutputTokens = delta.OutputTokens
+	event.ReasoningTokens = delta.ReasoningTokens
+	event.TotalTokens = delta.TotalTokens
+	event.CostUSD = c.pricing.CalculateCost(event.Model, delta, CostOptions{
+		ReasoningBilledAsOutput: true,
+		ProviderPrefixes:        []string{"google", "vertex_ai", "openrouter/google", "anthropic", "openai"},
+	})
+	return &event
 }
 
 func sourceFileInInitialWindow(path string) bool {
@@ -473,7 +529,7 @@ func expandSourcePaths(path, kind string) ([]string, error) {
 				paths = append(paths, candidate)
 			}
 		case SourceAntigravity:
-			if ext == ".json" {
+			if strings.HasSuffix(strings.ToLower(filepath.Base(candidate)), ".settings.json") {
 				paths = append(paths, candidate)
 			}
 		default:

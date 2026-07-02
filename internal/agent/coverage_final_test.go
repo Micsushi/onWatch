@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -49,6 +51,18 @@ func withAnthropicOAuthRedirect(t *testing.T, oauthServerURL string) {
 	t.Cleanup(func() {
 		http.DefaultTransport = base
 	})
+}
+
+func writeClaudeCredentialsFixture(t *testing.T, home string) {
+	t.Helper()
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o700); err != nil {
+		t.Fatalf("mkdir .claude: %v", err)
+	}
+	content := `{"claudeAiOauth":{"accessToken":"old-token","refreshToken":"refresh-token","expiresAt":1}}`
+	if err := os.WriteFile(filepath.Join(claudeDir, ".credentials.json"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write credentials fixture: %v", err)
+	}
 }
 
 type blockingRunner struct {
@@ -371,7 +385,9 @@ func TestAnthropicAgent_PollAuthPauseAndResume(t *testing.T) {
 }
 
 func TestAnthropicAgent_PollRateLimitBypassWithOAuthRefresh(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	setTestHome(t, home)
+	writeClaudeCredentialsFixture(t, home)
 
 	oauthServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -430,7 +446,9 @@ func TestAnthropicAgent_PollRateLimitBypassWithOAuthRefresh(t *testing.T) {
 }
 
 func TestAnthropicAgent_PollProactiveOAuthRefresh(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	setTestHome(t, home)
+	writeClaudeCredentialsFixture(t, home)
 
 	oauthServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
