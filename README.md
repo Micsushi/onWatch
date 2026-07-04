@@ -31,6 +31,17 @@ This downloads the binary to `~/.onwatch/`, creates a `.env` config, sets up a s
 
 On macOS, the installer downloads the standard binary with menubar support.
 
+**Linux notes:**
+
+- The menubar/tray companion is macOS-only. On Linux it is a no-op stub; use the
+  web dashboard on port 9211 instead.
+- Optional packages improve auto-detection (core polling works without them):
+  - `libsecret-tools` — `secret-tool` for reading the GNOME/KDE keyring
+  - `iproute2` (`ss`) or `net-tools` (`netstat`) — Antigravity local port discovery
+  ```bash
+  sudo apt install libsecret-tools iproute2   # Debian/Ubuntu
+  ```
+
 ### Homebrew (macOS & Linux)
 
 ```bash
@@ -72,6 +83,13 @@ cp .env.example .env    # then add your API keys
 cp .env.docker.example .env   # add your API keys
 docker-compose up -d
 ```
+
+> **Linux bind mounts:** the container runs as non-root (UID 65532). If you bind-mount
+> a host data directory instead of using the named volume, give it to that UID first,
+> or the container cannot write to it:
+> ```bash
+> mkdir -p onwatch-data && sudo chown -R 65532:65532 onwatch-data
+> ```
 
 Or via `app.sh`:
 

@@ -6,6 +6,11 @@ Audit date: 2026-07-03
 
 Strong macOS support is intended. The installer, docs, Keychain integration, and menubar companion all have macOS-specific paths. Native macOS build/test was not run because this audit was performed from Ubuntu.
 
+The shared (non-menubar) codebase was verified to `go build` and `go vet` cleanly on
+Linux (2026-07-04), so the portable code paths compile; the `darwin`/`security`/menubar
+branches still need a native macOS run to confirm. The menubar companion is gated behind
+`menubar && darwin` build tags and requires a macOS host with CGO.
+
 ## What Was Checked
 
 - Static scan of Darwin build tags, installer logic, Homebrew setup, Keychain paths, and menubar code.

@@ -4,7 +4,17 @@ Audit date: 2026-07-03
 
 ## Status
 
-Docker build works on Ubuntu. Native build/test should work after installing Go 1.25.7 or newer, but Go is not installed on this host.
+Verified on Linux (2026-07-04). Native `go build ./...` and `go vet ./...` pass in a
+`golang:1.25` container, and almost all test packages pass (agent, api, web, store,
+tracker, notify, metrics, update, ...). Docker build works on Ubuntu.
+
+Two pre-existing test issues remain and are **not** Linux-portability defects:
+
+- `internal/store` permission tests only fail when the suite is run as **root**
+  (root bypasses file permissions); they pass as a normal user.
+- `internal/config/TestConfig_DefaultValues` is sensitive to a stray `.env` on the
+  path (test-isolation flake), and the root integration package needs live service
+  infra so it times out in a bare container.
 
 ## What Was Tested
 
@@ -49,23 +59,17 @@ Result:
 - Menubar companion is macOS-only; Linux uses a no-op stub.
 - Docker bind-mounted data directory needs UID 65532 ownership or a named volume.
 
-## Likely Changes Needed
+## Changes Made (2026-07-04)
 
-- Document Ubuntu prerequisites:
-  - Go 1.25.7+
-  - Docker Compose
-  - optional `libsecret-tools` for `secret-tool`
-  - optional `iproute2` for `ss`
-  - optional `net-tools` for `netstat`
-- Mark Linux menubar as unsupported.
-- Add a fresh-checkout Docker quickstart:
+Documented in `README.md`:
 
-```bash
-cp .env.docker.example .env
-mkdir -p onwatch-data
-sudo chown -R 65532:65532 onwatch-data
-docker compose up -d
-```
+- Linux notes: menubar/tray is macOS-only (no-op stub on Linux; use the web dashboard).
+- Optional Ubuntu packages: `libsecret-tools` (`secret-tool`), `iproute2` (`ss`) /
+  `net-tools` (`netstat`) for keyring and Antigravity port discovery.
+- Docker bind-mount note: chown the host data dir to UID 65532 (the non-root
+  container user) or use the named volume.
+
+Native prerequisites remain: Go 1.25.7+ and Docker/Docker Compose.
 
 ## Suggested Ubuntu Smoke Path
 
