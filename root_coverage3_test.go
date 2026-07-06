@@ -3639,8 +3639,8 @@ func TestRun_InProcessDaemonChild_ServerBindFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	// Occupy a port on 0.0.0.0 so the server (which binds 0.0.0.0:port) fails
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	// Occupy a loopback port so the server (forced to 127.0.0.1 in tests) fails to bind
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -3702,8 +3702,8 @@ func TestRun_InProcessDaemonChild_AllProviders(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	// Occupy a port on 0.0.0.0 so the server fails to bind
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	// Occupy a loopback port so the server (forced to 127.0.0.1 in tests) fails to bind
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}

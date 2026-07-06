@@ -464,7 +464,7 @@ func TestServer_APIIntegrationsRoute_UsesAuthMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
-	server := NewServer(0, h, nil, "admin", passHash, "", "", "")
+	server := NewServer(0, h, nil, "admin", passHash, "127.0.0.1", "", "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/api-integrations/current", nil)
 	req.SetBasicAuth("admin", "secret123")

@@ -78,6 +78,7 @@ def mock_server() -> Generator[subprocess.Popen, None, None]:
     proc = subprocess.Popen(
         [
             MOCK_BINARY,
+            "--host=127.0.0.1",
             f"--port={MOCK_PORT}",
             "--syn-key=syn_test_e2e_key",
             "--zai-key=zai_test_e2e_key",
@@ -134,6 +135,7 @@ def onwatch_server(mock_server: subprocess.Popen) -> Generator[subprocess.Popen,
     env = os.environ.copy()
     env.update({
         "HOME": E2E_HOME,
+        "ONWATCH_HOST": "127.0.0.1",
         "ONWATCH_ADMIN_PASS": PASSWORD,
         "ONWATCH_TEST_MODE": "1",
         "SYNTHETIC_API_KEY": "syn_test_e2e_key",

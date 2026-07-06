@@ -1743,7 +1743,7 @@ func TestServer_GetSessionStore(t *testing.T) {
 
 	h := NewHandler(s, nil, nil, nil, cfg)
 	passHash := legacyHashPassword("test")
-	srv := NewServer(0, h, nil, "admin", passHash, "", "", "")
+	srv := NewServer(0, h, nil, "admin", passHash, "127.0.0.1", "", "")
 
 	// GetSessionStore should return the session store
 	ss := srv.GetSessionStore()

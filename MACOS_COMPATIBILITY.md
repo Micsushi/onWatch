@@ -1,19 +1,25 @@
 # macOS Compatibility Notes
 
-Audit date: 2026-07-03
+Audit date: 2026-07-04
 
 ## Status
 
-Strong macOS support is intended. The installer, docs, Keychain integration, and menubar companion all have macOS-specific paths. Native macOS build/test was not run because this audit was performed from Ubuntu.
+Strong macOS support is intended. The shared Go code builds/tests on this Mac
+with `CGO_ENABLED=0`; CGO-enabled tests are currently blocked by the local
+Command Line Tools SDK. The installer, docs, Keychain integration, and menubar
+companion all have macOS-specific paths.
 
-The shared (non-menubar) codebase was verified to `go build` and `go vet` cleanly on
-Linux (2026-07-04), so the portable code paths compile; the `darwin`/`security`/menubar
-branches still need a native macOS run to confirm. The menubar companion is gated behind
-`menubar && darwin` build tags and requires a macOS host with CGO.
+The shared (non-menubar) codebase was verified with `CGO_ENABLED=0 go build`,
+`CGO_ENABLED=0 go vet`, and `CGO_ENABLED=0 go test` on macOS (2026-07-04). The
+menubar companion is gated behind `menubar && darwin` build tags and requires a
+macOS host with CGO.
 
 ## What Was Checked
 
+- Native macOS `CGO_ENABLED=0 go build`, `go vet`, and `go test` for the shared code.
 - Static scan of Darwin build tags, installer logic, Homebrew setup, Keychain paths, and menubar code.
+- CGO-enabled `go test ./...` was attempted and failed at link time against the
+  local Command Line Tools SDK 11.3 with missing `SecTrustCopyCertificateChain`.
 - Linux audit built the Docker image successfully and verified the Linux binary, but that does not prove macOS native behavior.
 
 ## What Should Work On macOS
@@ -28,7 +34,8 @@ branches still need a native macOS run to confirm. The menubar companion is gate
 ## macOS Blockers / Caveats
 
 - Go is required for native source builds.
-- Menubar builds require a macOS host and CGO.
+- Menubar builds require CGO, a current macOS SDK/Command Line Tools install, and
+  still need a focused native smoke.
 - Homebrew tap note says a separate tap repository is required.
 - Signed/notarized macOS release status was not verified.
 - Docker builds are Linux containers; they are useful for server/dashboard runtime but not for validating the native menubar companion.

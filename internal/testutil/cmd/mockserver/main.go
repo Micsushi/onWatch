@@ -35,6 +35,7 @@ import (
 
 func main() {
 	port := flag.Int("port", 19212, "HTTP port for the mock server")
+	host := flag.String("host", "127.0.0.1", "Bind address for the mock server (loopback by default to avoid firewall prompts)")
 	synKey := flag.String("syn-key", "syn_test_e2e_key", "Expected Synthetic API key")
 	zaiKey := flag.String("zai-key", "zai_test_e2e_key", "Expected Z.ai API key")
 	anthToken := flag.String("anth-token", "anth_test_e2e_token", "Expected Anthropic OAuth token")
@@ -42,7 +43,7 @@ func main() {
 
 	srv := newStandaloneServer(*synKey, *zaiKey, *anthToken)
 
-	addr := fmt.Sprintf(":%d", *port)
+	addr := fmt.Sprintf("%s:%d", *host, *port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("failed to listen on %s: %v", addr, err)

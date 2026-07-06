@@ -97,6 +97,27 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_input_token_cost": 0.00000125,
 			"cache_creation_1h_input_token_cost": 0.000002
 		},
+		"claude-haiku-4-5": {
+			"input_cost_per_token": 0.000001,
+			"output_cost_per_token": 0.000005,
+			"cache_read_input_token_cost": 0.0000001,
+			"cache_creation_input_token_cost": 0.00000125,
+			"cache_creation_1h_input_token_cost": 0.000002
+		},
+		"claude-sonnet-5": {
+			"input_cost_per_token": 0.000002,
+			"output_cost_per_token": 0.00001,
+			"cache_read_input_token_cost": 0.0000002,
+			"cache_creation_input_token_cost": 0.0000025,
+			"cache_creation_1h_input_token_cost": 0.000004
+		},
+		"claude-fable-5": {
+			"input_cost_per_token": 0.00001,
+			"output_cost_per_token": 0.00005,
+			"cache_read_input_token_cost": 0.000001,
+			"cache_creation_input_token_cost": 0.0000125,
+			"cache_creation_1h_input_token_cost": 0.00002
+		},
 		"gpt-5.5": {
 			"input_cost_per_token": 0.000005,
 			"output_cost_per_token": 0.00003,
