@@ -126,6 +126,20 @@ func TestCodexTracker_Process_ResetDetection(t *testing.T) {
 		t.Fatalf("Process snap2: %v", err)
 	}
 
+	if resetDetected {
+		t.Fatal("did not expect reset callback before confirmation")
+	}
+
+	snap3 := &api.CodexSnapshot{
+		CapturedAt: now.Add(2 * time.Minute),
+		Quotas: []api.CodexQuota{
+			{Name: "five_hour", Utilization: 4, ResetsAt: &reset2, Status: "healthy"},
+		},
+	}
+	if err := tr.Process(snap3); err != nil {
+		t.Fatalf("Process snap3: %v", err)
+	}
+
 	if !resetDetected {
 		t.Fatal("expected reset callback")
 	}
@@ -145,8 +159,74 @@ func TestCodexTracker_Process_ResetDetection(t *testing.T) {
 	if active == nil {
 		t.Fatal("expected new active cycle")
 	}
-	if active.PeakUtilization != 5 {
-		t.Fatalf("active.PeakUtilization = %.1f, want 5", active.PeakUtilization)
+	if active.PeakUtilization != 4 {
+		t.Fatalf("active.PeakUtilization = %.1f, want 4", active.PeakUtilization)
+	}
+}
+
+func TestCodexTracker_Process_TransientZeroDoesNotReset(t *testing.T) {
+	t.Parallel()
+	s := newTestCodexStore(t)
+	tr := NewCodexTracker(s, slog.Default())
+
+	resetDetected := false
+	tr.SetOnReset(func(string) {
+		resetDetected = true
+	})
+
+	now := time.Now().UTC()
+	reset1 := now.Add(3 * 24 * time.Hour)
+	reset2 := now.Add(7 * 24 * time.Hour)
+
+	snap1 := &api.CodexSnapshot{
+		CapturedAt: now,
+		Quotas: []api.CodexQuota{
+			{Name: "seven_day", Utilization: 88, ResetsAt: &reset1, Status: "danger"},
+		},
+	}
+	if err := tr.Process(snap1); err != nil {
+		t.Fatalf("Process snap1: %v", err)
+	}
+
+	snap2 := &api.CodexSnapshot{
+		CapturedAt: now.Add(time.Minute),
+		Quotas: []api.CodexQuota{
+			{Name: "seven_day", Utilization: 0, ResetsAt: &reset2, Status: "healthy"},
+		},
+	}
+	if err := tr.Process(snap2); err != nil {
+		t.Fatalf("Process snap2: %v", err)
+	}
+
+	snap3 := &api.CodexSnapshot{
+		CapturedAt: now.Add(2 * time.Minute),
+		Quotas: []api.CodexQuota{
+			{Name: "seven_day", Utilization: 88, ResetsAt: &reset1, Status: "danger"},
+		},
+	}
+	if err := tr.Process(snap3); err != nil {
+		t.Fatalf("Process snap3: %v", err)
+	}
+
+	if resetDetected {
+		t.Fatal("did not expect reset callback for transient zero")
+	}
+	history, err := s.QueryCodexCycleHistory(store.DefaultCodexAccountID, "seven_day")
+	if err != nil {
+		t.Fatalf("QueryCodexCycleHistory: %v", err)
+	}
+	if len(history) != 0 {
+		t.Fatalf("len(history) = %d, want 0", len(history))
+	}
+	active, err := s.QueryActiveCodexCycle(store.DefaultCodexAccountID, "seven_day")
+	if err != nil {
+		t.Fatalf("QueryActiveCodexCycle: %v", err)
+	}
+	if active == nil {
+		t.Fatal("expected active cycle")
+	}
+	if active.PeakUtilization != 88 {
+		t.Fatalf("active.PeakUtilization = %.1f, want 88", active.PeakUtilization)
 	}
 }
 

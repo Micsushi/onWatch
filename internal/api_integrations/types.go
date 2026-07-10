@@ -174,6 +174,23 @@ func ParseUsageEventLine(line []byte, sourcePath string) (*UsageEvent, error) {
 
 func eventFingerprint(event *UsageEvent) string {
 	h := sha256.New()
+	if event.Provider == "anthropic" && metadataString(event.MetadataJSON, "source") == "claude" && event.RequestID != "" {
+		writeHashPart(h, "claude_usage")
+		writeHashPart(h, metadataString(event.MetadataJSON, "source_path"))
+		writeHashPart(h, event.Provider)
+		writeHashPart(h, event.Account)
+		writeHashPart(h, metadataString(event.MetadataJSON, "session_id"))
+		writeHashPart(h, event.RequestID)
+		writeHashPart(h, event.Model)
+		writeHashPart(h, metadataNumberString(event.MetadataJSON, "input_tokens"))
+		writeHashPart(h, metadataNumberString(event.MetadataJSON, "cached_input_tokens"))
+		writeHashPart(h, metadataNumberString(event.MetadataJSON, "cache_creation_input_tokens"))
+		writeHashPart(h, metadataNumberString(event.MetadataJSON, "cache_creation_1h_input_tokens"))
+		writeHashPart(h, metadataNumberString(event.MetadataJSON, "output_tokens"))
+		writeHashPart(h, metadataNumberString(event.MetadataJSON, "reasoning_output_tokens"))
+		writeHashPart(h, fmt.Sprintf("%d", event.TotalTokens))
+		return hex.EncodeToString(h.Sum(nil))
+	}
 	if eventKey := metadataString(event.MetadataJSON, "event_key"); eventKey != "" {
 		writeHashPart(h, "event_key")
 		writeHashPart(h, eventKey)
@@ -205,6 +222,28 @@ func metadataString(metadataJSON, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+func metadataNumberString(metadataJSON, key string) string {
+	if strings.TrimSpace(metadataJSON) == "" {
+		return "0"
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+		return "0"
+	}
+	switch value := metadata[key].(type) {
+	case float64:
+		return fmt.Sprintf("%.0f", value)
+	case string:
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return "0"
+		}
+		return value
+	default:
+		return "0"
+	}
 }
 
 func writeHashPart(h interface{ Write([]byte) (int, error) }, part string) {

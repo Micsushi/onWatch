@@ -40,6 +40,33 @@ func TestCollectorWritesNormalizedJSONLAndSkipsAlreadySeenEvents(t *testing.T) {
 	}
 }
 
+func TestCollectorDedupesClaudeStreamingUsageForSameMessage(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "claude.jsonl")
+	writeFixture(t, source, []string{
+		`{"timestamp":"2026-05-25T12:34:56.001Z","sessionId":"s1","message":{"id":"msg_1","model":"claude-sonnet-4-5","usage":{"input_tokens":100,"cache_read_input_tokens":200,"cache_creation_input_tokens":20,"output_tokens":10}}}`,
+		`{"timestamp":"2026-05-25T12:34:56.500Z","sessionId":"s1","message":{"id":"msg_1","model":"claude-sonnet-4-5","usage":{"input_tokens":100,"cache_read_input_tokens":200,"cache_creation_input_tokens":20,"output_tokens":10}}}`,
+	})
+	outDir := filepath.Join(dir, "out")
+
+	collector := NewCollector(outDir, testPricing(t), []Source{
+		{Kind: SourceClaude, Path: source},
+	}, nil)
+
+	if err := collector.CollectOnce(); err != nil {
+		t.Fatalf("CollectOnce() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(outDir, "agent-usage-"+time.Now().UTC().Format("2006-01-02")+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("line count = %d, want 1: %s", len(lines), string(data))
+	}
+}
+
 func TestCollectorOnlyRescansChangedFilesAfterInitialPass(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "codex.jsonl")

@@ -120,3 +120,23 @@ func TestParseUsageEventLine_FingerprintUsesStableEventKey(t *testing.T) {
 		t.Fatalf("expected matching fingerprints for stable event key: %s != %s", a.Fingerprint, b.Fingerprint)
 	}
 }
+
+func TestParseUsageEventLine_ClaudeFingerprintIgnoresStreamingTimestampAndEventKey(t *testing.T) {
+	base := `"integration":"Claude Code","provider":"anthropic","account":"default","model":"claude-opus-4-8","request_id":"req_1","prompt_tokens":135,"completion_tokens":7,"total_tokens":142`
+	metadataA := `"metadata":{"source":"claude","source_path":"/tmp/claude/session.jsonl","session_id":"s1","event_key":"old-key-a","input_tokens":5,"cached_input_tokens":100,"cache_creation_input_tokens":30,"cache_creation_1h_input_tokens":30,"output_tokens":7,"reasoning_output_tokens":0}`
+	metadataB := strings.Replace(metadataA, "old-key-a", "old-key-b", 1)
+	lineA := []byte(`{"ts":"2026-04-03T12:00:00Z",` + base + `,` + metadataA + `}`)
+	lineB := []byte(`{"ts":"2026-04-03T12:00:03Z",` + base + `,` + metadataB + `}`)
+
+	a, err := ParseUsageEventLine(lineA, "/tmp/api-integrations/agent-usage-a.jsonl")
+	if err != nil {
+		t.Fatalf("ParseUsageEventLine(a): %v", err)
+	}
+	b, err := ParseUsageEventLine(lineB, "/tmp/api-integrations/agent-usage-b.jsonl")
+	if err != nil {
+		t.Fatalf("ParseUsageEventLine(b): %v", err)
+	}
+	if a.Fingerprint != b.Fingerprint {
+		t.Fatalf("expected Claude streaming fingerprints to match: %s != %s", a.Fingerprint, b.Fingerprint)
+	}
+}

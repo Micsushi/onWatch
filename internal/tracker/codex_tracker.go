@@ -11,11 +11,12 @@ import (
 
 // CodexTracker manages reset cycle detection and usage calculation for Codex quotas.
 type CodexTracker struct {
-	store      *store.Store
-	logger     *slog.Logger
-	lastValues map[int64]map[string]float64   // accountID -> quotaName -> value
-	lastResets map[int64]map[string]time.Time // accountID -> quotaName -> resetTime
-	hasLast    map[int64]bool                 // accountID -> hasLast
+	store         *store.Store
+	logger        *slog.Logger
+	lastValues    map[int64]map[string]float64           // accountID -> quotaName -> value
+	lastResets    map[int64]map[string]time.Time         // accountID -> quotaName -> resetTime
+	pendingResets map[int64]map[string]pendingCodexReset // accountID -> quotaName -> reset candidate
+	hasLast       map[int64]bool                         // accountID -> hasLast
 
 	onReset func(quotaName string)
 }
@@ -24,6 +25,13 @@ type CodexTracker struct {
 const DefaultCodexAccountID int64 = 1
 
 const codexResetShiftThreshold = 60 * time.Minute
+const codexPendingResetTolerance = 5 * time.Minute
+
+type pendingCodexReset struct {
+	utilization float64
+	resetsAt    *time.Time
+	capturedAt  time.Time
+}
 
 // CodexSummary contains computed usage statistics for a Codex quota.
 type CodexSummary struct {
@@ -46,11 +54,12 @@ func NewCodexTracker(store *store.Store, logger *slog.Logger) *CodexTracker {
 		logger = slog.Default()
 	}
 	return &CodexTracker{
-		store:      store,
-		logger:     logger,
-		lastValues: make(map[int64]map[string]float64),
-		lastResets: make(map[int64]map[string]time.Time),
-		hasLast:    make(map[int64]bool),
+		store:         store,
+		logger:        logger,
+		lastValues:    make(map[int64]map[string]float64),
+		lastResets:    make(map[int64]map[string]time.Time),
+		pendingResets: make(map[int64]map[string]pendingCodexReset),
+		hasLast:       make(map[int64]bool),
 	}
 }
 
@@ -85,6 +94,9 @@ func (t *CodexTracker) processQuota(accountID int64, quota api.CodexQuota, captu
 	}
 	if t.lastResets[accountID] == nil {
 		t.lastResets[accountID] = make(map[string]time.Time)
+	}
+	if t.pendingResets[accountID] == nil {
+		t.pendingResets[accountID] = make(map[string]pendingCodexReset)
 	}
 
 	cycle, err := t.store.QueryActiveCodexCycle(accountID, quotaName)
@@ -127,9 +139,22 @@ func (t *CodexTracker) processQuota(accountID int64, quota api.CodexQuota, captu
 			if diff > codexResetShiftThreshold {
 				// Some Codex responses use rolling reset timestamps. Only treat large
 				// reset-time shifts as a reset when utilization also drops materially.
+				// Codex can briefly return a false 0% window during backend changes; require
+				// one matching follow-up poll before closing the current cycle.
 				if t.hasLast[accountID] {
 					if lastUtil, ok := t.lastValues[accountID][quotaName]; ok && currentUtil+2 < lastUtil {
-						resetDetected = true
+						if t.confirmCodexReset(accountID, quotaName, quota, capturedAt) {
+							resetDetected = true
+						} else {
+							t.logger.Info("Pending Codex reset candidate",
+								"account_id", accountID,
+								"quota", quotaName,
+								"previous_utilization", lastUtil,
+								"current_utilization", currentUtil,
+								"resets_at", quota.ResetsAt,
+							)
+							return nil
+						}
 					}
 				}
 			}
@@ -143,6 +168,7 @@ func (t *CodexTracker) processQuota(accountID int64, quota api.CodexQuota, captu
 	}
 
 	if resetDetected {
+		delete(t.pendingResets[accountID], quotaName)
 		cycleEndTime := capturedAt
 		if cycle.ResetsAt != nil && capturedAt.After(*cycle.ResetsAt) {
 			cycleEndTime = *cycle.ResetsAt
@@ -177,6 +203,7 @@ func (t *CodexTracker) processQuota(accountID int64, quota api.CodexQuota, captu
 		return nil
 	}
 
+	delete(t.pendingResets[accountID], quotaName)
 	if updateCycleResetAt {
 		if err := t.store.UpdateCodexCycleResetsAt(accountID, quotaName, quota.ResetsAt); err != nil {
 			return fmt.Errorf("failed to update cycle reset timestamp: %w", err)
@@ -208,6 +235,40 @@ func (t *CodexTracker) processQuota(accountID int64, quota api.CodexQuota, captu
 
 	t.lastValues[accountID][quotaName] = currentUtil
 	return nil
+}
+
+func (t *CodexTracker) confirmCodexReset(accountID int64, quotaName string, quota api.CodexQuota, capturedAt time.Time) bool {
+	pending, ok := t.pendingResets[accountID][quotaName]
+	if !ok {
+		t.pendingResets[accountID][quotaName] = pendingCodexReset{
+			utilization: quota.Utilization,
+			resetsAt:    quota.ResetsAt,
+			capturedAt:  capturedAt,
+		}
+		return false
+	}
+
+	if codexResetTimesClose(pending.resetsAt, quota.ResetsAt) && quota.Utilization <= pending.utilization+2 {
+		return true
+	}
+
+	t.pendingResets[accountID][quotaName] = pendingCodexReset{
+		utilization: quota.Utilization,
+		resetsAt:    quota.ResetsAt,
+		capturedAt:  capturedAt,
+	}
+	return false
+}
+
+func codexResetTimesClose(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	diff := left.Sub(*right)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= codexPendingResetTolerance
 }
 
 // UsageSummary returns computed stats for a specific Codex quota.

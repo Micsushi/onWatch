@@ -237,6 +237,7 @@ func usageEventFromOutputLine(line []byte) (UsageEvent, bool) {
 	}
 	event.InputTokens = intFromMapDefault(wire.Metadata, "input_tokens", event.InputTokens)
 	event.CacheCreationTokens = intFromMap(wire.Metadata, "cache_creation_input_tokens")
+	event.CacheCreation1hTokens = intFromMap(wire.Metadata, "cache_creation_1h_input_tokens")
 	event.OutputTokens = intFromMapDefault(wire.Metadata, "output_tokens", event.OutputTokens)
 	event.ReasoningTokens = intFromMap(wire.Metadata, "reasoning_output_tokens")
 	if event.Source == "" {
@@ -565,6 +566,13 @@ func shouldSkipSourceDir(path string) bool {
 }
 
 func eventKey(event UsageEvent, line []byte) string {
+	total := event.TotalTokens
+	if total <= 0 {
+		total = event.InputTokens + event.CachedInputTokens + event.CacheCreationTokens + event.OutputTokens + event.ReasoningTokens
+	}
+	if key := event.dedupeKey(event.Timestamp, total); key != "" {
+		return key
+	}
 	h := sha256.New()
 	_, _ = h.Write([]byte(event.SourcePath))
 	_, _ = h.Write([]byte{0})

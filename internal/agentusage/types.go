@@ -79,7 +79,7 @@ func (e UsageEvent) ToAPIIntegrationLine() ([]byte, error) {
 		"output_tokens":               e.OutputTokens,
 		"reasoning_output_tokens":     e.ReasoningTokens,
 		"source_path":                 e.SourcePath,
-		"event_key":                   e.stableEventKey(ts, total),
+		"event_key":                   e.dedupeKey(ts, total),
 	}
 	if e.CacheCreation1hTokens > 0 {
 		metadata["cache_creation_1h_input_tokens"] = e.CacheCreation1hTokens
@@ -168,6 +168,32 @@ func (e UsageEvent) stableEventKey(ts time.Time, total int) string {
 	writeStableEventPart(h, fmt.Sprintf("%d", e.ReasoningTokens))
 	writeStableEventPart(h, fmt.Sprintf("%d", total))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (e UsageEvent) dedupeKey(ts time.Time, total int) string {
+	if strings.EqualFold(strings.TrimSpace(e.Source), "claude") && strings.TrimSpace(e.RequestID) != "" {
+		account := strings.TrimSpace(e.Account)
+		if account == "" {
+			account = "default"
+		}
+		h := sha256.New()
+		writeStableEventPart(h, e.SourcePath)
+		writeStableEventPart(h, e.Source)
+		writeStableEventPart(h, e.Provider)
+		writeStableEventPart(h, account)
+		writeStableEventPart(h, e.SessionID)
+		writeStableEventPart(h, e.RequestID)
+		writeStableEventPart(h, e.Model)
+		writeStableEventPart(h, fmt.Sprintf("%d", e.InputTokens))
+		writeStableEventPart(h, fmt.Sprintf("%d", e.CachedInputTokens))
+		writeStableEventPart(h, fmt.Sprintf("%d", e.CacheCreationTokens))
+		writeStableEventPart(h, fmt.Sprintf("%d", e.CacheCreation1hTokens))
+		writeStableEventPart(h, fmt.Sprintf("%d", e.OutputTokens))
+		writeStableEventPart(h, fmt.Sprintf("%d", e.ReasoningTokens))
+		writeStableEventPart(h, fmt.Sprintf("%d", total))
+		return hex.EncodeToString(h.Sum(nil))
+	}
+	return e.stableEventKey(ts, total)
 }
 
 func writeStableEventPart(h interface{ Write([]byte) (int, error) }, part string) {

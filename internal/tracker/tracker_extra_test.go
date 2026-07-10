@@ -472,6 +472,24 @@ func TestCodexTracker_processQuota_ResetViaUtilizationDrop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryCodexCycleHistory: %v", err)
 	}
+	if len(history) != 0 {
+		t.Errorf("expected reset candidate to wait for confirmation, got %d closed cycles", len(history))
+	}
+
+	snap3 := &api.CodexSnapshot{
+		CapturedAt: now.Add(2 * time.Minute),
+		Quotas: []api.CodexQuota{
+			{Name: "five_hour", Utilization: 4, ResetsAt: &reset2, Status: "healthy"},
+		},
+	}
+	if err := tr.Process(snap3); err != nil {
+		t.Fatalf("Process snap3: %v", err)
+	}
+
+	history, err = s.QueryCodexCycleHistory(store.DefaultCodexAccountID, "five_hour")
+	if err != nil {
+		t.Fatalf("QueryCodexCycleHistory: %v", err)
+	}
 	if len(history) != 1 {
 		t.Errorf("expected 1 closed cycle (util-drop reset), got %d", len(history))
 	}
@@ -1098,8 +1116,16 @@ func TestCodexTracker_UsageSummary_WithHistory(t *testing.T) {
 		t.Fatalf("Process snap3 (reset): %v", err)
 	}
 
+	snap4 := &api.CodexSnapshot{
+		CapturedAt: now.Add(3 * time.Minute),
+		Quotas:     []api.CodexQuota{{Name: "five_hour", Utilization: 4, ResetsAt: &reset2}},
+	}
+	if err := tr.Process(snap4); err != nil {
+		t.Fatalf("Process snap4 (reset confirmation): %v", err)
+	}
+
 	// Also insert snap3 so QueryLatestCodex has data
-	if _, err := s.InsertCodexSnapshot(snap3); err != nil {
+	if _, err := s.InsertCodexSnapshot(snap4); err != nil {
 		t.Fatalf("InsertCodexSnapshot: %v", err)
 	}
 
