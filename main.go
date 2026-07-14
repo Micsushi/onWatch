@@ -625,6 +625,14 @@ func run() error {
 		if token := api.DetectAnthropicToken(preflightLogger); token != "" {
 			cfg.AnthropicToken = token
 			cfg.AnthropicAutoToken = true
+		} else if p := agent.StatuslineDataPath(); p != "" {
+			if _, err := os.Stat(p); err == nil {
+				// No OAuth token reachable (e.g. Keychain denied in this launch
+				// context) but the statusline bridge file exists: keep the
+				// Anthropic provider alive on statusline data alone.
+				cfg.AnthropicSource = "statusline"
+				preflightLogger.Info("Anthropic token not found; statusline-only mode", "statusline", p)
+			}
 		}
 	}
 	if cfg.CodexToken == "" {
@@ -981,7 +989,7 @@ func run() error {
 				var provSettings map[string]map[string]interface{}
 				if json.Unmarshal([]byte(provJSON), &provSettings) == nil {
 					if anthSettings, ok := provSettings["anthropic"]; ok {
-						if src, ok := anthSettings["source"].(string); ok && src != "" {
+						if src, ok := anthSettings["source"].(string); ok && src != "" && cfg.AnthropicToken != "" {
 							cfg.AnthropicSource = src
 						}
 					}

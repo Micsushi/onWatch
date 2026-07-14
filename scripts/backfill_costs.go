@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/onllm-dev/onwatch/v2/internal/agentusage"
@@ -23,7 +24,11 @@ type row struct {
 }
 
 func main() {
-	dbPath := os.Getenv("USERPROFILE") + `\.onwatch\data\onwatch.db`
+	home := os.Getenv("USERPROFILE")
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	dbPath := filepath.Join(home, ".onwatch", "data", "onwatch.db")
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		panic(err)
@@ -61,8 +66,11 @@ func main() {
 			'claude-sonnet-4-6',
 			'claude-sonnet-4-5',
 			'claude-sonnet-4-20250514',
+			'gpt-5.6-sol',
+			'gpt-5.6-terra',
 			'gpt-5.5',
 			'gpt-5.4',
+			'gpt-5.3-codex-spark',
 			'gpt-5.3-codex',
 			'gpt-5.2-codex',
 			'google/gemini-2.5-pro',

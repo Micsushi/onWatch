@@ -82,6 +82,11 @@ func (c *AnthropicClient) SetToken(token string) {
 	c.token = token
 }
 
+// HasToken reports whether a non-empty token is set.
+func (c *AnthropicClient) HasToken() bool {
+	return c.getToken() != ""
+}
+
 // getToken returns the current token safely for concurrent access.
 func (c *AnthropicClient) getToken() string {
 	c.tokenMu.RLock()

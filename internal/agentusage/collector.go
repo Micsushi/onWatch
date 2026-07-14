@@ -197,9 +197,26 @@ func (c *Collector) loadSeenFromOutput(path string) error {
 		if !ok {
 			continue
 		}
+		// Recomputing from wire fields cannot reproduce signature-based keys
+		// (the cumulative usage behind UsageSignature is not serialized), so
+		// also trust the event_key recorded at ingest time.
+		if stored := storedEventKey(lineBytes); stored != "" {
+			c.seen[stored] = struct{}{}
+		}
 		c.seen[eventKey(event, lineBytes)] = struct{}{}
 	}
 	return nil
+}
+
+// storedEventKey returns the metadata.event_key written at ingest time, if any.
+func storedEventKey(line []byte) string {
+	var wire struct {
+		Metadata map[string]any `json:"metadata"`
+	}
+	if err := json.Unmarshal(line, &wire); err != nil {
+		return ""
+	}
+	return stringFromMap(wire.Metadata, "event_key")
 }
 
 func usageEventFromOutputLine(line []byte) (UsageEvent, bool) {
@@ -598,9 +615,10 @@ func DefaultSources(home string) []Source {
 		return nil
 	}
 	var sources []Source
+	forceBackfill := os.Getenv("ONWATCH_AGENT_USAGE_INITIAL_BACKFILL") == "1"
 	addDir := func(kind, path, displaySource, provider string, initialBackfill bool) {
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
-			sources = append(sources, Source{Kind: kind, Path: path, Source: displaySource, Provider: provider, InitialBackfill: initialBackfill})
+			sources = append(sources, Source{Kind: kind, Path: path, Source: displaySource, Provider: provider, InitialBackfill: initialBackfill || forceBackfill})
 		}
 	}
 	addDir(SourceCodex, filepath.Join(home, ".codex", "sessions"), "codex", "openai", false)

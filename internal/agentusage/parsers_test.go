@@ -520,3 +520,44 @@ func writeFixture(t *testing.T, path string, lines []string) {
 		t.Fatal(err)
 	}
 }
+
+func TestForkedCodexSessionReplayGetsSameEventKeyAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	lines := []string{
+		`{"type":"turn_context","timestamp":"2026-05-25T12:00:00Z","payload":{"model":"gpt-5.5","effort":"medium","collaboration_mode":{"mode":"default","settings":{"reasoning_effort":"medium"}}}}`,
+		`{"type":"event_msg","timestamp":"2026-05-25T12:00:01Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":5,"total_tokens":135},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":5,"total_tokens":135}}}}`,
+	}
+	original := filepath.Join(dir, "rollout-original.jsonl")
+	writeFixture(t, original, lines)
+	// A forked session replays the parent history into a new file with a
+	// fresh timestamp; it must dedupe against the original.
+	forkLines := []string{
+		lines[0],
+		`{"type":"event_msg","timestamp":"2026-05-25T13:30:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":5,"total_tokens":135},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":5,"total_tokens":135}}}}`,
+	}
+	fork := filepath.Join(dir, "rollout-fork.jsonl")
+	writeFixture(t, fork, forkLines)
+
+	originalEvents, err := ParseCodexUsageFile(original, testPricing(t))
+	if err != nil {
+		t.Fatalf("ParseCodexUsageFile(original) error = %v", err)
+	}
+	forkEvents, err := ParseCodexUsageFile(fork, testPricing(t))
+	if err != nil {
+		t.Fatalf("ParseCodexUsageFile(fork) error = %v", err)
+	}
+	if len(originalEvents) != 1 || len(forkEvents) != 1 {
+		t.Fatalf("events len = %d/%d, want 1/1", len(originalEvents), len(forkEvents))
+	}
+	origLine, err := originalEvents[0].ToAPIIntegrationLine()
+	if err != nil {
+		t.Fatalf("ToAPIIntegrationLine(original) error = %v", err)
+	}
+	forkLine, err := forkEvents[0].ToAPIIntegrationLine()
+	if err != nil {
+		t.Fatalf("ToAPIIntegrationLine(fork) error = %v", err)
+	}
+	if eventKey(originalEvents[0], origLine) != eventKey(forkEvents[0], forkLine) {
+		t.Fatalf("replayed fork event got a different key:\n%s\n%s", origLine, forkLine)
+	}
+}

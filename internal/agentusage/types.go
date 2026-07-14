@@ -50,6 +50,11 @@ type UsageEvent struct {
 	TotalTokens           int
 	CostUSD               float64
 	SourcePath            string
+	// UsageSignature is a content-only identity for codex token_count events
+	// (last + cumulative usage). Forked/resumed sessions replay their parent's
+	// history into a new rollout file with fresh timestamps, so dedupe keys for
+	// these events must not include path, session, or timestamp.
+	UsageSignature string
 }
 
 func (e UsageEvent) ToAPIIntegrationLine() ([]byte, error) {
@@ -171,17 +176,26 @@ func (e UsageEvent) stableEventKey(ts time.Time, total int) string {
 }
 
 func (e UsageEvent) dedupeKey(ts time.Time, total int) string {
+	if strings.TrimSpace(e.UsageSignature) != "" {
+		h := sha256.New()
+		writeStableEventPart(h, e.Source)
+		writeStableEventPart(h, e.Provider)
+		writeStableEventPart(h, e.Account)
+		writeStableEventPart(h, e.Model)
+		writeStableEventPart(h, e.ReasoningEffort)
+		writeStableEventPart(h, e.Mode)
+		writeStableEventPart(h, e.UsageSignature)
+		return hex.EncodeToString(h.Sum(nil))
+	}
 	if strings.EqualFold(strings.TrimSpace(e.Source), "claude") && strings.TrimSpace(e.RequestID) != "" {
 		account := strings.TrimSpace(e.Account)
 		if account == "" {
 			account = "default"
 		}
 		h := sha256.New()
-		writeStableEventPart(h, e.SourcePath)
 		writeStableEventPart(h, e.Source)
 		writeStableEventPart(h, e.Provider)
 		writeStableEventPart(h, account)
-		writeStableEventPart(h, e.SessionID)
 		writeStableEventPart(h, e.RequestID)
 		writeStableEventPart(h, e.Model)
 		writeStableEventPart(h, fmt.Sprintf("%d", e.InputTokens))

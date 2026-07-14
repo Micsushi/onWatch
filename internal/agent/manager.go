@@ -8,6 +8,11 @@ import (
 	"sync"
 )
 
+type runningAgent struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 // AgentRunner runs a provider polling loop until context cancellation.
 type AgentRunner interface {
 	Run(ctx context.Context) error
@@ -21,7 +26,7 @@ type RunnerFactory func() (AgentRunner, error)
 type AgentManager struct {
 	mu        sync.RWMutex
 	factories map[string]RunnerFactory
-	running   map[string]context.CancelFunc
+	running   map[string]*runningAgent
 	logger    *slog.Logger
 }
 
@@ -32,7 +37,7 @@ func NewAgentManager(logger *slog.Logger) *AgentManager {
 	}
 	return &AgentManager{
 		factories: make(map[string]RunnerFactory),
-		running:   make(map[string]context.CancelFunc),
+		running:   make(map[string]*runningAgent),
 		logger:    logger,
 	}
 }
@@ -78,6 +83,7 @@ func (m *AgentManager) Start(key string) error {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	run := &runningAgent{cancel: cancel, done: make(chan struct{})}
 
 	m.mu.Lock()
 	if _, running := m.running[key]; running {
@@ -85,16 +91,19 @@ func (m *AgentManager) Start(key string) error {
 		cancel()
 		return nil
 	}
-	m.running[key] = cancel
+	m.running[key] = run
 	m.mu.Unlock()
 
 	go func() {
+		defer close(run.done)
 		m.logger.Info("Starting agent", "provider", key)
 		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
 			m.logger.Error("Agent error", "provider", key, "error", err)
 		}
 		m.mu.Lock()
-		delete(m.running, key)
+		if m.running[key] == run {
+			delete(m.running, key)
+		}
 		m.mu.Unlock()
 	}()
 
@@ -104,13 +113,14 @@ func (m *AgentManager) Start(key string) error {
 // Stop cancels the running provider agent, if present.
 func (m *AgentManager) Stop(key string) {
 	m.mu.Lock()
-	cancel, running := m.running[key]
+	run, running := m.running[key]
 	if running {
 		delete(m.running, key)
 	}
 	m.mu.Unlock()
 	if running {
-		cancel()
+		run.cancel()
+		<-run.done
 		m.logger.Info("Stopped agent", "provider", key)
 	}
 }
@@ -118,16 +128,19 @@ func (m *AgentManager) Stop(key string) {
 // StopAll stops all running providers.
 func (m *AgentManager) StopAll() {
 	m.mu.Lock()
-	cancels := make([]context.CancelFunc, 0, len(m.running))
-	for key, cancel := range m.running {
+	runs := make([]*runningAgent, 0, len(m.running))
+	for key, run := range m.running {
 		delete(m.running, key)
 		m.logger.Info("Stopped agent", "provider", key)
-		cancels = append(cancels, cancel)
+		runs = append(runs, run)
 	}
 	m.mu.Unlock()
 
-	for _, cancel := range cancels {
-		cancel()
+	for _, run := range runs {
+		run.cancel()
+	}
+	for _, run := range runs {
+		<-run.done
 	}
 }
 

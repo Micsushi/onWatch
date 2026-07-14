@@ -118,6 +118,18 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_input_token_cost": 0.0000125,
 			"cache_creation_1h_input_token_cost": 0.00002
 		},
+		"gpt-5.6-sol": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.00003,
+			"cache_read_input_token_cost": 0.0000005,
+			"cache_creation_input_token_cost": 0.00000625
+		},
+		"gpt-5.6-terra": {
+			"input_cost_per_token": 0.0000025,
+			"output_cost_per_token": 0.000015,
+			"cache_read_input_token_cost": 0.00000025,
+			"cache_creation_input_token_cost": 0.000003125
+		},
 		"gpt-5.5": {
 			"input_cost_per_token": 0.000005,
 			"output_cost_per_token": 0.00003,
@@ -129,6 +141,12 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"output_cost_per_token": 0.000015,
 			"cache_read_input_token_cost": 0.00000025,
 			"cache_creation_input_token_cost": 0.0000025
+		},
+		"gpt-5.3-codex-spark": {
+			"input_cost_per_token": 0.00000175,
+			"output_cost_per_token": 0.000014,
+			"cache_read_input_token_cost": 0.000000175,
+			"cache_creation_input_token_cost": 0.00000175
 		},
 		"gpt-5.3-codex": {
 			"input_cost_per_token": 0.00000175,

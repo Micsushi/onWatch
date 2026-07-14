@@ -73,6 +73,41 @@ func TestAgentManager_StartUnknown(t *testing.T) {
 	}
 }
 
+func TestAgentManager_TriggerPollWaitsForPreviousRun(t *testing.T) {
+	t.Parallel()
+	mgr := NewAgentManager(slog.Default())
+	runner := newManagerTestRunner()
+	mgr.RegisterFactory("codex", func() (AgentRunner, error) { return runner, nil })
+
+	if err := mgr.Start("codex"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("first run did not start")
+	}
+
+	if !mgr.TriggerPoll("codex") {
+		t.Fatal("TriggerPoll returned false")
+	}
+	select {
+	case <-runner.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("previous run did not finish before restart")
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("replacement run did not start")
+	}
+	if !mgr.IsRunning("codex") {
+		t.Fatal("replacement run was removed by previous run cleanup")
+	}
+
+	mgr.Stop("codex")
+}
+
 func TestAgentManager_StartFactoryError(t *testing.T) {
 	t.Parallel()
 	mgr := NewAgentManager(slog.Default())

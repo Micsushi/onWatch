@@ -154,6 +154,7 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 		}
 		usage := map[string]any(nil)
 		usageSignature := ""
+		contentSignature := ""
 		if firstString(obj, "type") == "event_msg" && firstString(payload, "type") == "token_count" {
 			info := object(payload["info"])
 			usage = object(info["last_token_usage"])
@@ -161,6 +162,7 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 				usage = object(info["total_token_usage"])
 			}
 			usageSignature = codexTokenCountSignature(info, usage)
+			contentSignature = usageSignature
 		}
 		if len(usage) == 0 {
 			usage = object(obj["usage"])
@@ -215,6 +217,7 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 			ReasoningTokens:     counts.ReasoningTokens,
 			TotalTokens:         counts.TotalTokens,
 			SourcePath:          path,
+			UsageSignature:      contentSignature,
 		}
 		costOptions := CostOptions{}
 		if currentFastMode != nil && *currentFastMode {

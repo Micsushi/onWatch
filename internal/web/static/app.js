@@ -6106,6 +6106,66 @@ function saveProviderCardCollapseState(state) {
   }
 }
 
+function loadProviderCardOrder() {
+  try {
+    const raw = localStorage.getItem('onwatch-provider-card-order');
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveProviderCardOrder(keys) {
+  try {
+    localStorage.setItem('onwatch-provider-card-order', JSON.stringify(keys));
+  } catch (e) {
+    // silent
+  }
+}
+
+// All view card order: user drag order (saved cardKeys) wins; unsaved cards
+// fall back to fixed default Claude -> Codex -> everything else (tab order).
+function sortAllProviderEntries(entries) {
+  const saved = loadProviderCardOrder();
+  const defaultRank = { anthropic: 0, codex: 1 };
+  const rank = (entry) => {
+    const i = saved.indexOf(entry.cardKey);
+    if (i !== -1) return i;
+    return saved.length + 100 + (defaultRank[entry.provider] ?? 50);
+  };
+  return entries.slice().sort((a, b) => rank(a) - rank(b));
+}
+
+function setupProviderCardDrag(container) {
+  let dragged = null;
+  container.querySelectorAll('.provider-card').forEach((card) => {
+    card.draggable = true;
+    card.addEventListener('dragstart', (e) => {
+      dragged = card;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      dragged = null;
+      saveProviderCardOrder(
+        [...container.querySelectorAll('.provider-card')].map((c) => c.dataset.cardKey)
+      );
+    });
+    card.addEventListener('dragover', (e) => {
+      if (!dragged || dragged === card) return;
+      e.preventDefault();
+      const cards = [...container.querySelectorAll('.provider-card')];
+      if (cards.indexOf(dragged) < cards.indexOf(card)) {
+        card.parentNode.insertBefore(dragged, card.nextSibling);
+      } else {
+        card.parentNode.insertBefore(dragged, card);
+      }
+    });
+  });
+}
+
 function isProviderTelemetryEnabled(provider, accountID) {
   const visibility = State.providerVisibility && typeof State.providerVisibility === 'object'
     ? State.providerVisibility
@@ -8252,7 +8312,7 @@ function renderAllProvidersView() {
   const container = document.getElementById('all-providers-container');
   if (!container) return;
 
-  const entries = buildAllProviderEntries();
+  const entries = sortAllProviderEntries(buildAllProviderEntries());
 
   if (entries.length === 0) {
     if (getCurrentProvider() === 'both' && !State.allProvidersCurrentLoaded) {
@@ -8352,6 +8412,8 @@ function renderAllProvidersView() {
       saveProviderCardCollapseState(collapsedState);
     });
   });
+
+  setupProviderCardDrag(container);
 
   container.querySelectorAll('.provider-card[data-api-integrations-link="true"]').forEach((card) => {
     card.addEventListener('click', (event) => {

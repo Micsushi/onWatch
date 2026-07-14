@@ -705,11 +705,16 @@ button, input, select { font-family: inherit; }
   transition: border-color 180ms ease, box-shadow 180ms ease;
 }
 
+.provider-card.dragging {
+  opacity: 0.55;
+}
+
 .provider-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  cursor: grab;
   padding: 10px 14px;
   background: color-mix(in srgb, var(--surface-card-alt) 88%, #0b1020 12%);
   border-bottom: 1px solid color-mix(in srgb, var(--border-default) 72%, #8b95a7 28%);

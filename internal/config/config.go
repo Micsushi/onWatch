@@ -568,7 +568,7 @@ func (c *Config) HasProvider(name string) bool {
 	case "zai":
 		return c.ZaiAPIKey != ""
 	case "anthropic":
-		return c.AnthropicToken != ""
+		return c.AnthropicToken != "" || c.AnthropicSource == "statusline"
 	case "copilot":
 		return c.CopilotToken != ""
 	case "codex":

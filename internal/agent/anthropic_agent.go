@@ -414,6 +414,11 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 		return
 	}
 
+	// Statusline-only mode has no token; never hit the API without one.
+	if !a.client.HasToken() {
+		return
+	}
+
 	resp, err := a.client.FetchQuotas(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
