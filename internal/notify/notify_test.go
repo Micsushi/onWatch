@@ -523,6 +523,46 @@ func TestNotificationEngine_Check_ResetNotificationDedupesBurst(t *testing.T) {
 	}
 }
 
+func TestNotificationEngine_Check_ResetNotificationAllowsLaterCycle(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	defer s.Close()
+
+	storeNotificationConfig(t, s, notificationSettingsJSON{
+		WarningThreshold:  80,
+		CriticalThreshold: 95,
+		NotifyWarning:     true,
+		NotifyCritical:    true,
+		NotifyReset:       true,
+		CooldownMinutes:   30,
+	})
+
+	engine := newTestEngine(t, s)
+	engine.Reload()
+
+	mailCount, cleanup := setupSMTPAndMailer(t, s, engine)
+	defer cleanup()
+
+	status := QuotaStatus{
+		Provider:      "codex",
+		QuotaKey:      "seven_day",
+		Utilization:   0,
+		Limit:         100,
+		ResetOccurred: true,
+	}
+	engine.Check(status)
+
+	engine.mu.Lock()
+	engine.cfg.Cooldown = time.Millisecond
+	engine.mu.Unlock()
+	time.Sleep(5 * time.Millisecond)
+	engine.Check(status)
+
+	if mailCount.Load() != 2 {
+		t.Errorf("Expected a later reset to send again, got %d emails", mailCount.Load())
+	}
+}
+
 func TestNotificationEngine_Check_GeminiFamilyResetRollsUp(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

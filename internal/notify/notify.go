@@ -643,19 +643,24 @@ func (e *NotificationEngine) TestSMTPDiag() (string, error) {
 }
 
 // sendNotification sends notifications via enabled channels.
-// Each provider+quota+type combination fires at most once per cycle.
-// The notification_log entry is cleared on quota reset (see Check/resetOccurred).
+// Threshold notifications fire at most once per cycle. Reset notifications use
+// the configured cooldown to collapse bursty callbacks while still allowing the
+// next real reset to notify.
 func (e *NotificationEngine) sendNotification(mailer *SMTPMailer, pushSender *PushSender, channels NotificationChannels, status QuotaStatus, notifType string) {
 	provider := normalizeNotificationProvider(status.Provider)
 	quotaKey := notificationQuotaKey(status)
+	e.mu.RLock()
+	cooldown := e.cfg.Cooldown
+	e.mu.RUnlock()
 	sentAt, _, err := e.store.GetLastNotification(provider, quotaKey, notifType)
 	if err != nil {
 		e.logger.Error("failed to check notification log", "error", err)
 		return
 	}
-	// Already sent for this cycle - skip (log is cleared on reset)
-	if !sentAt.IsZero() {
-		e.logger.Debug("notification already sent for this cycle",
+	// Threshold rows are cleared when a reset starts the next cycle. Reset rows
+	// are intentionally retained, so only use them to suppress a short burst.
+	if !sentAt.IsZero() && (notifType != "reset" || time.Since(sentAt) < cooldown) {
+		e.logger.Debug("notification already sent during dedupe window",
 			"quota", quotaKey, "type", notifType,
 			"sent_at", sentAt)
 		return
