@@ -1,11 +1,10 @@
-//go:build menubar && darwin && cgo
+//go:build menubar && linux && cgo
 
 package menubar
 
 import "testing"
 
 func TestNewMenubarPopoverLifecycle(t *testing.T) {
-	t.Parallel()
 	var (
 		popover menubarPopover
 		err     error

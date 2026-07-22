@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// TrayTitle formats the compact metric shown next to the macOS tray icon.
+// TrayTitle formats the compact metric shown next to the system tray icon.
 func TrayTitle(snapshot *Snapshot, settings *Settings) string {
 	if snapshot == nil {
 		return ""
