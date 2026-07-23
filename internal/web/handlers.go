@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -896,6 +897,92 @@ func (h *Handler) SettingsPage(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("failed to render settings template", "error", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
+}
+
+// ExportData downloads a secret-safe, portable history archive.
+func (h *Handler) ExportData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.store == nil {
+		respondError(w, http.StatusInternalServerError, "store not available")
+		return
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(30 * time.Minute))
+	temp, err := os.CreateTemp("", "onwatch-web-export-*.zip")
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create export")
+		return
+	}
+	path := temp.Name()
+	defer os.Remove(path)
+	if _, err := h.store.ExportData(temp, store.ExportOptions{AppVersion: h.version}); err != nil {
+		temp.Close()
+		if h.logger != nil {
+			h.logger.Error("data export failed", "error", err)
+		}
+		respondError(w, http.StatusInternalServerError, "failed to export data")
+		return
+	}
+	if err := temp.Close(); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to finalize export")
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to open export")
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="onwatch-history-%s.onwatch.zip"`, time.Now().UTC().Format("20060102-150405")))
+	w.Header().Set("Cache-Control", "no-store")
+	if _, err := io.Copy(w, file); err != nil && h.logger != nil {
+		h.logger.Error("data export response failed", "error", err)
+	}
+}
+
+// ImportData additively merges one portable history archive.
+func (h *Handler) ImportData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.store == nil {
+		respondError(w, http.StatusInternalServerError, "store not available")
+		return
+	}
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(30 * time.Minute))
+	_ = controller.SetWriteDeadline(time.Now().Add(30 * time.Minute))
+	r.Body = http.MaxBytesReader(w, r.Body, (1<<30)+(1<<20))
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid or oversized import upload")
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "an .onwatch.zip file is required")
+		return
+	}
+	defer file.Close()
+	if !strings.HasSuffix(strings.ToLower(header.Filename), ".onwatch.zip") {
+		respondError(w, http.StatusBadRequest, "file must end with .onwatch.zip")
+		return
+	}
+	summary, err := h.store.ImportData(file)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("data import rejected", "filename", filepath.Base(header.Filename), "error", err)
+		}
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, summary)
 }
 
 // respondJSON sends a JSON response

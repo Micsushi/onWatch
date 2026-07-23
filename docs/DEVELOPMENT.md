@@ -142,6 +142,7 @@ Edit `.env` with at least one API key:
 SYNTHETIC_API_KEY=syn_your_actual_key
 ZAI_API_KEY=your_zai_key
 ANTHROPIC_TOKEN=your_anthropic_token      # Auto-detected from Claude Code if not set
+ANTHROPIC_TOKEN_ROTATION=off              # Enable only with isolated credentials
 CODEX_TOKEN=your_codex_token              # Recommended for Codex-only setups
 COPILOT_TOKEN=ghp_your_github_token       # GitHub PAT with 'copilot' scope (Beta)
 ```

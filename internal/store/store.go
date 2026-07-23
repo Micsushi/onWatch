@@ -261,6 +261,21 @@ func (s *Store) createTables() error {
 			value TEXT NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS data_transfer_state (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS data_transfer_records (
+			table_name       TEXT NOT NULL,
+			local_record_id  TEXT NOT NULL,
+			origin_id        TEXT NOT NULL,
+			origin_record_id TEXT NOT NULL,
+			PRIMARY KEY (table_name, origin_id, origin_record_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_data_transfer_records_local
+			ON data_transfer_records(table_name, local_record_id);
+
 		-- System alerts for in-dashboard notifications
 		CREATE TABLE IF NOT EXISTS system_alerts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

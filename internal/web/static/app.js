@@ -10829,6 +10829,7 @@ async function initSettingsPage() {
   setupDiscordTest();
   setupPushNotifications();
   setupSettingsPassword();
+  setupDataTransferSettings();
   setupThresholdSliders();
   setupOverrides();
   populateTimezoneSelect();
@@ -10853,6 +10854,65 @@ function setupSettingsTabs() {
       const panel = document.getElementById('panel-' + target);
       if (panel) { panel.classList.add('active'); panel.hidden = false; }
     });
+  });
+}
+
+function formatImportSummary(filename, summary) {
+  const total = (summary && summary.total) || {};
+  return `${filename}: ${Number(total.inserted || 0)} inserted, ${Number(total.updated || 0)} updated, ${Number(total.skipped || 0)} skipped`;
+}
+
+async function importDataArchives(files) {
+  const results = [];
+  for (const file of files) {
+    if (!file.name.toLowerCase().endsWith('.onwatch.zip')) {
+      throw new Error(`${file.name}: file must end with .onwatch.zip`);
+    }
+    const form = new FormData();
+    form.append('file', file, file.name);
+    const response = await authFetch(`${API_BASE}/api/data/import`, {
+      method: 'POST',
+      body: form,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(`${file.name}: ${data.error || 'Import failed'}`);
+    }
+    results.push(formatImportSummary(file.name, data));
+  }
+  return results;
+}
+
+function setupDataTransferSettings() {
+  const input = document.getElementById('data-import-input');
+  const button = document.getElementById('data-import-btn');
+  const result = document.getElementById('data-import-result');
+  if (!input || !button || !result) return;
+
+  input.addEventListener('change', () => {
+    button.disabled = !input.files || input.files.length === 0;
+    result.hidden = true;
+  });
+  button.addEventListener('click', async () => {
+    const files = Array.from(input.files || []);
+    if (files.length === 0) return;
+    button.disabled = true;
+    button.textContent = 'Importing...';
+    result.hidden = false;
+    result.className = 'settings-feedback data-transfer-result pending';
+    result.textContent = `Importing ${files.length} file${files.length === 1 ? '' : 's'}...`;
+    try {
+      const lines = await importDataArchives(files);
+      result.className = 'settings-feedback data-transfer-result success';
+      result.textContent = lines.join('\n');
+      input.value = '';
+    } catch (error) {
+      result.className = 'settings-feedback data-transfer-result error';
+      result.textContent = error.message || 'Import failed';
+    } finally {
+      button.textContent = 'Import data';
+      button.disabled = !input.files || input.files.length === 0;
+    }
   });
 }
 
@@ -12385,6 +12445,7 @@ function shouldAutosaveSettingsTarget(target) {
   if (['settings-current-password', 'settings-new-password', 'settings-confirm-password'].includes(target.id)) return false;
   if (target.closest('#provider-settings-modal')) return false;
   if (target.closest('#provider-toggles')) return false;
+  if (target.closest('#panel-data')) return false;
   if (target.closest('.settings-test-btn')) return false;
   return true;
 }

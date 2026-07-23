@@ -3130,6 +3130,29 @@ select.settings-input {
   margin-top: 4px;
 }
 
+.data-transfer-download {
+  display: inline-flex;
+  width: auto;
+  text-decoration: none;
+}
+
+.data-transfer-note {
+  margin-top: 12px;
+  max-width: 720px;
+}
+
+.data-transfer-file {
+  padding: 8px;
+}
+
+.data-transfer-actions {
+  margin-top: 16px;
+}
+
+.data-transfer-result {
+  white-space: pre-line;
+}
+
 /* Threshold slider group */
 .threshold-input-group {
   display: flex;

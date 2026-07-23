@@ -32,6 +32,7 @@
             <button class="settings-tab" data-tab="providers" role="tab" aria-selected="false" aria-controls="panel-providers">Providers</button>
             <button class="settings-tab" data-tab="menubar" role="tab" aria-selected="false" aria-controls="panel-menubar" hidden>Menubar</button>
             <button class="settings-tab" data-tab="general" role="tab" aria-selected="false" aria-controls="panel-general">General</button>
+            <button class="settings-tab" data-tab="data" role="tab" aria-selected="false" aria-controls="panel-data">Data</button>
         </div>
         <div id="settings-feedback" class="settings-feedback settings-autosave-feedback" hidden></div>
 
@@ -421,6 +422,31 @@
                 </div>
                 <button class="settings-save-btn settings-save-btn-secondary" id="password-save-btn" type="button">Update Password</button>
                 <div id="settings-password-feedback" class="settings-feedback" hidden></div>
+            </div>
+        </div>
+
+        <!-- Data Transfer Panel -->
+        <div class="settings-panel" id="panel-data" role="tabpanel" hidden>
+            <div class="settings-section">
+                <h3 class="settings-section-title">Export History</h3>
+                <p class="settings-section-desc">Download usage history and non-secret preferences as a portable ZIP file.</p>
+                <a class="settings-save-btn data-transfer-download" id="data-export-btn" href="{{.BasePath}}/api/data/export">Export data</a>
+                <span class="settings-field-hint data-transfer-note">Credentials are excluded. The archive can still contain private usage, account labels, and email addresses returned by providers.</span>
+            </div>
+            <div class="settings-divider"></div>
+            <div class="settings-section">
+                <h3 class="settings-section-title">Import History</h3>
+                <p class="settings-section-desc">Add records from other onWatch installations. Existing local data stays in place, same-time records from different devices are kept, and repeat imports are skipped.</p>
+                <div class="settings-fields">
+                    <div class="settings-field">
+                        <label for="data-import-input">onWatch export files</label>
+                        <input type="file" id="data-import-input" class="settings-input data-transfer-file" accept=".onwatch.zip" multiple>
+                    </div>
+                </div>
+                <div class="settings-actions data-transfer-actions">
+                    <button class="settings-save-btn" id="data-import-btn" type="button" disabled>Import data</button>
+                </div>
+                <div id="data-import-result" class="settings-feedback data-transfer-result" role="status" aria-live="polite" hidden></div>
             </div>
         </div>
     </main>

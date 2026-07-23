@@ -260,6 +260,38 @@ func TestConfig_DefaultValues(t *testing.T) {
 	}
 }
 
+func TestConfig_AnthropicTokenRotationDefaultsOff(t *testing.T) {
+	clearEnvForTest()
+	defer clearEnvForTest()
+	t.Setenv("ANTHROPIC_TOKEN_ROTATION", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.AnthropicTokenRotation {
+		t.Fatal("AnthropicTokenRotation = true, want false unless explicitly enabled")
+	}
+}
+
+func TestConfig_AnthropicTokenRotationRequiresExplicitOptIn(t *testing.T) {
+	for _, value := range []string{"on", "true", "1", "yes"} {
+		t.Run(value, func(t *testing.T) {
+			clearEnvForTest()
+			t.Cleanup(clearEnvForTest)
+			t.Setenv("ANTHROPIC_TOKEN_ROTATION", value)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() failed: %v", err)
+			}
+			if !cfg.AnthropicTokenRotation {
+				t.Fatalf("AnthropicTokenRotation = false for %q, want true", value)
+			}
+		})
+	}
+}
+
 func TestConfig_APIIntegrationsRetention_LoadsFromEnv(t *testing.T) {
 	clearEnvForTest()
 	os.Setenv("ONWATCH_API_INTEGRATIONS_RETENTION", "168h")

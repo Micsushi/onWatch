@@ -75,6 +75,8 @@ Create a `.env` file at `%USERPROFILE%\.onwatch\.env` with your API keys.
 
 # Anthropic token (Claude Code - see "Retrieving Tokens" below)
 # ANTHROPIC_TOKEN=your_token_here
+# Keep shared Claude Code credentials read-only (safe default)
+# ANTHROPIC_TOKEN_ROTATION=off
 
 # Codex OAuth token (see "Retrieving Tokens" below)
 # CODEX_TOKEN=your_token_here
@@ -127,8 +129,9 @@ Get your key at: https://www.z.ai/api-keys
 #### Anthropic (Claude Code)
 ```env
 ANTHROPIC_TOKEN=your_token_here
+ANTHROPIC_TOKEN_ROTATION=off
 ```
-See [Retrieving Anthropic Token](#retrieving-anthropic-token) below.
+See [Retrieving Anthropic Token](#retrieving-anthropic-token) below. Token rotation is disabled by default because rotating Claude Code's one-time-use refresh token can sign Claude Code out. Only set `ANTHROPIC_TOKEN_ROTATION=on` when onWatch uses isolated credentials.
 
 #### Codex
 ```env

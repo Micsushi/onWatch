@@ -570,6 +570,9 @@ func run() error {
 
 	// Phase 2: Handle subcommands (both with and without -- prefix)
 	// Note: "codex" must be checked before "status" because "codex profile status" contains "status"
+	if hasCommand("data") {
+		return runDataCommand(os.Args[1:])
+	}
 	if hasCommand("codex") {
 		return runCodexCommand()
 	}
@@ -1017,9 +1020,17 @@ func run() error {
 			anthropicAg.SetTokenRefresh(func() string {
 				return api.DetectAnthropicToken(logger)
 			})
-			anthropicAg.SetCredentialsRefresh(func() *api.AnthropicCredentials {
-				return api.DetectAnthropicCredentials(logger)
-			})
+			// Only wire credentials refresh when token rotation is enabled. When
+			// disabled, onWatch stays read-only on the token: it reads whatever
+			// Claude Code maintains but never refreshes/rotates it, so it can't
+			// invalidate Claude Code's session and force daily re-authentication.
+			if cfg.AnthropicTokenRotation {
+				anthropicAg.SetCredentialsRefresh(func() *api.AnthropicCredentials {
+					return api.DetectAnthropicCredentials(logger)
+				})
+			} else {
+				logger.Info("Anthropic token rotation disabled - read-only token mode (no 429 bypass)")
+			}
 		}
 
 		// Enable statusline bridge for "auto" and "statusline" modes
@@ -2037,6 +2048,8 @@ func printHelp() {
 	fmt.Println("  stop, --stop       Stop the running onwatch instance")
 	fmt.Println("  status, --status   Show status of the running instance")
 	fmt.Println("  update, --update   Check for updates and self-update")
+	fmt.Println("  data export        Export portable history to an .onwatch.zip file")
+	fmt.Println("  data import        Additively merge one or more .onwatch.zip files")
 	fmt.Println("  agent-usage        Run only the local agent usage collector")
 	fmt.Println()
 	fmt.Println("Codex Profile Management:")
@@ -2087,6 +2100,8 @@ func printHelp() {
 	fmt.Println("  onwatch status                    # Check if running")
 	fmt.Println("  onwatch --status                  # Same as 'status'")
 	fmt.Println("  onwatch update                    # Check for updates and self-update")
+	fmt.Println("  onwatch data export --out history.onwatch.zip")
+	fmt.Println("  onwatch data import mac.onwatch.zip linux.onwatch.zip")
 	fmt.Println("  onwatch agent-usage --out \\\\server\\share\\api-integrations")
 	fmt.Println("  onwatch --test --debug            # Run test instance (isolated)")
 	fmt.Println("  onwatch --test stop               # Stop only test instance")

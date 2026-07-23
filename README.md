@@ -107,6 +107,7 @@ Edit `~/.onwatch/.env` (or `.env` in the project directory if built from source)
 SYNTHETIC_API_KEY=syn_your_key_here       # https://synthetic.new/settings/api
 ZAI_API_KEY=your_zai_key_here             # https://www.z.ai/api-keys
 ANTHROPIC_TOKEN=your_token_here           # Auto-detected from Claude Code credentials
+ANTHROPIC_TOKEN_ROTATION=off              # Safe default for shared Claude Code credentials
 CODEX_TOKEN=your_token_here               # Recommended for Codex-only setups
 COPILOT_TOKEN=ghp_your_token_here         # GitHub PAT with copilot scope (Beta)
 ONWATCH_ADMIN_USER=admin
@@ -157,7 +158,7 @@ Open **http://localhost:9211** and log in with your `.env` credentials.
 
 - **Synthetic** -- Subscription, Search, and Tool Call quota cards
 - **Z.ai** -- Tokens, Time, and Tool Call quota cards
-- **Anthropic** -- Dynamic quota cards (5-Hour, 7-Day, 7-Day Sonnet, Monthly, etc.) with utilization percentages, OAuth token auto-refresh, and automatic rate limit bypass via token rotation
+- **Anthropic** -- Dynamic quota cards (5-Hour, 7-Day, 7-Day Sonnet, Monthly, etc.) with utilization percentages and safe credential re-reading. OAuth token rotation is available only through explicit opt-in.
 - **Codex** -- Dynamic quota cards (LLMs, Review Requests) with OAuth auth-state refresh, historical cycle analytics, and **multi-account support (Beta)** for tracking multiple ChatGPT accounts
 - **GitHub Copilot (Beta)** -- Premium Interactions, Chat, and Completions quota cards with monthly reset tracking
 - **MiniMax Coding Plan** -- Shared quota pool tracking for M2, M2.1, and M2.5 models with 5-hour rolling window reset cycles and **multi-account support** for tracking multiple MiniMax subscriptions via the dashboard UI
@@ -181,7 +182,7 @@ Each quota card shows: usage vs. limit with progress bar, live countdown to rese
 
 **Sessions** -- Every agent run creates a session that tracks peak consumption, letting you compare usage across work periods.
 
-**Settings** -- Dedicated settings page (`/settings`) with tabs for general preferences, provider controls, notification thresholds, and SMTP email configuration.
+**Settings** -- Dedicated settings page (`/settings`) with tabs for general preferences, provider controls, notification thresholds, SMTP email configuration, and portable history import/export.
 
 **Custom API Integrations setup** -- Use a small wrapper around your own API calls to append normalised JSONL events into `~/.onwatch/api-integrations/`, then open the API Integrations tab to monitor cumulative and recent usage. Full setup instructions live in [docs/API_INTEGRATIONS_SETUP.md](docs/API_INTEGRATIONS_SETUP.md).
 
@@ -231,7 +232,7 @@ Set `ZAI_API_KEY` in your `.env`. onWatch polls the Z.ai `/monitor/usage/quota/l
 
 ### How do I track my Anthropic (Claude Code) usage?
 
-onWatch auto-detects your Claude Code credentials from the system keychain (macOS) or keyring/file (Linux). Just install and run -- if Claude Code is installed, Anthropic tracking is offered automatically. You can also set `ANTHROPIC_TOKEN` manually in your `.env`. Anthropic quotas are dynamic (5-Hour, 7-Day, Monthly, etc.) and displayed as utilization percentages. OAuth tokens are automatically refreshed before expiry, and onWatch gracefully handles auth failures with automatic retry when new credentials are detected.
+onWatch auto-detects your Claude Code credentials from the system keychain (macOS) or keyring/file (Linux). Just install and run -- if Claude Code is installed, Anthropic tracking is offered automatically. You can also set `ANTHROPIC_TOKEN` manually in your `.env`. Anthropic quotas are dynamic (5-Hour, 7-Day, Monthly, etc.) and displayed as utilization percentages. By default onWatch only re-reads credentials maintained by Claude Code and never rotates its shared OAuth refresh token.
 
 ### How do I track my Codex usage?
 
@@ -294,6 +295,19 @@ All agents run as parallel goroutines. Each polls its API at the configured inte
 
 ## CLI Reference
 
+Portable data commands work the same on macOS, Linux, and Windows:
+
+```bash
+# Run this once on each source machine
+onwatch data export --out mac-history.onwatch.zip
+onwatch data export --out linux-history.onwatch.zip
+
+# Copy both archives to the destination, then merge them
+onwatch data import mac-history.onwatch.zip linux-history.onwatch.zip
+```
+
+Imports are additive and idempotent. Records from different installations are preserved even when their timestamps match, while reimporting the same originating record does not create a duplicate. Archives include history and an allowlist of non-secret settings only. See [Portable Data Transfer](docs/DATA_TRANSFER.md) for the merge and privacy rules.
+
 | Flag         | Env Var                 | Default                      | Description                         |
 | ------------ | ----------------------- | ---------------------------- | ----------------------------------- |
 | `--interval` | `ONWATCH_POLL_INTERVAL` | `120`                        | Poll interval in seconds (10--3600) |
@@ -308,6 +322,7 @@ Additional environment variables:
 | Variable                 | Description                                            |
 | ------------------------ | ------------------------------------------------------ |
 | `ANTHROPIC_TOKEN`        | Anthropic OAuth token (auto-detected from Claude Code) |
+| `ANTHROPIC_TOKEN_ROTATION` | OAuth refresh-token rotation (`off` by default; use `on` only with isolated credentials) |
 | `CODEX_TOKEN`            | Codex OAuth access token (recommended for Codex-only)  |
 | `COPILOT_TOKEN`          | GitHub Copilot PAT with `copilot` scope (Beta)         |
 | `MINIMAX_API_KEY`        | MiniMax Coding Plan API key                            |
@@ -361,6 +376,8 @@ All endpoints require authentication (session cookie or Basic Auth). Append `?pr
 | `/api/insights`                 | GET         | Usage insights                                 |
 | `/api/providers`                | GET         | Available providers                            |
 | `/api/settings`                 | GET/PUT     | User settings (notifications, SMTP, providers, menubar) |
+| `/api/data/export`              | GET         | Download history and non-secret settings archive |
+| `/api/data/import`              | POST        | Additively import one archive as multipart field `file` |
 | `/api/api-integrations/current` | GET         | Current aggregated usage by API integration    |
 | `/api/api-integrations/history` | GET         | Chart-ready API integration history, `?range=` |
 | `/api/api-integrations/health`  | GET         | API integration ingest health and file state   |
@@ -417,6 +434,8 @@ Log files are stored next to the database (default `~/.onwatch/data/`).
 Each log rotates at 50 MB with 3 backups (`.1`, `.2`, `.3`) for both main and menubar logs.
 
 On first run, if a database exists at `./onwatch.db`, onWatch auto-migrates it to `~/.onwatch/data/`.
+
+Use **Settings > Data** to download a portable `.onwatch.zip` archive or import one or more archives. The same workflow is available from the terminal with `onwatch data export` and `onwatch data import`; it is safer than copying the live SQLite files. Provider credentials, login data, SMTP secrets, Discord webhooks, push keys, and OAuth tokens are excluded.
 
 ---
 
@@ -497,6 +516,7 @@ Copy `.env.docker.example` to `.env` and set provider keys as needed. onWatch ca
 | `ZAI_API_KEY`           | Z.ai API key                               | --         |
 | `ZAI_REGION`            | Z.ai region: `global` (default) or `cn`    | `global`   |
 | `ANTHROPIC_TOKEN`       | Anthropic token (auto-detected if not set) | --         |
+| `ANTHROPIC_TOKEN_ROTATION` | Rotate Anthropic OAuth credentials to bypass 429s | `off` |
 | `CODEX_TOKEN`           | Codex OAuth access token (recommended; required for Codex-only) | -- |
 | `MINIMAX_API_KEY`       | MiniMax Coding Plan API key                | --         |
 | `MINIMAX_REGION`        | MiniMax region: `global` (default) or `cn` | `global`   |
@@ -536,7 +556,7 @@ The `docker-compose.yml` includes memory limits (64M limit, 32M reservation), lo
 **Container won't start:** Check `docker-compose logs -f`; verify API keys in `.env` and port 9211 availability.
 **Debugging:** The default distroless image has no shell. Use the Alpine variant (`ghcr.io/micsushi/onwatch:alpine`) if you need `docker exec` access, or use a sidecar: `docker run -it --rm --pid=container:onwatch --net=container:onwatch nicolaka/netshoot bash`
 
-**Anthropic 429 rate limit errors:** Anthropic's `/api/oauth/usage` endpoint has aggressive rate limits (~5 requests per token). onWatch automatically handles this by refreshing the OAuth token when rate limited, which provides a fresh rate limit window. This is transparent to users - onWatch logs "Rate limit bypassed successfully" when this occurs. The workaround requires OAuth credentials (auto-detected from Claude Code); API key authentication does not support token refresh. See [issue #16](https://github.com/onllm-dev/onWatch/issues/16) and [anthropics/claude-code#31021](https://github.com/anthropics/claude-code/issues/31021) for details.
+**Anthropic 429 rate limit errors:** Anthropic's `/api/oauth/usage` endpoint has aggressive rate limits. onWatch now waits for the next poll by default instead of rotating Claude Code's shared refresh token. Rotation can force Claude Code to sign in again because OAuth refresh tokens are one-time use. The old bypass can be enabled with `ANTHROPIC_TOKEN_ROTATION=on`, but only use it with credentials isolated from Claude Code. See [issue #16](https://github.com/onllm-dev/onWatch/issues/16) and [anthropics/claude-code#31021](https://github.com/anthropics/claude-code/issues/31021) for details.
 
 ---
 
