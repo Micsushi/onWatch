@@ -440,7 +440,7 @@ func (c *Config) applyDefaults() {
 		c.AdminUser = "admin"
 	}
 	if c.AdminPass == "" {
-		c.AdminPass = "changeme"
+		c.AdminPass = "devpass"
 	}
 	if c.DBPath == "" {
 		// Check if running in Docker and use /data/onwatch.db as default
@@ -799,7 +799,7 @@ func (c *Config) IsDockerEnvironment() bool {
 	return false
 }
 
-// IsDefaultPassword returns true if the default password "changeme" is being used.
+// IsDefaultPassword returns true if the default password "devpass" is being used.
 func (c *Config) IsDefaultPassword() bool {
-	return c.AdminPass == "changeme"
+	return c.AdminPass == "devpass"
 }

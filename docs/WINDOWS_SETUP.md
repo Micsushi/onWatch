@@ -87,7 +87,7 @@ Create a `.env` file at `%USERPROFILE%\.onwatch\.env` with your API keys.
 
 # Dashboard credentials
 ONWATCH_ADMIN_USER=admin
-ONWATCH_ADMIN_PASS=changeme
+ONWATCH_ADMIN_PASS=devpass
 
 # Polling interval in seconds (10-3600)
 ONWATCH_POLL_INTERVAL=120

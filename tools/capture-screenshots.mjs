@@ -11,7 +11,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCREENSHOTS_DIR = join(__dirname, '..', 'docs', 'screenshots');
 const BASE_URL = 'http://localhost:9211';
 const USERNAME = 'admin';
-const PASSWORD = process.env.ONWATCH_ADMIN_PASS || 'changeme';
+const PASSWORD = process.env.ONWATCH_ADMIN_PASS || 'devpass';
 
 // Providers to capture: { filename prefix, tab data-provider value }
 const PROVIDERS = [

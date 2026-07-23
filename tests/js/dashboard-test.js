@@ -58,7 +58,7 @@ async function testOnWatchDashboard() {
     
     results.tests.push({
       name: 'Login Page Load',
-      status: 'PASS' if (usernameField && passwordField && loginButton) else 'FAIL',
+      status: usernameField && passwordField && loginButton ? 'PASS' : 'FAIL',
       details: {
         hasUsernameField: !!usernameField,
         hasPasswordField: !!passwordField,
@@ -78,7 +78,7 @@ async function testOnWatchDashboard() {
 
     // Test 2: Authentication
     console.log('\n=== Test 2: Authentication ===');
-    await page.authenticate({ username: 'admin', password: 'changeme' });
+    await page.authenticate({ username: 'admin', password: 'devpass' });
     
     // Wait a moment for auth to be applied
     await page.waitForTimeout(1000);
@@ -178,7 +178,7 @@ async function testOnWatchDashboard() {
     const currentResponse = await page.evaluate(async () => {
       try {
         const res = await fetch('/api/current', {
-          headers: { 'Authorization': 'Basic ' + btoa('admin:changeme') }
+          headers: { 'Authorization': 'Basic ' + btoa('admin:devpass') }
         });
         return { status: res.status, ok: res.ok };
       } catch (e) {

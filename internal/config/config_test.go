@@ -237,8 +237,8 @@ func TestConfig_DefaultValues(t *testing.T) {
 	if cfg.AdminUser != "admin" {
 		t.Errorf("AdminUser = %q, want %q", cfg.AdminUser, "admin")
 	}
-	if cfg.AdminPass != "changeme" {
-		t.Errorf("AdminPass = %q, want %q", cfg.AdminPass, "changeme")
+	if cfg.AdminPass != "devpass" {
+		t.Errorf("AdminPass = %q, want %q", cfg.AdminPass, "devpass")
 	}
 	// Default DB path depends on HOME availability
 	home, homeErr := os.UserHomeDir()
@@ -1262,10 +1262,10 @@ func TestConfig_IsDefaultPassword(t *testing.T) {
 		password string
 		want     bool
 	}{
-		{"default password", "changeme", true},
+		{"default password", "devpass", true},
 		{"custom password", "mysecretpassword", false},
 		{"empty password", "", false},
-		{"similar password", "changeme!", false},
+		{"similar password", "devpass!", false},
 	}
 
 	for _, tt := range tests {

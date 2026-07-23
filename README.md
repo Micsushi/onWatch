@@ -110,7 +110,7 @@ ANTHROPIC_TOKEN=your_token_here           # Auto-detected from Claude Code crede
 CODEX_TOKEN=your_token_here               # Recommended for Codex-only setups
 COPILOT_TOKEN=ghp_your_token_here         # GitHub PAT with copilot scope (Beta)
 ONWATCH_ADMIN_USER=admin
-ONWATCH_ADMIN_PASS=changeme
+ONWATCH_ADMIN_PASS=devpass
 ```
 
 At least one provider key is required. Configure any combination to track them in parallel. Anthropic tokens are auto-detected from Claude Code credentials (macOS Keychain, Linux keyring, or `~/.claude/.credentials.json`). For Codex-only setups, set `CODEX_TOKEN` in `.env`; during runtime onWatch re-reads Codex auth state from `~/.codex/auth.json` (or `CODEX_HOME/auth.json`) and picks up token changes. Copilot tokens require a GitHub Personal Access Token (classic) with the `copilot` scope.
@@ -326,7 +326,7 @@ Additional environment variables:
 | `ZAI_BASE_URL`           | Z.ai base URL (default: `https://api.z.ai/api`)        |
 | `ZAI_REGION`             | Z.ai region: `global` (default) or `cn`                 |
 | `ONWATCH_ADMIN_USER`     | Dashboard username (default: `admin`)                  |
-| `ONWATCH_ADMIN_PASS`     | Initial dashboard password (default: `changeme`)       |
+| `ONWATCH_ADMIN_PASS`     | Initial dashboard password (default: `devpass`)        |
 | `ONWATCH_LOG_LEVEL`      | Log level: debug, info, warn, error                    |
 | `ONWATCH_HOST`           | Bind address (default: `0.0.0.0`)                      |
 | `ONWATCH_API_INTEGRATIONS_ENABLED` | Enable or disable API Integrations ingestion (default: `true`) |
@@ -502,7 +502,7 @@ Copy `.env.docker.example` to `.env` and set provider keys as needed. onWatch ca
 | `MINIMAX_REGION`        | MiniMax region: `global` (default) or `cn` | `global`   |
 | `GEMINI_REFRESH_TOKEN`  | Gemini OAuth refresh token (Beta)          | --         |
 | `ONWATCH_ADMIN_USER`    | Dashboard username                         | `admin`    |
-| `ONWATCH_ADMIN_PASS`    | Dashboard password                         | `changeme` |
+| `ONWATCH_ADMIN_PASS`    | Dashboard password                         | `devpass`  |
 | `ONWATCH_POLL_INTERVAL` | Polling interval (seconds)                 | `120`      |
 | `ONWATCH_LOG_LEVEL`     | Log level                                  | `info`     |
 
