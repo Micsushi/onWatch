@@ -444,7 +444,7 @@ onWatch includes a self-update system that downloads new releases from GitHub an
 
 ### Update Flow
 
-1. **Check**: Queries `https://api.github.com/repos/onllm-dev/onwatch/releases/latest` (cached for 1 hour)
+1. **Check**: Queries `https://api.github.com/repos/Micsushi/onWatch/releases/latest` (cached for 1 hour)
 2. **Apply**: Downloads the platform-specific binary, validates magic bytes (ELF/Mach-O/PE), replaces the current binary using remove+rename (Unix) or backup-rename (Windows)
 3. **Migrate**: Fixes the systemd unit file if running under systemd (`Restart=always`, `RestartSec=5`)
 4. **Restart**: Uses `systemctl restart` under systemd, or spawns a new process in standalone mode

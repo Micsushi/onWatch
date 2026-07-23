@@ -699,6 +699,10 @@ func TestDaemonize_SuccessAndLogOpenError(t *testing.T) {
 	})
 
 	t.Run("success", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("daemonize helper can outlive the test and retain its temporary log on Windows")
+		}
+
 		tmp := t.TempDir()
 		dbPath := filepath.Join(tmp, "data", "onwatch.db")
 		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {

@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	githubReleasesURL    = "https://api.github.com/repos/onllm-dev/onwatch/releases/latest"
-	downloadBaseURL      = "https://github.com/onllm-dev/onwatch/releases/download"
+	githubReleasesURL    = "https://api.github.com/repos/Micsushi/onWatch/releases/latest"
+	downloadBaseURL      = "https://github.com/Micsushi/onWatch/releases/download"
 	defaultCacheTTL      = 1 * time.Hour
 	downloadTimeout      = 10 * time.Minute
 	downloadRetryBackoff = 2 * time.Second
@@ -94,6 +94,10 @@ type githubRelease struct {
 	TagName string `json:"tag_name"`
 }
 
+func isDevVersion(v string) bool {
+	return v == "" || v == "dev" || strings.HasPrefix(v, "dev-")
+}
+
 // Check queries GitHub for the latest release and compares with current version.
 // Results are cached for cacheTTL duration.
 func (u *Updater) Check() (UpdateInfo, error) {
@@ -102,7 +106,7 @@ func (u *Updater) Check() (UpdateInfo, error) {
 	}
 
 	// Dev builds can't update
-	if u.currentVersion == "dev" || u.currentVersion == "" {
+	if isDevVersion(u.currentVersion) {
 		return info, nil
 	}
 
@@ -170,7 +174,7 @@ func (u *Updater) Check() (UpdateInfo, error) {
 // On Unix, uses remove+rename (safe for running binaries since the kernel
 // keeps the inode alive). Falls back to backup-rename on Windows.
 func (u *Updater) Apply() error {
-	if u.currentVersion == "dev" || u.currentVersion == "" {
+	if isDevVersion(u.currentVersion) {
 		return fmt.Errorf("update.Apply: cannot update dev build")
 	}
 

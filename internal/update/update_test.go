@@ -60,6 +60,20 @@ func TestCheck_DevVersion(t *testing.T) {
 	}
 }
 
+func TestCheck_TimestampedDevVersion(t *testing.T) {
+	u := NewUpdater("dev-20260722192253", slog.Default())
+	info, err := u.Check()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Available {
+		t.Error("timestamped dev build should never report updates available")
+	}
+	if info.LatestVersion != "" {
+		t.Errorf("timestamped dev build should not query releases, got latest_version=%q", info.LatestVersion)
+	}
+}
+
 func TestCheck_EmptyVersion(t *testing.T) {
 	u := NewUpdater("", slog.Default())
 	info, err := u.Check()
@@ -68,6 +82,17 @@ func TestCheck_EmptyVersion(t *testing.T) {
 	}
 	if info.Available {
 		t.Error("empty version should never report updates available")
+	}
+}
+
+func TestNewUpdaterUsesForkReleaseFeed(t *testing.T) {
+	u := NewUpdater("2.11.48", slog.Default())
+
+	if got, want := u.apiURL, "https://api.github.com/repos/Micsushi/onWatch/releases/latest"; got != want {
+		t.Fatalf("apiURL = %q, want %q", got, want)
+	}
+	if got, want := u.downloadURL, "https://github.com/Micsushi/onWatch/releases/download"; got != want {
+		t.Fatalf("downloadURL = %q, want %q", got, want)
 	}
 }
 
