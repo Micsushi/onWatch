@@ -190,6 +190,39 @@ func TestParseCodexUsageFileSessionAndHeadlessLines(t *testing.T) {
 	}
 }
 
+func TestParseCodexUsageFilePricesEachEventAtItsTimestamp(t *testing.T) {
+	pricing, err := NewPricingMapFromJSON([]byte(`{
+		"gpt-test": {
+			"history": [
+				{"effective_from":"2026-01-01T00:00:00Z","input_cost_per_token":0.000010},
+				{"effective_from":"2026-07-01T00:00:00Z","input_cost_per_token":0.000005}
+			]
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("NewPricingMapFromJSON() error = %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "rollout-pricing.jsonl")
+	writeFixture(t, path, []string{
+		`{"type":"turn.completed","timestamp":"2026-06-30T23:59:59Z","model":"gpt-test","usage":{"input_tokens":100,"total_tokens":100}}`,
+		`{"type":"turn.completed","timestamp":"2026-07-01T00:00:00Z","model":"gpt-test","usage":{"input_tokens":200,"total_tokens":200}}`,
+	})
+
+	events, err := ParseCodexUsageFile(path, pricing)
+	if err != nil {
+		t.Fatalf("ParseCodexUsageFile() error = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len = %d, want 2", len(events))
+	}
+	if events[0].CostUSD != 0.001 {
+		t.Fatalf("old event cost = %.8f, want %.8f", events[0].CostUSD, 0.001)
+	}
+	if events[1].CostUSD != 0.001 {
+		t.Fatalf("new event cost = %.8f, want %.8f", events[1].CostUSD, 0.001)
+	}
+}
+
 func TestParseCodexUsageFileSkipsRepeatedTokenSnapshots(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "rollout-repeat.jsonl")

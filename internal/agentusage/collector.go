@@ -468,7 +468,7 @@ func (c *Collector) antigravityDeltaEvent(path string, event UsageEvent) *UsageE
 	event.OutputTokens = delta.OutputTokens
 	event.ReasoningTokens = delta.ReasoningTokens
 	event.TotalTokens = delta.TotalTokens
-	event.CostUSD = c.pricing.CalculateCost(event.Model, delta, CostOptions{
+	event.CostUSD = c.pricing.CalculateCostAt(event.Model, event.Timestamp, delta, CostOptions{
 		ReasoningBilledAsOutput: true,
 		ProviderPrefixes:        []string{"google", "vertex_ai", "openrouter/google", "anthropic", "openai"},
 	})
