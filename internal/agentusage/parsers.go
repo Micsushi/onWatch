@@ -76,7 +76,7 @@ func ParseClaudeUsageLine(line []byte, sourcePath string, pricing *PricingMap) (
 				event.SpeedSource = "claude_usage"
 			}
 		}
-		event.CostUSD = pricing.CalculateCost(event.Model, counts, costOptions)
+		event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, costOptions)
 	}
 	return &event, nil
 }
@@ -226,7 +226,7 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 			costOptions.CostMultiplier = codexFastModeCostMultiplier(event.Model)
 		}
 		event.SpeedMultiplier = costOptions.CostMultiplier
-		event.CostUSD = pricing.CalculateCost(event.Model, counts, costOptions)
+		event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, costOptions)
 		events = append(events, event)
 	}
 	if err := scanner.Err(); err != nil {
@@ -433,7 +433,7 @@ func ParseAntigravitySettingsFile(path string, pricing *PricingMap) (*UsageEvent
 		TotalTokens:         counts.TotalTokens,
 		SourcePath:          path,
 	}
-	event.CostUSD = pricing.CalculateCost(event.Model, counts, CostOptions{
+	event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, CostOptions{
 		ReasoningBilledAsOutput: true,
 		ProviderPrefixes:        []string{"google", "vertex_ai", "openrouter/google", "anthropic", "openai"},
 	})
@@ -595,7 +595,7 @@ func cursorEventFromBubble(key string, data []byte, composerModels map[string]st
 		TotalTokens:         counts.TotalTokens,
 		SourcePath:          sourcePath,
 	}
-	event.CostUSD = pricing.CalculateCost(event.Model, counts, CostOptions{})
+	event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, CostOptions{})
 	return event, true
 }
 
@@ -677,6 +677,10 @@ func parseGeminiJSONL(data []byte, path, source, provider string, pricing *Prici
 		if event.Model == "" {
 			event.Model = currentModel
 		}
+		event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, geminiCounts(tokens), CostOptions{
+			ReasoningBilledAsOutput: true,
+			ProviderPrefixes:        []string{"google", "gemini", "vertex_ai", "openrouter/google"},
+		})
 		if event.TotalTokens > 0 {
 			events = append(events, event)
 		}
@@ -717,7 +721,7 @@ func geminiEventFromTokens(tokens, obj map[string]any, path, source, provider st
 		TotalTokens:         counts.TotalTokens,
 		SourcePath:          path,
 	}
-	event.CostUSD = pricing.CalculateCost(event.Model, counts, CostOptions{
+	event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, CostOptions{
 		ReasoningBilledAsOutput: true,
 		ProviderPrefixes:        []string{"google", "gemini", "vertex_ai", "openrouter/google"},
 	})
