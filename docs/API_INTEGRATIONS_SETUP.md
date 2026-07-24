@@ -62,6 +62,41 @@ Retention notes:
 - `ONWATCH_AGENT_USAGE_PRICING_JSON` can point to a LiteLLM-compatible pricing JSON file to override built-in model prices
 - `ONWATCH_CURSOR_USAGE_CSV` can point to a Cursor usage export CSV for local Cursor token/cost ingestion
 
+### Historical Pricing
+
+Agent usage is priced using the event timestamp, not the date when the log is imported. Once a cost is stored in SQLite, it is treated as historical data: changing the built-in pricing table or a custom pricing file does not rewrite that cost. The maintenance backfill only fills rows where `cost_usd` is `NULL`.
+
+Flat LiteLLM-compatible overrides remain supported. To describe a price change, use ordered or unordered `history` entries with RFC3339 `effective_from` timestamps:
+
+```json
+{
+  "example-model": {
+    "history": [
+      {
+        "effective_from": "2026-01-01T00:00:00Z",
+        "input_cost_per_token": 0.000010,
+        "output_cost_per_token": 0.000060
+      },
+      {
+        "effective_from": "2026-07-01T00:00:00Z",
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000030
+      }
+    ]
+  }
+}
+```
+
+The newest entry effective at the event timestamp is used. Events older than the first entry use the earliest known price; events without a timestamp use the latest price.
+
+The built-in OpenAI entries reflect the published launch prices:
+
+- GPT-5.5, effective 2026-04-23: $5 per million input tokens, $0.50 per million cached input tokens, and $30 per million output tokens. Fast/Priority processing is 2.5x the standard price.
+- GPT-5.6 Sol, effective 2026-06-26: $5/$0.50/$30 per million input/cached/output tokens.
+- GPT-5.6 Terra, effective 2026-06-26: $2.50/$0.25/$15 per million input/cached/output tokens.
+
+OpenAI's published record describes Terra as 2x cheaper than GPT-5.5; it does not describe a retroactive GPT-5.5 price cut. Sources: [Introducing GPT-5.5](https://openai.com/index/introducing-gpt-5-5/), [GPT-5.5 model pricing](https://developers.openai.com/api/docs/models/gpt-5.5), and [Introducing GPT-5.6](https://openai.com/index/gpt-5-6/).
+
 ## Local Agent Usage Collector
 
 onWatch also includes a local collector for agent log files. It runs beside API Integrations and writes normalized rows to daily `agent-usage-YYYY-MM-DD.jsonl` queue files in the same ingest directory.
@@ -115,7 +150,7 @@ Codex session logs expose model and effort context in `turn_context` records. on
 - `reasoning_effort`: values such as `low`, `medium`, `high`, or `xhigh`
 - `mode`: the Codex collaboration mode, when logged
 - `fast_mode` and `speed_mode`: whether the turn was recorded as fast or standard, when logged
-- `speed_multiplier`: best-effort multiplier, currently `1.5` when Codex Desktop global state reports the fast service tier
+- `speed_multiplier`: best-effort multiplier, currently `2.5` for GPT-5.5 and `2.0` for GPT-5.4 when Codex Desktop global state reports the fast service tier
 
 The Cost tab groups model usage by effort, mode, and speed. Older rows or providers that do not expose this context appear as `unknown`. When the collector re-sees a duplicate event with richer metadata, onWatch updates the stored metadata instead of creating a duplicate row.
 
