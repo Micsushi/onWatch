@@ -187,6 +187,15 @@ func DefaultPricingMap() (*PricingMap, error) {
 				"cache_creation_input_token_cost": 0.000003125
 			}]
 		},
+		"gpt-5.6-luna": {
+			"history": [{
+				"effective_from": "2026-06-26T00:00:00Z",
+				"input_cost_per_token": 0.000001,
+				"output_cost_per_token": 0.000006,
+				"cache_read_input_token_cost": 0.0000001,
+				"cache_creation_input_token_cost": 0.00000125
+			}]
+		},
 		"gpt-5.5": {
 			"history": [{
 				"effective_from": "2026-04-23T00:00:00Z",
