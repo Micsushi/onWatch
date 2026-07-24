@@ -78,20 +78,30 @@ func TestDefaultPricingMapVersionsGPTPricingByLaunchDate(t *testing.T) {
 	}
 
 	tests := []struct {
-		model string
-		want  time.Time
+		model    string
+		wantDate time.Time
+		wantCost float64
 	}{
-		{model: "gpt-5.5", want: time.Date(2026, 4, 23, 0, 0, 0, 0, time.UTC)},
-		{model: "gpt-5.6-sol", want: time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC)},
-		{model: "gpt-5.6-terra", want: time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC)},
+		{model: "gpt-5.5", wantDate: time.Date(2026, 4, 23, 0, 0, 0, 0, time.UTC), wantCost: 35.5},
+		{model: "gpt-5.6-sol", wantDate: time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC), wantCost: 35.5},
+		{model: "gpt-5.6-terra", wantDate: time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC), wantCost: 17.75},
+		{model: "gpt-5.6-luna", wantDate: time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC), wantCost: 7.1},
 	}
 	for _, test := range tests {
 		periods, ok := pricing.lookup(test.model, nil)
 		if !ok || len(periods) != 1 {
 			t.Fatalf("%s periods = %v, want one period", test.model, periods)
 		}
-		if !periods[0].EffectiveFrom.Equal(test.want) {
-			t.Fatalf("%s effective_from = %s, want %s", test.model, periods[0].EffectiveFrom, test.want)
+		if !periods[0].EffectiveFrom.Equal(test.wantDate) {
+			t.Fatalf("%s effective_from = %s, want %s", test.model, periods[0].EffectiveFrom, test.wantDate)
+		}
+		cost := pricing.CalculateCostAt(test.model, test.wantDate, TokenCounts{
+			InputTokens:       1_000_000,
+			CachedInputTokens: 1_000_000,
+			OutputTokens:      1_000_000,
+		}, CostOptions{})
+		if cost != test.wantCost {
+			t.Fatalf("%s cost = %v, want %v", test.model, cost, test.wantCost)
 		}
 	}
 }

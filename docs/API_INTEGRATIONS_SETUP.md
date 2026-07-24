@@ -94,8 +94,9 @@ The built-in OpenAI entries reflect the published launch prices:
 - GPT-5.5, effective 2026-04-23: $5 per million input tokens, $0.50 per million cached input tokens, and $30 per million output tokens. Fast/Priority processing is 2.5x the standard price.
 - GPT-5.6 Sol, effective 2026-06-26: $5/$0.50/$30 per million input/cached/output tokens.
 - GPT-5.6 Terra, effective 2026-06-26: $2.50/$0.25/$15 per million input/cached/output tokens.
+- GPT-5.6 Luna, effective 2026-06-26: $1/$0.10/$6 per million input/cached/output tokens.
 
-OpenAI's published record describes Terra as 2x cheaper than GPT-5.5; it does not describe a retroactive GPT-5.5 price cut. Sources: [Introducing GPT-5.5](https://openai.com/index/introducing-gpt-5-5/), [GPT-5.5 model pricing](https://developers.openai.com/api/docs/models/gpt-5.5), and [Introducing GPT-5.6](https://openai.com/index/gpt-5-6/).
+OpenAI's published record describes Terra as 2x cheaper than GPT-5.5; it does not describe a retroactive GPT-5.5 price cut. The GPT-5.6 date is the limited-preview date when those prices were first published; general availability followed on 2026-07-09. Sources: [Introducing GPT-5.5](https://openai.com/index/introducing-gpt-5-5/), [GPT-5.5 model pricing](https://developers.openai.com/api/docs/models/gpt-5.5), [Previewing GPT-5.6](https://openai.com/index/previewing-gpt-5-6-sol/), and [Introducing GPT-5.6](https://openai.com/index/gpt-5-6/).
 
 ## Local Agent Usage Collector
 
