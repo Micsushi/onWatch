@@ -2,9 +2,12 @@ package agentusage
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strings"
+	"time"
 )
 
 // GoogleFamilyProviderPrefixes is the union of every provider prefix the
@@ -15,7 +18,7 @@ import (
 var GoogleFamilyProviderPrefixes = []string{"google", "gemini", "vertex_ai", "openrouter/google", "anthropic", "openai"}
 
 type PricingMap struct {
-	entries map[string]pricingEntry
+	entries map[string][]pricingPeriod
 }
 
 type pricingEntry struct {
@@ -26,18 +29,66 @@ type pricingEntry struct {
 	CacheCreation1hCost float64 `json:"cache_creation_1h_input_token_cost"`
 }
 
+type pricingPeriod struct {
+	EffectiveFrom time.Time
+	Entry         pricingEntry
+}
+
+type pricingConfig struct {
+	EffectiveFrom       string           `json:"effective_from"`
+	InputCost           float64          `json:"input_cost_per_token"`
+	OutputCost          float64          `json:"output_cost_per_token"`
+	CacheReadCost       float64          `json:"cache_read_input_token_cost"`
+	CacheCreationCost   float64          `json:"cache_creation_input_token_cost"`
+	CacheCreation1hCost float64          `json:"cache_creation_1h_input_token_cost"`
+	History             *[]pricingConfig `json:"history"`
+}
+
 func NewPricingMapFromJSON(data []byte) (*PricingMap, error) {
-	var raw map[string]pricingEntry
+	var raw map[string]pricingConfig
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, err
 	}
-	entries := make(map[string]pricingEntry, len(raw))
-	for model, entry := range raw {
+	entries := make(map[string][]pricingPeriod, len(raw))
+	for model, config := range raw {
 		model = strings.ToLower(strings.TrimSpace(model))
 		if model == "" || model == "sample_spec" {
 			continue
 		}
-		entries[model] = entry
+		var configs []pricingConfig
+		if config.History != nil {
+			if len(*config.History) == 0 {
+				return nil, fmt.Errorf("agentusage: pricing %s history is empty", model)
+			}
+			configs = *config.History
+		} else {
+			configs = []pricingConfig{config}
+		}
+		periods := make([]pricingPeriod, 0, len(configs))
+		for _, candidate := range configs {
+			effectiveFrom := time.Time{}
+			if strings.TrimSpace(candidate.EffectiveFrom) != "" {
+				parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(candidate.EffectiveFrom))
+				if err != nil {
+					return nil, fmt.Errorf("agentusage: pricing %s effective_from: %w", model, err)
+				}
+				effectiveFrom = parsed.UTC()
+			}
+			periods = append(periods, pricingPeriod{
+				EffectiveFrom: effectiveFrom,
+				Entry: pricingEntry{
+					InputCost:           candidate.InputCost,
+					OutputCost:          candidate.OutputCost,
+					CacheReadCost:       candidate.CacheReadCost,
+					CacheCreationCost:   candidate.CacheCreationCost,
+					CacheCreation1hCost: candidate.CacheCreation1hCost,
+				},
+			})
+		}
+		sort.SliceStable(periods, func(i, j int) bool {
+			return periods[i].EffectiveFrom.Before(periods[j].EffectiveFrom)
+		})
+		entries[model] = periods
 	}
 	return &PricingMap{entries: entries}, nil
 }
@@ -119,22 +170,31 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_1h_input_token_cost": 0.00002
 		},
 		"gpt-5.6-sol": {
-			"input_cost_per_token": 0.000005,
-			"output_cost_per_token": 0.00003,
-			"cache_read_input_token_cost": 0.0000005,
-			"cache_creation_input_token_cost": 0.00000625
+			"history": [{
+				"effective_from": "2026-06-26T00:00:00Z",
+				"input_cost_per_token": 0.000005,
+				"output_cost_per_token": 0.00003,
+				"cache_read_input_token_cost": 0.0000005,
+				"cache_creation_input_token_cost": 0.00000625
+			}]
 		},
 		"gpt-5.6-terra": {
-			"input_cost_per_token": 0.0000025,
-			"output_cost_per_token": 0.000015,
-			"cache_read_input_token_cost": 0.00000025,
-			"cache_creation_input_token_cost": 0.000003125
+			"history": [{
+				"effective_from": "2026-06-26T00:00:00Z",
+				"input_cost_per_token": 0.0000025,
+				"output_cost_per_token": 0.000015,
+				"cache_read_input_token_cost": 0.00000025,
+				"cache_creation_input_token_cost": 0.000003125
+			}]
 		},
 		"gpt-5.5": {
-			"input_cost_per_token": 0.000005,
-			"output_cost_per_token": 0.00003,
-			"cache_read_input_token_cost": 0.0000005,
-			"cache_creation_input_token_cost": 0.000005
+			"history": [{
+				"effective_from": "2026-04-23T00:00:00Z",
+				"input_cost_per_token": 0.000005,
+				"output_cost_per_token": 0.00003,
+				"cache_read_input_token_cost": 0.0000005,
+				"cache_creation_input_token_cost": 0.000005
+			}]
 		},
 		"gpt-5.4": {
 			"input_cost_per_token": 0.0000025,
@@ -176,12 +236,28 @@ func DefaultPricingMap() (*PricingMap, error) {
 }
 
 func (p *PricingMap) CalculateCost(model string, counts TokenCounts, opts CostOptions) float64 {
+	return p.CalculateCostAt(model, time.Time{}, counts, opts)
+}
+
+// CalculateCostAt calculates cost using the price period active at the event
+// timestamp. A zero timestamp selects the latest configured period.
+func (p *PricingMap) CalculateCostAt(model string, at time.Time, counts TokenCounts, opts CostOptions) float64 {
 	if p == nil {
 		return 0
 	}
-	entry, ok := p.lookup(model, opts.ProviderPrefixes)
+	periods, ok := p.lookup(model, opts.ProviderPrefixes)
 	if !ok {
 		return 0
+	}
+	entry := periods[len(periods)-1].Entry
+	if !at.IsZero() {
+		entry = periods[0].Entry
+		for _, period := range periods {
+			if period.EffectiveFrom.After(at) {
+				break
+			}
+			entry = period.Entry
+		}
 	}
 
 	cacheRead := entry.CacheReadCost
@@ -218,24 +294,24 @@ func (p *PricingMap) Known(model string, prefixes []string) bool {
 	return ok
 }
 
-func (p *PricingMap) lookup(model string, prefixes []string) (pricingEntry, bool) {
+func (p *PricingMap) lookup(model string, prefixes []string) ([]pricingPeriod, bool) {
 	key := strings.ToLower(strings.TrimSpace(model))
-	if entry, ok := p.entries[key]; ok {
-		return entry, true
+	if periods, ok := p.entries[key]; ok && len(periods) > 0 {
+		return periods, true
 	}
 	for _, prefix := range prefixes {
 		prefix = strings.Trim(strings.ToLower(strings.TrimSpace(prefix)), "/")
 		if prefix == "" {
 			continue
 		}
-		if entry, ok := p.entries[prefix+"/"+key]; ok {
-			return entry, true
+		if periods, ok := p.entries[prefix+"/"+key]; ok && len(periods) > 0 {
+			return periods, true
 		}
 	}
-	for candidate, entry := range p.entries {
-		if strings.HasSuffix(candidate, "/"+key) {
-			return entry, true
+	for candidate, periods := range p.entries {
+		if strings.HasSuffix(candidate, "/"+key) && len(periods) > 0 {
+			return periods, true
 		}
 	}
-	return pricingEntry{}, false
+	return nil, false
 }
