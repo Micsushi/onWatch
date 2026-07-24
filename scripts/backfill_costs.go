@@ -1,8 +1,9 @@
 //go:build ignore
 
-// Fixes generated agent usage cost_usd rows when pricing or token semantics change.
-// Uses metadata_json token breakdown to avoid double-counting prompt_tokens,
-// which is stored as input+cached+cacheCreation combined.
+// Fills missing generated agent usage costs without changing stored historical
+// costs. Uses each row's captured_at timestamp and metadata_json token breakdown
+// to avoid double-counting prompt_tokens, which is stored as
+// input+cached+cacheCreation combined.
 
 package main
 
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/agentusage"
 	_ "modernc.org/sqlite"
@@ -21,6 +23,7 @@ import (
 type row struct {
 	id, input, cached, cacheCreation, cacheCreation1h, output, reasoning int
 	integration, provider, model, metadata                               string
+	capturedAt                                                           time.Time
 }
 
 func main() {
@@ -52,38 +55,8 @@ func main() {
 		panic(err)
 	}
 
-	// Recompute generated agent rows only. Hand-written API integrations may pass
-	// their own top-level cost_usd, so leave those alone.
-	_, err = db.Exec(`
-		UPDATE api_integration_usage_events
-		SET cost_usd = NULL
-		WHERE integration_name IN ('Claude Code','Codex CLI','Gemini CLI','Antigravity')
-		  AND (metadata_json IS NULL OR json_extract(metadata_json, '$.cost_usd') IS NULL)
-		  AND model IN (
-			'claude-opus-4-7',
-			'claude-opus-4-8',
-			'claude-haiku-4-5-20251001',
-			'claude-sonnet-4-6',
-			'claude-sonnet-4-5',
-			'claude-sonnet-4-20250514',
-			'gpt-5.6-sol',
-			'gpt-5.6-terra',
-			'gpt-5.5',
-			'gpt-5.4',
-			'gpt-5.3-codex-spark',
-			'gpt-5.3-codex',
-			'gpt-5.2-codex',
-			'google/gemini-2.5-pro',
-			'gemini-2.5-pro',
-			'gemini-2.5-flash'
-		  )
-	`)
-	if err != nil {
-		panic(err)
-	}
-
 	rows, err := db.Query(`
-		SELECT id, integration_name, provider, model, COALESCE(metadata_json, ''),
+		SELECT id, captured_at, integration_name, provider, model, COALESCE(metadata_json, ''),
 		       CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json,'$.input_tokens'), prompt_tokens) AS INTEGER) ELSE prompt_tokens END,
 		       CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json,'$.cached_input_tokens'),0) AS INTEGER) ELSE 0 END,
 		       CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json,'$.cache_creation_input_tokens'),0) AS INTEGER) ELSE 0 END,
@@ -101,8 +74,14 @@ func main() {
 	var toUpdate []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.id, &r.integration, &r.provider, &r.model, &r.metadata, &r.input, &r.cached, &r.cacheCreation, &r.cacheCreation1h, &r.output, &r.reasoning); err != nil {
+		var capturedAt string
+		if err := rows.Scan(&r.id, &capturedAt, &r.integration, &r.provider, &r.model, &r.metadata, &r.input, &r.cached, &r.cacheCreation, &r.cacheCreation1h, &r.output, &r.reasoning); err != nil {
 			panic(err)
+		}
+		r.capturedAt, err = time.Parse(time.RFC3339Nano, capturedAt)
+		if err != nil {
+			fmt.Printf("skipping row %d: invalid captured_at %q\n", r.id, capturedAt)
+			continue
 		}
 		toUpdate = append(toUpdate, r)
 	}
@@ -113,7 +92,7 @@ func main() {
 	updated, skipped := 0, 0
 	for _, r := range toUpdate {
 		opts := costOptionsForRow(r)
-		cost := pricing.CalculateCost(r.model, agentusage.TokenCounts{
+		cost := pricing.CalculateCostAt(r.model, r.capturedAt, agentusage.TokenCounts{
 			InputTokens:           r.input,
 			OutputTokens:          r.output,
 			CachedInputTokens:     r.cached,
@@ -126,7 +105,7 @@ func main() {
 			continue
 		}
 		metadata := normalizeCostMetadata(r, opts)
-		if _, err := db.Exec(`UPDATE api_integration_usage_events SET cost_usd=?, metadata_json=? WHERE id=?`, cost, metadata, r.id); err != nil {
+		if _, err := db.Exec(`UPDATE api_integration_usage_events SET cost_usd=?, metadata_json=? WHERE id=? AND cost_usd IS NULL`, cost, metadata, r.id); err != nil {
 			panic(err)
 		}
 		updated++
