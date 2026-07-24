@@ -645,6 +645,17 @@ func (h *Handler) codexUsageAccounts() []map[string]interface{} {
 	return usages
 }
 
+func codexUsageHasQuotas(usage map[string]interface{}) bool {
+	switch quotas := usage["quotas"].(type) {
+	case []map[string]interface{}:
+		return len(quotas) > 0
+	case []interface{}:
+		return len(quotas) > 0
+	default:
+		return false
+	}
+}
+
 func codexUsageAccountID(usage map[string]interface{}) int64 {
 	if usage == nil {
 		return DefaultCodexAccountID
@@ -2070,7 +2081,7 @@ func (h *Handler) currentBoth(w http.ResponseWriter, r *http.Request) {
 		filteredAccounts := make([]map[string]interface{}, 0, len(codexAccounts))
 		for _, acc := range codexAccounts {
 			accountID := codexUsageAccountID(acc)
-			if codexAccountTelemetryEnabled(visibility, accountID) {
+			if codexAccountTelemetryEnabled(visibility, accountID) && codexUsageHasQuotas(acc) {
 				filteredAccounts = append(filteredAccounts, acc)
 			}
 		}
@@ -5239,193 +5250,47 @@ func anthropicUtilStatus(util float64) string {
 	}
 }
 
-const (
-	weeklyPaceWindow                     = 7 * 24 * time.Hour
-	weeklyPaceOverHardThreshold          = 10.0
-	weeklyPaceOverTimeSliceFraction      = 0.20
-	weeklyPaceVeryOverHardThreshold      = 15.0
-	weeklyPaceVeryOverTimeSliceFraction  = 0.30
-	weeklyPaceUnderHardThreshold         = 10.0
-	weeklyPaceUnderTimeSliceFraction     = 0.20
-	weeklyPaceVeryUnderHardThreshold     = 15.0
-	weeklyPaceVeryUnderTimeSliceFraction = 0.30
-)
-
 func applyWeeklyPaceStatus(qMap map[string]interface{}, quotaName string, utilization float64, resetsAt time.Time, now time.Time) {
-	if qMap == nil || !isWeeklyPaceQuota(quotaName) {
+	if qMap == nil {
 		return
 	}
-
-	timeLeft := resetsAt.Sub(now)
-	if timeLeft < 0 {
-		timeLeft = 0
+	pace, ok := notify.EvaluateWeeklyPace(quotaName, utilization, resetsAt, now)
+	if !ok {
+		return
 	}
-	if timeLeft > weeklyPaceWindow {
-		timeLeft = weeklyPaceWindow
-	}
+	qMap["paceExpectedUsed"] = pace.ExpectedUsed
+	qMap["paceDelta"] = pace.Delta
+	qMap["paceOverFlatThreshold"] = 10.0
+	qMap["paceOverTimeThreshold"] = pace.OverTimeThreshold
+	qMap["paceVeryOverFlatThreshold"] = 15.0
+	qMap["paceVeryOverTimeThreshold"] = pace.VeryOverTimeThreshold
+	qMap["paceUnderFlatThreshold"] = 10.0
+	qMap["paceUnderTimeThreshold"] = pace.UnderTimeThreshold
+	qMap["paceVeryUnderFlatThreshold"] = 15.0
+	qMap["paceVeryUnderTimeThreshold"] = pace.VeryUnderTimeThreshold
+	qMap["paceTimeLeftOverPercent"] = pace.TimeLeftOverPercent
+	qMap["paceElapsedUnderPercent"] = pace.ElapsedUnderPercent
 
-	expectedUsed := 100 - (float64(timeLeft) / float64(weeklyPaceWindow) * 100)
-	if expectedUsed < 0 {
-		expectedUsed = 0
-	}
-	if expectedUsed > 100 {
-		expectedUsed = 100
-	}
-
-	delta := utilization - expectedUsed
-	remainingExpected := 100 - expectedUsed
-	overTimeThreshold := remainingExpected * weeklyPaceOverTimeSliceFraction
-	veryOverTimeThreshold := remainingExpected * weeklyPaceVeryOverTimeSliceFraction
-	underTimeThreshold := expectedUsed * weeklyPaceUnderTimeSliceFraction
-	veryUnderTimeThreshold := expectedUsed * weeklyPaceVeryUnderTimeSliceFraction
-	qMap["paceExpectedUsed"] = expectedUsed
-	qMap["paceDelta"] = delta
-	qMap["paceOverFlatThreshold"] = weeklyPaceOverHardThreshold
-	qMap["paceOverTimeThreshold"] = overTimeThreshold
-	qMap["paceVeryOverFlatThreshold"] = weeklyPaceVeryOverHardThreshold
-	qMap["paceVeryOverTimeThreshold"] = veryOverTimeThreshold
-	qMap["paceUnderFlatThreshold"] = weeklyPaceUnderHardThreshold
-	qMap["paceUnderTimeThreshold"] = underTimeThreshold
-	qMap["paceVeryUnderFlatThreshold"] = weeklyPaceVeryUnderHardThreshold
-	qMap["paceVeryUnderTimeThreshold"] = veryUnderTimeThreshold
-	qMap["paceTimeLeftOverPercent"] = weeklyPaceTimeLeftOverPercent(delta, remainingExpected)
-	qMap["paceElapsedUnderPercent"] = weeklyPaceElapsedUnderPercent(delta, expectedUsed)
-
-	tier, trigger := weeklyOverPaceTier(delta, overTimeThreshold, veryOverTimeThreshold)
-	qMap["paceOverTrigger"] = trigger
-	underTier, underTrigger := weeklyUnderPaceTier(delta, underTimeThreshold, veryUnderTimeThreshold)
-	qMap["paceUnderTrigger"] = underTrigger
-
-	switch tier {
-	case "very":
+	switch pace.Tier {
+	case notify.PaceVeryOver:
+		qMap["paceOverTrigger"] = pace.Trigger
 		qMap["status"] = "critical"
-		qMap["statusLabel"] = weeklyOverPaceStatusLabel("Very overpace", delta, remainingExpected)
-	case "over":
+		qMap["statusLabel"] = fmt.Sprintf("Very overpace: extra +%.0f%% | time-left +%.0f%%", pace.Delta, pace.TimeLeftOverPercent)
+	case notify.PaceOver:
+		qMap["paceOverTrigger"] = pace.Trigger
 		qMap["status"] = "warning"
-		qMap["statusLabel"] = weeklyOverPaceStatusLabel("Overpace", delta, remainingExpected)
+		qMap["statusLabel"] = fmt.Sprintf("Overpace: extra +%.0f%% | time-left +%.0f%%", pace.Delta, pace.TimeLeftOverPercent)
+	case notify.PaceVeryUnder:
+		qMap["paceUnderTrigger"] = pace.Trigger
+		qMap["status"] = "very_underuse"
+		qMap["statusLabel"] = fmt.Sprintf("Very under pace: reserve +%.0f%% | elapsed +%.0f%%", -pace.Delta, pace.ElapsedUnderPercent)
+	case notify.PaceUnder:
+		qMap["paceUnderTrigger"] = pace.Trigger
+		qMap["status"] = "underuse"
+		qMap["statusLabel"] = fmt.Sprintf("Under pace: reserve +%.0f%% | elapsed +%.0f%%", -pace.Delta, pace.ElapsedUnderPercent)
 	default:
-		switch underTier {
-		case "very":
-			qMap["status"] = "very_underuse"
-			qMap["statusLabel"] = weeklyUnderPaceStatusLabel("Very under pace", delta, expectedUsed)
-			return
-		case "under":
-			qMap["status"] = "underuse"
-			qMap["statusLabel"] = weeklyUnderPaceStatusLabel("Under pace", delta, expectedUsed)
-			return
-		}
 		qMap["status"] = "healthy"
 		qMap["statusLabel"] = "On pace"
-	}
-}
-
-func weeklyOverPaceStatusLabel(prefix string, delta, remainingExpected float64) string {
-	return fmt.Sprintf("%s: extra +%.0f%% | time-left +%.0f%%", prefix, delta, weeklyPaceTimeLeftOverPercent(delta, remainingExpected))
-}
-
-func weeklyPaceTimeLeftOverPercent(delta, remainingExpected float64) float64 {
-	if delta <= 0 {
-		return 0
-	}
-	if remainingExpected <= 0 {
-		return 100
-	}
-	return (delta / remainingExpected) * 100
-}
-
-func weeklyUnderPaceStatusLabel(prefix string, delta, expectedUsed float64) string {
-	reserve := -delta
-	return fmt.Sprintf("%s: reserve +%.0f%% | elapsed +%.0f%%", prefix, reserve, weeklyPaceElapsedUnderPercent(delta, expectedUsed))
-}
-
-func weeklyPaceElapsedUnderPercent(delta, expectedUsed float64) float64 {
-	if delta >= 0 {
-		return 0
-	}
-	if expectedUsed <= 0 {
-		return 100
-	}
-	return (-delta / expectedUsed) * 100
-}
-
-func weeklyOverPaceTier(delta, overTimeThreshold, veryOverTimeThreshold float64) (string, string) {
-	if delta <= 0 {
-		return "", ""
-	}
-
-	flatTier := ""
-	switch {
-	case delta >= weeklyPaceVeryOverHardThreshold:
-		flatTier = "very"
-	case delta >= weeklyPaceOverHardThreshold:
-		flatTier = "over"
-	}
-
-	timeTier := ""
-	switch {
-	case delta >= veryOverTimeThreshold:
-		timeTier = "very"
-	case delta >= overTimeThreshold:
-		timeTier = "over"
-	}
-
-	switch {
-	case flatTier == "very":
-		return "very", "flat"
-	case timeTier == "very":
-		return "very", "time left"
-	case flatTier == "over":
-		return "over", "flat"
-	case timeTier == "over":
-		return "over", "time left"
-	default:
-		return "", ""
-	}
-}
-
-func weeklyUnderPaceTier(delta, underTimeThreshold, veryUnderTimeThreshold float64) (string, string) {
-	if delta >= 0 {
-		return "", ""
-	}
-	reserve := -delta
-
-	flatTier := ""
-	switch {
-	case reserve >= weeklyPaceVeryUnderHardThreshold:
-		flatTier = "very"
-	case reserve >= weeklyPaceUnderHardThreshold:
-		flatTier = "under"
-	}
-
-	timeTier := ""
-	switch {
-	case reserve >= veryUnderTimeThreshold:
-		timeTier = "very"
-	case reserve >= underTimeThreshold:
-		timeTier = "under"
-	}
-
-	switch {
-	case flatTier == "very":
-		return "very", "flat"
-	case timeTier == "very":
-		return "very", "elapsed"
-	case flatTier == "under":
-		return "under", "flat"
-	case timeTier == "under":
-		return "under", "elapsed"
-	default:
-		return "", ""
-	}
-}
-
-func isWeeklyPaceQuota(quotaName string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(quotaName))
-	switch normalized {
-	case "seven_day", "seven_day_sonnet":
-		return true
-	default:
-		return strings.Contains(normalized, "weekly") || strings.HasPrefix(normalized, "wkly_")
 	}
 }
 
@@ -6486,16 +6351,20 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// Handle notification settings
 	if raw, ok := body["notifications"]; ok {
 		var notif struct {
-			WarningThreshold  float64                      `json:"warning_threshold"`
-			CriticalThreshold float64                      `json:"critical_threshold"`
-			NotifyWarning     bool                         `json:"notify_warning"`
-			NotifyCritical    bool                         `json:"notify_critical"`
-			NotifyReset       bool                         `json:"notify_reset"`
-			NotifyReset5Hour  bool                         `json:"notify_reset_five_hour"`
-			NotifyAuthError   bool                         `json:"notify_auth_error"`
-			CooldownMinutes   int                          `json:"cooldown_minutes"`
-			Channels          *notify.NotificationChannels `json:"channels,omitempty"`
-			Overrides         []struct {
+			WarningThreshold     float64                      `json:"warning_threshold"`
+			CriticalThreshold    float64                      `json:"critical_threshold"`
+			NotifyWarning        bool                         `json:"notify_warning"`
+			NotifyCritical       bool                         `json:"notify_critical"`
+			NotifyOveruse        *bool                        `json:"notify_overuse"`
+			OveruseRepeatPercent *float64                     `json:"overuse_repeat_percent"`
+			NotifyUnderuse       *bool                        `json:"notify_underuse"`
+			UnderuseTimes        []string                     `json:"underuse_times"`
+			NotifyReset          bool                         `json:"notify_reset"`
+			NotifyReset5Hour     bool                         `json:"notify_reset_five_hour"`
+			NotifyAuthError      bool                         `json:"notify_auth_error"`
+			CooldownMinutes      int                          `json:"cooldown_minutes"`
+			Channels             *notify.NotificationChannels `json:"channels,omitempty"`
+			Overrides            []struct {
 				QuotaKey       string  `json:"quota_key"`
 				Provider       string  `json:"provider"`
 				Warning        float64 `json:"warning"`
@@ -6525,6 +6394,31 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if notif.CooldownMinutes < 1 {
 			notif.CooldownMinutes = 1
+		}
+		if notif.NotifyUnderuse == nil {
+			enabled := true
+			notif.NotifyUnderuse = &enabled
+		}
+		if notif.NotifyOveruse == nil {
+			enabled := true
+			notif.NotifyOveruse = &enabled
+		}
+		if notif.OveruseRepeatPercent == nil {
+			value := 10.0
+			notif.OveruseRepeatPercent = &value
+		}
+		if *notif.OveruseRepeatPercent <= 0 || *notif.OveruseRepeatPercent > 100 {
+			respondError(w, http.StatusBadRequest, "over-usage repeat percentage must be between 1 and 100")
+			return
+		}
+		if len(notif.UnderuseTimes) == 0 {
+			notif.UnderuseTimes = []string{"10:00", "22:00"}
+		}
+		for _, value := range notif.UnderuseTimes {
+			if _, err := time.Parse("15:04", value); err != nil {
+				respondError(w, http.StatusBadRequest, "under-usage notification times must use HH:MM")
+				return
+			}
 		}
 		// Validate per-quota overrides
 		for _, o := range notif.Overrides {

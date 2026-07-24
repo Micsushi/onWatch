@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/api"
@@ -106,15 +107,31 @@ func (a *MiniMaxAgent) poll(ctx context.Context) {
 	}
 
 	if a.notifier != nil {
+		accountID := ""
+		if a.accountID > 1 {
+			accountID = strconv.FormatInt(a.accountID, 10)
+		}
 		if snapshot.IsSharedQuota() {
 			// Shared pool: send one notification for the entire plan
 			if merged := snapshot.MergedQuota(); merged != nil && merged.Total > 0 {
 				a.notifier.Check(notify.QuotaStatus{
 					Provider:    "minimax",
 					QuotaKey:    "coding_plan",
+					AccountID:   accountID,
 					Utilization: merged.UsedPercent,
 					Limit:       float64(merged.Total),
+					ResetsAt:    merged.ResetAt,
 				})
+				if merged.HasWeeklyQuota && merged.WeeklyTotal > 0 {
+					a.notifier.Check(notify.QuotaStatus{
+						Provider:    "minimax",
+						QuotaKey:    "weekly_coding_plan",
+						AccountID:   accountID,
+						Utilization: merged.WeeklyUsedPercent,
+						Limit:       float64(merged.WeeklyTotal),
+						ResetsAt:    merged.WeeklyResetAt,
+					})
+				}
 			}
 		} else {
 			for _, m := range snapshot.Models {
@@ -124,9 +141,21 @@ func (a *MiniMaxAgent) poll(ctx context.Context) {
 				a.notifier.Check(notify.QuotaStatus{
 					Provider:    "minimax",
 					QuotaKey:    m.ModelName,
+					AccountID:   accountID,
 					Utilization: m.UsedPercent,
 					Limit:       float64(m.Total),
+					ResetsAt:    m.ResetAt,
 				})
+				if m.HasWeeklyQuota && m.WeeklyTotal > 0 {
+					a.notifier.Check(notify.QuotaStatus{
+						Provider:    "minimax",
+						QuotaKey:    "weekly_" + m.ModelName,
+						AccountID:   accountID,
+						Utilization: m.WeeklyUsedPercent,
+						Limit:       float64(m.WeeklyTotal),
+						ResetsAt:    m.WeeklyResetAt,
+					})
+				}
 			}
 		}
 	}

@@ -23,7 +23,8 @@ const (
 	SourceGemini       = "gemini"
 	SourceAntigravity  = "antigravity"
 
-	initialScanWindow = 6 * time.Hour
+	initialScanWindow  = 6 * time.Hour
+	sourcePathCacheTTL = 5 * time.Minute
 )
 
 type Source struct {
@@ -41,16 +42,25 @@ type Collector struct {
 	sources        []Source
 	seen           map[string]struct{}
 	fileStates     map[string]fileState
+	codexStates    map[string]codexParseState
+	sourcePaths    map[string]sourcePathCacheEntry
 	antigravity    map[string]antigravityUsageState
 	unpricedWarned map[string]struct{}
 	seenLoaded     bool
 	initialized    bool
 	logger         *slog.Logger
+	now            func() time.Time
 }
 
 type fileState struct {
 	Size    int64
 	ModTime int64
+	Info    os.FileInfo
+}
+
+type sourcePathCacheEntry struct {
+	paths     []string
+	expiresAt time.Time
 }
 
 func NewCollector(outDir string, pricing *PricingMap, sources []Source, logger *slog.Logger) *Collector {
@@ -63,9 +73,12 @@ func NewCollector(outDir string, pricing *PricingMap, sources []Source, logger *
 		sources:        sources,
 		seen:           make(map[string]struct{}),
 		fileStates:     make(map[string]fileState),
+		codexStates:    make(map[string]codexParseState),
+		sourcePaths:    make(map[string]sourcePathCacheEntry),
 		antigravity:    make(map[string]antigravityUsageState),
 		unpricedWarned: make(map[string]struct{}),
 		logger:         logger,
+		now:            time.Now,
 	}
 }
 
@@ -350,14 +363,33 @@ func mapKeys(m map[string]struct{}) []string {
 }
 
 func (c *Collector) collectSource(source Source) ([]UsageEvent, error) {
-	paths, err := expandSourcePaths(source.Path, source.Kind)
+	paths, err := c.sourcePathsFor(source)
 	if err != nil {
 		return nil, err
 	}
 	var events []UsageEvent
+	nextFileStates := make(map[string]fileState)
+	nextCodexStates := make(map[string]codexParseState)
+	nextAntigravity := c.antigravity
+	if source.Kind == SourceAntigravity {
+		nextAntigravity = make(map[string]antigravityUsageState, len(c.antigravity))
+		for path, state := range c.antigravity {
+			nextAntigravity[path] = state
+		}
+	}
 	for _, path := range paths {
-		changed := c.sourceFileChanged(path)
+		state, changed, err := c.currentSourceFileState(path)
+		if os.IsNotExist(err) {
+			delete(c.fileStates, path)
+			delete(c.codexStates, path)
+			delete(nextAntigravity, path)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
 		if !c.initialized && !source.InitialBackfill && !sourceFileInInitialWindow(path) {
+			nextFileStates[path] = state
 			continue
 		}
 		if c.initialized && !changed {
@@ -371,10 +403,11 @@ func (c *Collector) collectSource(source Source) ([]UsageEvent, error) {
 			}
 			events = append(events, fileEvents...)
 		case SourceCodex:
-			fileEvents, err := ParseCodexUsageFile(path, c.pricing)
+			fileEvents, nextState, err := parseCodexUsageFileIncremental(path, c.pricing, c.codexStates[path])
 			if err != nil {
 				return nil, err
 			}
+			nextCodexStates[path] = nextState
 			events = append(events, fileEvents...)
 		case SourceCursorCSV:
 			data, err := os.ReadFile(path)
@@ -412,15 +445,57 @@ func (c *Collector) collectSource(source Source) ([]UsageEvent, error) {
 				return nil, err
 			}
 			if event != nil {
-				if delta := c.antigravityDeltaEvent(path, *event); delta != nil {
+				if delta := c.antigravityDeltaEvent(nextAntigravity, path, *event); delta != nil {
 					events = append(events, *delta)
 				}
 			}
 		default:
 			return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
 		}
+		nextFileStates[path] = state
+	}
+	for path, state := range nextFileStates {
+		c.fileStates[path] = state
+	}
+	for path, state := range nextCodexStates {
+		c.codexStates[path] = state
+	}
+	if source.Kind == SourceAntigravity {
+		c.antigravity = nextAntigravity
 	}
 	return events, nil
+}
+
+func (c *Collector) sourcePathsFor(source Source) ([]string, error) {
+	key := source.Kind + "\x00" + source.Path
+	now := c.now()
+	cached, cachedOK := c.sourcePaths[key]
+	if cachedOK && now.Before(cached.expiresAt) {
+		return cached.paths, nil
+	}
+	paths, err := expandSourcePaths(source.Path, source.Kind)
+	if err != nil {
+		return nil, err
+	}
+	if cachedOK {
+		current := make(map[string]struct{}, len(paths))
+		for _, path := range paths {
+			current[path] = struct{}{}
+		}
+		for _, path := range cached.paths {
+			if _, ok := current[path]; ok {
+				continue
+			}
+			delete(c.fileStates, path)
+			delete(c.codexStates, path)
+			delete(c.antigravity, path)
+		}
+	}
+	c.sourcePaths[key] = sourcePathCacheEntry{
+		paths:     paths,
+		expiresAt: now.Add(sourcePathCacheTTL),
+	}
+	return paths, nil
 }
 
 type antigravityUsageState struct {
@@ -428,7 +503,7 @@ type antigravityUsageState struct {
 	Counts TokenCounts
 }
 
-func (c *Collector) antigravityDeltaEvent(path string, event UsageEvent) *UsageEvent {
+func (c *Collector) antigravityDeltaEvent(states map[string]antigravityUsageState, path string, event UsageEvent) *UsageEvent {
 	current := antigravityUsageState{
 		Model: event.Model,
 		Counts: TokenCounts{
@@ -440,8 +515,8 @@ func (c *Collector) antigravityDeltaEvent(path string, event UsageEvent) *UsageE
 			TotalTokens:         event.TotalTokens,
 		},
 	}
-	previous, ok := c.antigravity[path]
-	c.antigravity[path] = current
+	previous, ok := states[path]
+	states[path] = current
 	if !ok || previous.Model != current.Model {
 		return nil
 	}
@@ -483,18 +558,21 @@ func sourceFileInInitialWindow(path string) bool {
 	return info.ModTime().After(time.Now().Add(-initialScanWindow))
 }
 
-func (c *Collector) sourceFileChanged(path string) bool {
+func (c *Collector) currentSourceFileState(path string) (fileState, bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return true
+		return fileState{}, false, err
 	}
-	state := fileState{Size: info.Size(), ModTime: info.ModTime().UnixNano()}
+	state := fileState{Size: info.Size(), ModTime: info.ModTime().UnixNano(), Info: info}
 	previous, ok := c.fileStates[path]
-	c.fileStates[path] = state
 	if !ok {
-		return true
+		return state, true, nil
 	}
-	return previous.Size != state.Size || previous.ModTime != state.ModTime
+	changed := previous.Size != state.Size || previous.ModTime != state.ModTime
+	if previous.Info != nil && !os.SameFile(previous.Info, info) {
+		changed = true
+	}
+	return state, changed, nil
 }
 
 func parseClaudeFile(path string, pricing *PricingMap) ([]UsageEvent, error) {

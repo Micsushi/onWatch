@@ -199,6 +199,8 @@ Menubar is currently in beta.
 
 **Push notifications (Beta)** -- Receive browser push notifications when quotas cross thresholds. onWatch is a PWA (Progressive Web App) - install it from your browser for a native app experience. Uses Web Push protocol (VAPID) with zero external dependencies. Configure delivery channels (email, push, or both) per your preference.
 
+**Discord notifications** -- Weekly pace alerts fire when a quota enters the red very-over-pace state and again after a configurable amount of additional usage, defaulting to 10 percentage points. Purple very-under-pace quotas are checked at configurable times, defaulting to 10:00 and 22:00. Both alert types can be enabled separately, and provider and account alerts are tracked independently.
+
 **Dark/Light mode** -- Toggle via sun/moon icon in the header. Auto-detects system preference on first visit and persists your choice across sessions.
 
 **Password management** -- Change your password from the dashboard. The hash is stored in SQLite and persists across restarts (takes precedence over `.env`). To force-reset, delete the row from the `users` table.
@@ -346,7 +348,7 @@ Additional environment variables:
 | `ONWATCH_HOST`           | Bind address (default: `0.0.0.0`)                      |
 | `ONWATCH_API_INTEGRATIONS_ENABLED` | Enable or disable API Integrations ingestion (default: `true`) |
 | `ONWATCH_API_INTEGRATIONS_DIR`     | Directory onWatch tails for API Integrations JSONL events |
-| `ONWATCH_API_INTEGRATIONS_RETENTION` | How long API Integrations rows are kept in SQLite (default: `1440h` = 60 days, `0` disables pruning) |
+| `ONWATCH_API_INTEGRATIONS_RETENTION` | How long API Integrations rows are kept in SQLite (default: `0`, which keeps history until you delete it) |
 | `ONWATCH_AGENT_USAGE_PRICING_JSON` | Optional LiteLLM-compatible pricing JSON for local agent token cost math |
 | `ONWATCH_CURSOR_USAGE_CSV` | Optional Cursor usage export CSV to ingest token usage into API Integrations |
 

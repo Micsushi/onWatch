@@ -219,12 +219,6 @@ const State = {
   platformCostBreakdownSessionModels: null,
   platformCostHistoryCache: {},
   platformCostPrefetchControllers: {},
-  platformCostPrefetchTimers: [],
-  platformCostRefreshTimer: null,
-  platformCostRefreshProvider: null,
-  providerDataWarmupTimer: null,
-  providerDataRollingTimer: null,
-  providerDataWarmupActive: false,
   refreshInFlight: false,
   dashboardToastTimer: null,
 };
@@ -238,17 +232,11 @@ const PROVIDER_CURRENT_CACHE_TTL_MS = 120000;
 const PROVIDER_HISTORY_CACHE_TTL_MS = 120000;
 const PROVIDER_INSIGHTS_CACHE_TTL_MS = 120000;
 const PROVIDER_STALE_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
-const PROVIDER_WARMUP_DELAY_MS = 350;
-const PLATFORM_COST_REFRESH_INTERVAL_MS = 15000;
-const PROVIDER_ROLLING_REFRESH_INTERVAL_MS = 30000;
 const DEFAULT_CHART_RANGE = '7d';
 const CHART_RANGE_STORAGE_KEY = 'onwatch-chart-range';
 const PLATFORM_COST_RANGE_STORAGE_KEY = 'onwatch-platform-cost-range';
 const PLATFORM_COST_BREAKDOWN_RANGE_STORAGE_KEY = 'onwatch-platform-cost-breakdown-range';
 const DASHBOARD_FOREGROUND_FETCH_TIMEOUT_MS = 15000;
-const PLATFORM_COST_PREFETCH_RANGES = ['1h', '6h', '24h', '7d', '30d', 'all'];
-const PROVIDER_HISTORY_WARMUP_RANGES = ['1h', '6h', '24h', '7d', '30d', 'all'];
-const PROVIDER_INSIGHTS_WARMUP_RANGES = ['1d', '7d', '30d'];
 
 // Persistence
 function loadHiddenQuotas() {
@@ -324,10 +312,6 @@ function getStaleProviderData(kind, provider, extra = '') {
   return getCachedProviderData(kind, provider, extra, PROVIDER_STALE_CACHE_MAX_MS);
 }
 
-function isProviderDataFresh(kind, provider, extra = '', maxAgeMs = PROVIDER_CURRENT_CACHE_TTL_MS) {
-  return Boolean(getCachedProviderData(kind, provider, extra, maxAgeMs));
-}
-
 function setCachedProviderData(kind, provider, extra = '', payload = {}) {
   if (!provider || !payload) return;
   const cache = getProviderDataCache();
@@ -387,158 +371,6 @@ function clearPlatformCostLoadingShell(provider = getCurrentProvider(), message 
   setPlatformCostRangeControlsLoading(State.platformCostRange || DEFAULT_CHART_RANGE, false);
   const hasEntry = Boolean(getPlatformCostEntry(provider));
   if (!hasEntry) renderPlatformCostEmptyPanel(message);
-}
-
-function dashboardProvidersForWarmup() {
-  const tabs = document.querySelectorAll('#provider-tabs .provider-tab[data-provider]');
-  const providers = [...tabs]
-    .map(tab => tab.dataset.provider)
-    .filter(Boolean);
-  const current = getCurrentProvider();
-  if (!providers.includes(current)) providers.unshift(current);
-  return [...new Set(providers)].filter(provider => provider !== 'api-integrations');
-}
-
-function providerRequestParamFor(provider) {
-  let param = `provider=${encodeURIComponent(provider)}`;
-  if (provider === 'codex') {
-    param += `&account=${encodeURIComponent(State.codexAccount || 1)}`;
-  } else if (provider === 'minimax' && State.minimaxAccount) {
-    param += `&account=${encodeURIComponent(State.minimaxAccount)}`;
-  }
-  return param;
-}
-
-function providerSupportsWarmup(provider) {
-  return Boolean(provider) && provider !== 'api-integrations';
-}
-
-async function prefetchProviderCurrent(provider, options = {}) {
-  if (!provider) return;
-  if (!options.force && isProviderDataFresh('current', provider, '', PROVIDER_CURRENT_CACHE_TTL_MS)) return;
-
-  if (provider === 'api-integrations') {
-    if (!options.force && getCachedAPIIntegrationsCurrent(API_INTEGRATIONS_CURRENT_CACHE_TTL_MS)) return;
-    const [currentRes, healthRes] = await Promise.all([
-      authFetch(`${API_BASE}/api/api-integrations/current`),
-      authFetch(`${API_BASE}/api/api-integrations/health`)
-    ]);
-    if (!currentRes.ok || !healthRes.ok) return;
-    const [currentData, healthData] = await Promise.all([currentRes.json(), healthRes.json()]);
-    setCachedAPIIntegrationsCurrent(currentData, healthData);
-    return;
-  }
-
-  const res = await authFetch(`${API_BASE}/api/current?${providerRequestParamFor(provider)}`);
-  if (!res.ok) return;
-  const data = await res.json();
-  setCachedProviderData('current', provider, '', { data });
-}
-
-async function prefetchProviderHistory(provider, range, options = {}) {
-  if (!provider || !range) return;
-  if (!options.force && isProviderDataFresh('history', provider, range, PROVIDER_HISTORY_CACHE_TTL_MS)) return;
-
-  if (provider === 'api-integrations') {
-    const res = await authFetch(`${API_BASE}/api/api-integrations/history?range=${encodeURIComponent(range)}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    setCachedProviderData('history', provider, range, { data });
-    return;
-  }
-
-  const res = await authFetch(`${API_BASE}/api/history?range=${encodeURIComponent(range)}&${providerRequestParamFor(provider)}`);
-  if (!res.ok) return;
-  const data = await res.json();
-  setCachedProviderData('history', provider, range, { data });
-}
-
-async function prefetchProviderInsights(provider, range, options = {}) {
-  if (!providerSupportsWarmup(provider) || !range) return;
-  if (!options.force && isProviderDataFresh('insights', provider, range, PROVIDER_INSIGHTS_CACHE_TTL_MS)) return;
-
-  const res = await authFetch(`${API_BASE}/api/insights?${providerRequestParamFor(provider)}&range=${encodeURIComponent(range)}`);
-  if (!res.ok) return;
-  const data = await res.json();
-  setCachedProviderData('insights', provider, range, { data });
-}
-
-function prefetchProviderAllRanges(provider, options = {}) {
-  if (!provider) return;
-  const delayStepMs = options.delayStepMs ?? 180;
-  let delay = options.delayMs || 0;
-  const enqueue = (task) => {
-    window.setTimeout(() => {
-      Promise.resolve().then(task).catch(() => {});
-    }, delay);
-    delay += delayStepMs;
-  };
-
-  enqueue(() => prefetchProviderCurrent(provider, options));
-  PROVIDER_HISTORY_WARMUP_RANGES.forEach((range) => {
-    enqueue(() => prefetchProviderHistory(provider, range, options));
-  });
-  if (providerSupportsWarmup(provider)) {
-    PROVIDER_INSIGHTS_WARMUP_RANGES.forEach((range) => {
-      enqueue(() => prefetchProviderInsights(provider, range, options));
-    });
-  }
-  if (provider === getCurrentProvider() && supportsPlatformCost(provider)) {
-    prefetchPlatformCostRanges(provider, { ...options, delayMs: delay });
-  }
-}
-
-function buildProviderWarmupQueue() {
-  const current = getCurrentProvider();
-  const providers = dashboardProvidersForWarmup().sort((a, b) => {
-    if (a === current) return -1;
-    if (b === current) return 1;
-    return a.localeCompare(b);
-  });
-  const tasks = [];
-  providers.forEach((provider) => {
-    tasks.push(() => prefetchProviderCurrent(provider));
-    PROVIDER_HISTORY_WARMUP_RANGES.forEach((range) => {
-      tasks.push(() => prefetchProviderHistory(provider, range));
-    });
-    if (providerSupportsWarmup(provider)) {
-      PROVIDER_INSIGHTS_WARMUP_RANGES.forEach((range) => {
-        tasks.push(() => prefetchProviderInsights(provider, range));
-      });
-    }
-  });
-  return tasks;
-}
-
-function startProviderDataWarmup(options = {}) {
-  if (State.providerDataWarmupActive || document.hidden) return;
-  const queue = buildProviderWarmupQueue();
-  if (queue.length === 0) return;
-  State.providerDataWarmupActive = true;
-
-  const runNext = () => {
-    if (document.hidden || queue.length === 0) {
-      State.providerDataWarmupActive = false;
-      State.providerDataWarmupTimer = null;
-      return;
-    }
-    const task = queue.shift();
-    Promise.resolve()
-      .then(task)
-      .catch(() => {})
-      .finally(() => {
-        State.providerDataWarmupTimer = window.setTimeout(runNext, options.delayMs || PROVIDER_WARMUP_DELAY_MS);
-      });
-  };
-
-  State.providerDataWarmupTimer = window.setTimeout(runNext, options.initialDelayMs || 0);
-}
-
-function startProviderDataRollingRefresh() {
-  if (State.providerDataRollingTimer) return;
-  State.providerDataRollingTimer = window.setInterval(() => {
-    startProviderDataWarmup({ delayMs: PROVIDER_WARMUP_DELAY_MS });
-  }, PROVIDER_ROLLING_REFRESH_INTERVAL_MS);
 }
 
 function applyAPIIntegrationsCurrentData(current, health, options = {}) {
@@ -604,11 +436,6 @@ function applyPlatformCostHistoryPayload(range, payload) {
 
 function abortPlatformCostPrefetches(exceptProvider = '') {
   const keepPrefix = exceptProvider ? `${exceptProvider}:` : '';
-  State.platformCostPrefetchTimers = (State.platformCostPrefetchTimers || []).filter((timer) => {
-    if (keepPrefix && timer.provider === exceptProvider) return true;
-    window.clearTimeout(timer.id);
-    return false;
-  });
   Object.entries(State.platformCostPrefetchControllers || {}).forEach(([key, controller]) => {
     if (keepPrefix && key.startsWith(keepPrefix)) return;
     try {
@@ -650,123 +477,13 @@ async function fetchPlatformCostPayload(provider, range, signal) {
   return { sessionHistory, sessionTotals, sessionModels, apiHistory };
 }
 
-async function prefetchPlatformCostRange(provider, range, options = {}) {
-  if (!supportsPlatformCost(provider)) return;
-  range = normalizePlatformCostRange(range);
-  const key = platformCostCacheKey(provider, range);
-  if (!options.force && getCachedPlatformCostHistory(provider, range)) return;
-  if (State.platformCostPrefetchControllers[key]) return;
-  if (getCurrentProvider() !== provider) return;
-
-  const controller = new AbortController();
-  State.platformCostPrefetchControllers[key] = controller;
-  try {
-    const payload = await fetchPlatformCostPayload(provider, range, controller.signal);
-    if (controller.signal.aborted || getCurrentProvider() !== provider) return;
-    setCachedPlatformCostHistory(provider, range, payload);
-    if (normalizePlatformCostRange(State.platformCostRange || DEFAULT_CHART_RANGE) === range && !State.platformCostHistoryLoading) {
-      applyPlatformCostHistoryPayload(range, payload);
-      renderPlatformCostPanel(provider);
-    }
-  } catch (e) {
-    if (!controller.signal.aborted) {
-      // silent - background warming should never disturb foreground data
-    }
-  } finally {
-    if (State.platformCostPrefetchControllers[key] === controller) {
-      delete State.platformCostPrefetchControllers[key];
-    }
-  }
-}
-
-function prefetchPlatformCostRanges(provider, options = {}) {
-  if (!supportsPlatformCost(provider) || getCurrentProvider() !== provider) return;
-  State.platformCostPrefetchTimers = (State.platformCostPrefetchTimers || []).filter((timer) => {
-    if (timer.provider !== provider) return true;
-    window.clearTimeout(timer.id);
-    return false;
-  });
-  abortPlatformCostPrefetches(provider);
-  const activeRange = normalizePlatformCostRange(State.platformCostRange || DEFAULT_CHART_RANGE);
-  const ranges = [...PLATFORM_COST_PREFETCH_RANGES].sort((a, b) => {
-    if (a === activeRange) return -1;
-    if (b === activeRange) return 1;
-    return PLATFORM_COST_PREFETCH_RANGES.indexOf(a) - PLATFORM_COST_PREFETCH_RANGES.indexOf(b);
-  });
-  let delay = options.delayMs || 0;
-  ranges.forEach((range) => {
-    const timeoutId = window.setTimeout(() => {
-      State.platformCostPrefetchTimers = (State.platformCostPrefetchTimers || [])
-        .filter(timer => timer.id !== timeoutId);
-      if (getCurrentProvider() !== provider) {
-        abortPlatformCostPrefetches();
-        return;
-      }
-      prefetchPlatformCostRange(provider, range, options);
-    }, delay);
-    State.platformCostPrefetchTimers.push({ id: timeoutId, provider });
-    delay += 250;
-  });
-}
-
-function startPlatformCostRefreshLoop(provider) {
-  if (!supportsPlatformCost(provider)) return;
-  if (State.platformCostRefreshProvider && State.platformCostRefreshProvider !== provider) {
-    abortPlatformCostPrefetches();
-  }
-  State.platformCostRefreshProvider = provider;
-  if (State.platformCostRefreshTimer) return;
-  State.platformCostRefreshTimer = window.setInterval(() => {
-    const currentProvider = getCurrentProvider();
-    if (currentProvider !== State.platformCostRefreshProvider || !supportsPlatformCost(currentProvider)) {
-      window.clearInterval(State.platformCostRefreshTimer);
-      State.platformCostRefreshTimer = null;
-      State.platformCostRefreshProvider = null;
-      abortPlatformCostPrefetches();
-      return;
-    }
-    prefetchPlatformCostRanges(currentProvider, { force: false });
-  }, PLATFORM_COST_REFRESH_INTERVAL_MS);
-}
-
 window.addEventListener('pagehide', () => {
   abortPlatformCostPrefetches();
-  if (State.platformCostRefreshTimer) {
-    window.clearInterval(State.platformCostRefreshTimer);
-    State.platformCostRefreshTimer = null;
-  }
-  if (State.providerDataWarmupTimer) {
-    window.clearTimeout(State.providerDataWarmupTimer);
-    State.providerDataWarmupTimer = null;
-  }
-  if (State.providerDataRollingTimer) {
-    window.clearInterval(State.providerDataRollingTimer);
-    State.providerDataRollingTimer = null;
-  }
-  State.providerDataWarmupActive = false;
 });
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     abortPlatformCostPrefetches();
-    if (State.platformCostRefreshTimer) {
-      window.clearInterval(State.platformCostRefreshTimer);
-      State.platformCostRefreshTimer = null;
-    }
-    State.platformCostRefreshProvider = null;
-    if (State.providerDataWarmupTimer) {
-      window.clearTimeout(State.providerDataWarmupTimer);
-      State.providerDataWarmupTimer = null;
-    }
-    State.providerDataWarmupActive = false;
-    return;
-  }
-  startProviderDataRollingRefresh();
-  startProviderDataWarmup({ initialDelayMs: 500 });
-  const provider = getCurrentProvider();
-  if (supportsPlatformCost(provider)) {
-    startPlatformCostRefreshLoop(provider);
-    prefetchPlatformCostRanges(provider, { delayMs: 500 });
   }
 });
 
@@ -5639,6 +5356,35 @@ function renderPlatformCostChartForSelectedRange(provider = getCurrentProvider()
   renderPlatformCostChart(provider, selectedPlatformCostRange());
 }
 
+async function refreshAPIIntegrationsHistoryForCombinedView(range, requestSeq) {
+  try {
+    const res = await authFetch(`${API_BASE}/api/api-integrations/history?range=${range}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (State.historyRequestSeq !== requestSeq) return;
+    if (getCurrentProvider() !== 'both' || State.currentRange !== range) return;
+
+    State.apiIntegrationsHistory = data;
+    State.platformCostHistoryRange = range;
+    State.allProvidersHistory = {
+      ...(State.allProvidersHistory || {}),
+      apiIntegrations: data,
+    };
+    updateCachedProviderData('history', 'both', range, {
+      apiIntegrationsHistory: data,
+    });
+    renderAllProvidersView();
+  } catch (e) {
+    // silent - API integrations history is optional secondary data
+  }
+}
+
+function scheduleAPIIntegrationsHistoryRefresh(range, requestSeq) {
+  window.setTimeout(() => {
+    refreshAPIIntegrationsHistoryForCombinedView(range, requestSeq);
+  }, 0);
+}
+
 async function fetchHistory(range, options = {}) {
   if (range === undefined) {
     range = selectedChartRange();
@@ -5696,40 +5442,27 @@ async function fetchHistory(range, options = {}) {
     if (!res.ok) throw new Error('Failed to fetch history');
     const data = await res.json();
 
-    let apiIntegrationsHistoryData = null;
-    if (requestProvider === 'both' && State.apiIntegrationsVisibility?.dashboard !== false) {
-      try {
-        const apiIntegrationsRes = await authFetch(`${API_BASE}/api/api-integrations/history?range=${range}`);
-        if (apiIntegrationsRes.ok) {
-          apiIntegrationsHistoryData = await apiIntegrationsRes.json();
-        }
-      } catch (e) {
-        // silent - API integrations summary should not break all-provider history load
-      }
-    }
-
     if (State.historyRequestSeq !== requestSeq) return;
     if (getCurrentProvider() !== requestProvider) return;
     if (requestProvider === 'codex' && State.codexAccount !== requestAccount) return;
     if (State.currentRange !== requestRange) return;
 
     const provider = requestProvider;
-    if (apiIntegrationsHistoryData) {
-      State.apiIntegrationsHistory = apiIntegrationsHistoryData;
-      State.platformCostHistoryRange = range;
-    }
     setCachedProviderData('history', requestProvider, range, {
       data,
-      apiIntegrationsHistory: apiIntegrationsHistoryData,
+      apiIntegrationsHistory: cached?.apiIntegrationsHistory || null,
     });
     setDashboardFreshness({ stale: false });
 
     if (provider === 'both') {
-      if (apiIntegrationsHistoryData) {
-        data.apiIntegrations = apiIntegrationsHistoryData;
+      if (cached?.apiIntegrationsHistory) {
+        data.apiIntegrations = cached.apiIntegrationsHistory;
       }
       State.allProvidersHistory = data;
       renderAllProvidersView();
+      if (State.apiIntegrationsVisibility?.dashboard !== false) {
+        scheduleAPIIntegrationsHistoryRefresh(range, requestSeq);
+      }
       return;
     }
 
@@ -7174,12 +6907,13 @@ function renderPlatformCostPanel(provider = getCurrentProvider()) {
 
   renderPlatformCostBreakdown(provider);
   const breakdownRange = normalizePlatformCostRange(State.platformCostBreakdownRange || DEFAULT_CHART_RANGE);
-  if (State.platformCostBreakdownHistoryRange !== breakdownRange && !State.platformCostBreakdownLoading) {
+  const chartRange = normalizePlatformCostRange(State.platformCostRange || DEFAULT_CHART_RANGE);
+  if (breakdownRange !== chartRange &&
+      State.platformCostBreakdownHistoryRange !== breakdownRange &&
+      !State.platformCostBreakdownLoading) {
     fetchPlatformCostBreakdownRange(breakdownRange, provider);
   }
   renderPlatformCostChart(provider, State.platformCostRange || DEFAULT_CHART_RANGE);
-  startPlatformCostRefreshLoop(provider);
-  prefetchPlatformCostRanges(provider, { delayMs: 500 });
 }
 
 function platformCostLoadingLabel(range) {
@@ -7943,11 +7677,6 @@ async function fetchPlatformCostHistory(range, provider) {
     if (freshCached) return;
   }
   const providerPrefix = `${provider || ''}:`;
-  State.platformCostPrefetchTimers = (State.platformCostPrefetchTimers || []).filter((timer) => {
-    if (timer.provider !== provider) return true;
-    window.clearTimeout(timer.id);
-    return false;
-  });
   Object.entries(State.platformCostPrefetchControllers || {}).forEach(([prefetchKey, controller]) => {
     if (!prefetchKey.startsWith(providerPrefix)) return;
     try {
@@ -10592,15 +10321,8 @@ function setupProviderSelector() {
   const tabs = document.getElementById('provider-tabs');
   if (!tabs) return;
   tabs.querySelectorAll('.provider-tab').forEach(tab => {
-    const warm = () => {
-      const provider = tab.dataset.provider;
-      if (provider) prefetchProviderAllRanges(provider, { force: false, delayMs: 0 });
-    };
-    tab.addEventListener('pointerenter', warm);
-    tab.addEventListener('focus', warm);
     tab.addEventListener('click', () => {
       const provider = tab.dataset.provider;
-      prefetchProviderAllRanges(provider, { force: false, delayMs: 0 });
       saveDefaultProvider(provider);
       window.location.href = `${BASE_PATH}/?provider=${provider}`;
     });
@@ -11006,10 +10728,20 @@ async function loadSettings() {
       setVal('threshold-critical-slider', n.critical_threshold);
       const warnCheck = document.getElementById('notify-warning');
       const critCheck = document.getElementById('notify-critical');
+      const overuseCheck = document.getElementById('notify-overuse');
+      const underuseCheck = document.getElementById('notify-underuse');
       const resetCheck = document.getElementById('notify-reset');
       const resetFiveHourCheck = document.getElementById('notify-reset-five-hour');
       if (warnCheck) warnCheck.checked = n.notify_warning !== false;
       if (critCheck) critCheck.checked = n.notify_critical !== false;
+      if (overuseCheck) overuseCheck.checked = n.notify_overuse !== false;
+      setVal('notify-overuse-repeat-percent', n.overuse_repeat_percent || 10);
+      if (underuseCheck) underuseCheck.checked = n.notify_underuse !== false;
+      const underuseTimes = Array.isArray(n.underuse_times) && n.underuse_times.length
+        ? n.underuse_times
+        : ['10:00', '22:00'];
+      setVal('notify-underuse-morning', underuseTimes[0] || '10:00');
+      setVal('notify-underuse-evening', underuseTimes[1] || '22:00');
       if (resetCheck) resetCheck.checked = n.notify_reset !== false;
       if (resetFiveHourCheck) resetFiveHourCheck.checked = n.notify_reset_five_hour === true;
       const authErrorCheck = document.getElementById('notify-auth-error');
@@ -12338,6 +12070,13 @@ function gatherSettings() {
       critical_threshold: parseFloat(document.getElementById('threshold-critical')?.value) || 95,
       notify_warning: document.getElementById('notify-warning')?.checked ?? true,
       notify_critical: document.getElementById('notify-critical')?.checked ?? true,
+      notify_overuse: document.getElementById('notify-overuse')?.checked ?? true,
+      overuse_repeat_percent: parseFloat(document.getElementById('notify-overuse-repeat-percent')?.value) || 10,
+      notify_underuse: document.getElementById('notify-underuse')?.checked ?? true,
+      underuse_times: [
+        document.getElementById('notify-underuse-morning')?.value || '10:00',
+        document.getElementById('notify-underuse-evening')?.value || '22:00',
+      ],
       notify_reset: document.getElementById('notify-reset')?.checked ?? true,
       notify_reset_five_hour: document.getElementById('notify-reset-five-hour')?.checked ?? false,
       notify_auth_error: document.getElementById('notify-auth-error')?.checked ?? false,
@@ -13299,9 +13038,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     startCountdowns();
     startAutoRefresh();
-    startProviderDataRollingRefresh();
-    startProviderDataWarmup({ initialDelayMs: 750 });
-    prefetchProviderAllRanges(activeProvider, { delayMs: 0, delayStepMs: 150 });
 
     // Update sessions table header for "both" mode
     const provider = getCurrentProvider();

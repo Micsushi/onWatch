@@ -3,10 +3,12 @@ package agentusage
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +16,11 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+)
+
+const (
+	codexCheckpointSize = 4 * 1024
+	codexMaxRecordSize  = 64 * 1024 * 1024
 )
 
 func ParseClaudeUsageLine(line []byte, sourcePath string, pricing *PricingMap) (*UsageEvent, error) {
@@ -110,23 +117,64 @@ func claudeFastModeCostMultiplier(model string) float64 {
 	}
 }
 
+type codexParseState struct {
+	offset                 int64
+	currentModel           string
+	currentReasoningEffort string
+	currentMode            string
+	currentFastMode        *bool
+	partial                []byte
+	fileInfo               os.FileInfo
+	checkpoint             [sha256.Size]byte
+	hasCheckpoint          bool
+}
+
 func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error) {
+	events, _, err := parseCodexUsageFile(path, pricing, codexParseState{}, true)
+	return events, err
+}
+
+func parseCodexUsageFileIncremental(path string, pricing *PricingMap, state codexParseState) ([]UsageEvent, codexParseState, error) {
+	return parseCodexUsageFile(path, pricing, state, false)
+}
+
+func parseCodexUsageFile(path string, pricing *PricingMap, state codexParseState, parseFinalRecord bool) ([]UsageEvent, codexParseState, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, state, err
 	}
 	defer file.Close()
 
+	info, err := file.Stat()
+	if err != nil {
+		return nil, state, err
+	}
+	reset := state.fileInfo != nil && (!os.SameFile(state.fileInfo, info) || state.offset > info.Size())
+	if !reset && state.hasCheckpoint {
+		checkpoint, err := codexCheckpoint(file, state.offset)
+		if err != nil {
+			return nil, state, err
+		}
+		reset = checkpoint != state.checkpoint
+	}
+	if reset {
+		state = codexParseState{}
+	}
+	if _, err := file.Seek(state.offset, io.SeekStart); err != nil {
+		return nil, state, err
+	}
+
+	next := state
+	next.fileInfo = info
+
 	sessionID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	currentModel := ""
-	currentReasoningEffort := ""
-	currentMode := ""
-	var currentFastMode *bool
 	speed := codexSpeedContext(path)
 	seenUsage := make(map[string]struct{})
 	var events []UsageEvent
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	var trailing []byte
+	scanner := bufio.NewScanner(io.MultiReader(bytes.NewReader(state.partial), file))
+	scanner.Buffer(make([]byte, 0, 64*1024), codexMaxRecordSize)
+	scanner.Split(codexLineSplit(parseFinalRecord, &trailing))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -134,21 +182,21 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 		}
 		var obj map[string]any
 		if err := json.Unmarshal([]byte(line), &obj); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, state, fmt.Errorf("%s: %w", path, err)
 		}
 		payload := object(obj["payload"])
 		if typ := firstString(obj, "type"); typ == "turn_context" {
 			if model := firstString(payload, "model", "model_name"); model != "" {
-				currentModel = model
+				next.currentModel = model
 			}
 			if effort := codexReasoningEffort(payload); effort != "" {
-				currentReasoningEffort = effort
+				next.currentReasoningEffort = effort
 			}
 			if mode := codexMode(payload); mode != "" {
-				currentMode = mode
+				next.currentMode = mode
 			}
 			if fastMode, ok := boolValue(payload, "fast_mode", "fastMode", "use_fast_model", "useFastModel"); ok {
-				currentFastMode = &fastMode
+				next.currentFastMode = &fastMode
 			}
 			continue
 		}
@@ -174,7 +222,7 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 				usage = object(nested["usage"])
 				if len(usage) > 0 {
 					if model := firstString(nested, "model", "model_name"); model != "" {
-						currentModel = model
+						next.currentModel = model
 					}
 					usageSignature = codexUsageSignature(usage)
 					break
@@ -185,13 +233,13 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 			continue
 		}
 		if model := firstString(obj, "model", "model_name"); model != "" {
-			currentModel = model
+			next.currentModel = model
 		}
-		if currentModel == "" {
+		if next.currentModel == "" {
 			continue
 		}
 		if usageSignature != "" {
-			key := strings.Join([]string{currentModel, currentReasoningEffort, currentMode, usageSignature}, "\x00")
+			key := strings.Join([]string{next.currentModel, next.currentReasoningEffort, next.currentMode, usageSignature}, "\x00")
 			if _, ok := seenUsage[key]; ok {
 				continue
 			}
@@ -204,10 +252,10 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 			Provider:            "openai",
 			SessionID:           sessionID,
 			RequestID:           firstString(obj, "request_id", "id"),
-			Model:               currentModel,
-			ReasoningEffort:     currentReasoningEffort,
-			Mode:                currentMode,
-			FastMode:            currentFastMode,
+			Model:               next.currentModel,
+			ReasoningEffort:     next.currentReasoningEffort,
+			Mode:                next.currentMode,
+			FastMode:            next.currentFastMode,
 			SpeedMode:           speed.Mode,
 			SpeedSource:         speed.Source,
 			InputTokens:         counts.InputTokens,
@@ -220,7 +268,7 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 			UsageSignature:      contentSignature,
 		}
 		costOptions := CostOptions{}
-		if currentFastMode != nil && *currentFastMode {
+		if next.currentFastMode != nil && *next.currentFastMode {
 			costOptions.CostMultiplier = codexFastModeCostMultiplier(event.Model)
 		} else if speed.Mode == "fast" {
 			costOptions.CostMultiplier = codexFastModeCostMultiplier(event.Model)
@@ -230,9 +278,61 @@ func ParseCodexUsageFile(path string, pricing *PricingMap) ([]UsageEvent, error)
 		events = append(events, event)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, state, err
 	}
-	return events, nil
+	next.offset, err = file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, state, err
+	}
+	next.partial = trailing
+	next.checkpoint, err = codexCheckpoint(file, next.offset)
+	if err != nil {
+		return nil, state, err
+	}
+	next.hasCheckpoint = next.offset > 0
+	return events, next, nil
+}
+
+func codexLineSplit(parseFinalRecord bool, trailing *[]byte) bufio.SplitFunc {
+	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			end := i
+			if end > 0 && data[end-1] == '\r' {
+				end--
+			}
+			return i + 1, data[:end], nil
+		}
+		if !atEOF || len(data) == 0 {
+			return 0, nil, nil
+		}
+		if parseFinalRecord {
+			if data[len(data)-1] == '\r' {
+				data = data[:len(data)-1]
+			}
+			return len(data), data, nil
+		}
+		*trailing = append((*trailing)[:0], data...)
+		return len(data), nil, nil
+	}
+}
+
+func codexCheckpoint(file *os.File, offset int64) ([sha256.Size]byte, error) {
+	if offset <= 0 {
+		return [sha256.Size]byte{}, nil
+	}
+	start := offset - codexCheckpointSize
+	if start < 0 {
+		start = 0
+	}
+	buf := make([]byte, int(offset-start))
+	n, err := file.ReadAt(buf, start)
+	if err != nil && err != io.EOF {
+		return [sha256.Size]byte{}, err
+	}
+	if n != len(buf) {
+		return [sha256.Size]byte{}, io.ErrUnexpectedEOF
+	}
+	return sha256.Sum256(buf), nil
 }
 
 type codexSpeedInfo struct {

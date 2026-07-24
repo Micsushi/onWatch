@@ -662,6 +662,7 @@ processResponse:
 				Provider:    "anthropic",
 				QuotaKey:    q.Name,
 				Utilization: q.Utilization,
+				ResetsAt:    q.ResetsAt,
 			})
 		}
 	}

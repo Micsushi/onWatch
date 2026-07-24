@@ -190,6 +190,53 @@ func TestParseCodexUsageFileSessionAndHeadlessLines(t *testing.T) {
 	}
 }
 
+func TestParseCodexUsageFileParsesCompleteFinalRecordWithoutNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-no-final-newline.jsonl")
+	body := `{"type":"turn_context","timestamp":"2026-05-25T12:00:00Z","payload":{"model":"gpt-5.5","effort":"medium"}}` + "\n" +
+		`{"type":"event_msg","timestamp":"2026-05-25T12:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := ParseCodexUsageFile(path, testPricing(t))
+	if err != nil {
+		t.Fatalf("ParseCodexUsageFile() error = %v", err)
+	}
+	if len(events) != 1 || events[0].Model != "gpt-5.5" || events[0].TotalTokens != 110 {
+		t.Fatalf("events = %+v, want complete final record", events)
+	}
+}
+
+func TestParseCodexUsageFileIncrementalRejectsOversizedIncompleteRecord(t *testing.T) {
+	const maxRecordSize = 64 * 1024 * 1024
+	path := filepath.Join(t.TempDir(), "rollout-oversized-tail.jsonl")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := make([]byte, 1024*1024)
+	for i := range chunk {
+		chunk[i] = 'x'
+	}
+	for written := 0; written <= maxRecordSize; written += len(chunk) {
+		if _, err := file.Write(chunk); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	events, next, err := parseCodexUsageFileIncremental(path, testPricing(t), codexParseState{})
+	if err == nil {
+		t.Fatalf("parseCodexUsageFileIncremental() error = nil, events=%d partial=%d", len(events), len(next.partial))
+	}
+	if next.offset != 0 || len(next.partial) != 0 {
+		t.Fatalf("state advanced after oversized tail: offset=%d partial=%d", next.offset, len(next.partial))
+	}
+}
+
 func TestParseCodexUsageFilePricesEachEventAtItsTimestamp(t *testing.T) {
 	pricing, err := NewPricingMapFromJSON([]byte(`{
 		"gpt-test": {

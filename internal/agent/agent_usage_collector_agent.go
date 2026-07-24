@@ -8,10 +8,7 @@ import (
 	"github.com/onllm-dev/onwatch/v2/internal/agentusage"
 )
 
-const (
-	agentUsageCollectorIntervalDefault = 15 * time.Second
-	agentUsageCollectorIntervalMax     = 15 * time.Second
-)
+const agentUsageCollectorIntervalDefault = 15 * time.Second
 
 type AgentUsageCollectorAgent struct {
 	collector *agentusage.Collector
@@ -25,9 +22,6 @@ func NewAgentUsageCollectorAgent(outDir string, pricing *agentusage.PricingMap, 
 	}
 	if interval <= 0 {
 		interval = agentUsageCollectorIntervalDefault
-	}
-	if interval > agentUsageCollectorIntervalMax {
-		interval = agentUsageCollectorIntervalMax
 	}
 	return &AgentUsageCollectorAgent{
 		collector: agentusage.NewCollector(outDir, pricing, sources, logger),

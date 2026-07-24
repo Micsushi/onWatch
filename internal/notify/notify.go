@@ -11,7 +11,7 @@ import (
 	"github.com/onllm-dev/onwatch/v2/internal/store"
 )
 
-// NotificationEngine evaluates quota statuses and sends alerts via email and push.
+// NotificationEngine evaluates quota statuses and sends alerts via email, push, and Discord.
 type NotificationEngine struct {
 	store               *store.Store
 	logger              *slog.Logger
@@ -23,16 +23,20 @@ type NotificationEngine struct {
 	cfg                 NotificationConfig
 	encryptionKey       string // current hex-encoded key for decrypting SMTP passwords
 	legacyEncryptionKey string // fallback hex-encoded key for legacy SMTP password migration
+	now                 func() time.Time
+	paceStates          map[string]paceAlertState
 }
 
 // NotificationConfig holds threshold and delivery settings.
 type NotificationConfig struct {
-	Warning   float64                      // global warning threshold (default 80)
-	Critical  float64                      // global critical threshold (default 95)
-	Overrides map[string]ThresholdOverride // per provider+quota overrides (legacy key: quota only)
-	Cooldown  time.Duration                // minimum time between notifications
-	Types     NotificationTypes            // which notification types are enabled
-	Channels  NotificationChannels         // which delivery channels are enabled
+	Warning              float64                      // global warning threshold (default 80)
+	Critical             float64                      // global critical threshold (default 95)
+	Overrides            map[string]ThresholdOverride // per provider+quota overrides (legacy key: quota only)
+	Cooldown             time.Duration                // minimum time between notifications
+	Types                NotificationTypes            // which notification types are enabled
+	Channels             NotificationChannels         // which delivery channels are enabled
+	UnderuseTimes        []string                     // local times for severe under-usage checks
+	OveruseRepeatPercent float64                      // extra utilization before repeating a red pace alert
 }
 
 // NotificationChannels controls which delivery channels are active.
@@ -92,6 +96,8 @@ type ThresholdOverride struct {
 type NotificationTypes struct {
 	Warning       bool `json:"warning"`
 	Critical      bool `json:"critical"`
+	Overuse       bool `json:"overuse"`
+	Underuse      bool `json:"underuse"`
 	Reset         bool `json:"reset"`
 	ResetFiveHour bool `json:"reset_five_hour"`
 	AuthError     bool `json:"auth_error"` // Auth failure notifications
@@ -104,8 +110,18 @@ type QuotaStatus struct {
 	AccountID     string // For multi-account providers (e.g., Codex)
 	Utilization   float64
 	Limit         float64
+	ResetsAt      *time.Time
 	ResetOccurred bool
 }
+
+type paceAlertState struct {
+	veryOver      bool
+	hasAlert      bool
+	alertPending  bool
+	lastAlertUtil float64
+}
+
+const underuseNotificationWindow = 90 * time.Minute
 
 // New creates a new NotificationEngine with default configuration.
 func New(s *store.Store, logger *slog.Logger) *NotificationEngine {
@@ -113,13 +129,17 @@ func New(s *store.Store, logger *slog.Logger) *NotificationEngine {
 		store:  s,
 		logger: logger,
 		cfg: NotificationConfig{
-			Warning:   80,
-			Critical:  95,
-			Overrides: make(map[string]ThresholdOverride),
-			Cooldown:  30 * time.Minute,
-			Types:     NotificationTypes{Warning: true, Critical: true, Reset: false},
-			Channels:  NotificationChannels{Email: true, Push: true, Discord: false},
+			Warning:              80,
+			Critical:             95,
+			Overrides:            make(map[string]ThresholdOverride),
+			Cooldown:             30 * time.Minute,
+			Types:                NotificationTypes{Warning: true, Critical: true, Overuse: true, Underuse: true, Reset: false},
+			Channels:             NotificationChannels{Email: true, Push: true, Discord: false},
+			UnderuseTimes:        []string{"10:00", "22:00"},
+			OveruseRepeatPercent: 10,
 		},
+		now:        time.Now,
+		paceStates: make(map[string]paceAlertState),
 	}
 }
 
@@ -150,21 +170,26 @@ func (e *NotificationEngine) Config() NotificationConfig {
 		overrides[k] = v
 	}
 	cfg.Overrides = overrides
+	cfg.UnderuseTimes = append([]string(nil), e.cfg.UnderuseTimes...)
 	return cfg
 }
 
 // notificationSettingsJSON matches the JSON shape saved by the handler's UpdateSettings.
 type notificationSettingsJSON struct {
-	WarningThreshold  float64               `json:"warning_threshold"`
-	CriticalThreshold float64               `json:"critical_threshold"`
-	NotifyWarning     bool                  `json:"notify_warning"`
-	NotifyCritical    bool                  `json:"notify_critical"`
-	NotifyReset       bool                  `json:"notify_reset"`
-	NotifyReset5Hour  bool                  `json:"notify_reset_five_hour"`
-	NotifyAuthError   bool                  `json:"notify_auth_error"`
-	CooldownMinutes   int                   `json:"cooldown_minutes"`
-	Channels          *NotificationChannels `json:"channels,omitempty"`
-	Overrides         []struct {
+	WarningThreshold     float64               `json:"warning_threshold"`
+	CriticalThreshold    float64               `json:"critical_threshold"`
+	NotifyWarning        bool                  `json:"notify_warning"`
+	NotifyCritical       bool                  `json:"notify_critical"`
+	NotifyOveruse        *bool                 `json:"notify_overuse,omitempty"`
+	OveruseRepeatPercent *float64              `json:"overuse_repeat_percent,omitempty"`
+	NotifyUnderuse       *bool                 `json:"notify_underuse,omitempty"`
+	UnderuseTimes        []string              `json:"underuse_times,omitempty"`
+	NotifyReset          bool                  `json:"notify_reset"`
+	NotifyReset5Hour     bool                  `json:"notify_reset_five_hour"`
+	NotifyAuthError      bool                  `json:"notify_auth_error"`
+	CooldownMinutes      int                   `json:"cooldown_minutes"`
+	Channels             *NotificationChannels `json:"channels,omitempty"`
+	Overrides            []struct {
 		QuotaKey       string  `json:"quota_key"`
 		Provider       string  `json:"provider"`
 		Warning        float64 `json:"warning"`
@@ -201,13 +226,29 @@ func (e *NotificationEngine) Reload() error {
 	if notif.CooldownMinutes > 0 {
 		e.cfg.Cooldown = time.Duration(notif.CooldownMinutes) * time.Minute
 	}
+	notifyUnderuse := true
+	if notif.NotifyUnderuse != nil {
+		notifyUnderuse = *notif.NotifyUnderuse
+	}
+	notifyOveruse := true
+	if notif.NotifyOveruse != nil {
+		notifyOveruse = *notif.NotifyOveruse
+	}
+	overuseRepeatPercent := 10.0
+	if notif.OveruseRepeatPercent != nil && *notif.OveruseRepeatPercent > 0 {
+		overuseRepeatPercent = *notif.OveruseRepeatPercent
+	}
 	e.cfg.Types = NotificationTypes{
 		Warning:       notif.NotifyWarning,
 		Critical:      notif.NotifyCritical,
+		Overuse:       notifyOveruse,
+		Underuse:      notifyUnderuse,
 		Reset:         notif.NotifyReset,
 		ResetFiveHour: notif.NotifyReset5Hour,
 		AuthError:     notif.NotifyAuthError,
 	}
+	e.cfg.UnderuseTimes = normalizedUnderuseTimes(notif.UnderuseTimes)
+	e.cfg.OveruseRepeatPercent = overuseRepeatPercent
 
 	overrides := make(map[string]ThresholdOverride, len(notif.Overrides))
 	for _, o := range notif.Overrides {
@@ -534,6 +575,9 @@ func (e *NotificationEngine) Check(status QuotaStatus) {
 		override, hasOverride = cfg.Overrides[status.QuotaKey]
 	}
 	if status.ResetOccurred {
+		e.mu.Lock()
+		delete(e.paceStates, provider+":"+quotaKey)
+		e.mu.Unlock()
 		if err := e.store.ClearNotificationLog(provider, quotaKey); err != nil {
 			e.logger.Error("failed to clear notification log on reset", "error", err)
 		}
@@ -541,6 +585,14 @@ func (e *NotificationEngine) Check(status QuotaStatus) {
 			e.sendNotification(mailer, pushSender, cfg.Channels, resetNotificationStatus(status), "reset")
 		}
 		return
+	}
+
+	if cfg.Channels.Discord && discord != nil && status.ResetsAt != nil {
+		paceCfg := cfg
+		if hasOverride && override.DisableCrit {
+			paceCfg.Types.Overuse = false
+		}
+		e.checkDiscordPace(status, paceCfg, discord)
 	}
 
 	// Resolve thresholds
@@ -566,15 +618,173 @@ func (e *NotificationEngine) Check(status QuotaStatus) {
 
 	// Check critical first (higher priority)
 	if status.Utilization >= criticalThreshold && cfg.Types.Critical && !(hasOverride && override.DisableCrit) {
-		e.sendNotification(mailer, pushSender, cfg.Channels, status, "critical")
+		channels := cfg.Channels
+		channels.Discord = false
+		e.sendNotification(mailer, pushSender, channels, status, "critical")
 		return
 	}
 
 	// Check warning
 	if status.Utilization >= warningThreshold && cfg.Types.Warning && !(hasOverride && override.DisableWarning) {
-		e.sendNotification(mailer, pushSender, cfg.Channels, status, "warning")
+		channels := cfg.Channels
+		channels.Discord = false
+		e.sendNotification(mailer, pushSender, channels, status, "warning")
 		return
 	}
+}
+
+func normalizedUnderuseTimes(values []string) []string {
+	if len(values) == 0 {
+		return []string{"10:00", "22:00"}
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if _, err := time.Parse("15:04", value); err == nil && !seen[value] {
+			result = append(result, value)
+			seen[value] = true
+		}
+	}
+	if len(result) == 0 {
+		return []string{"10:00", "22:00"}
+	}
+	return result
+}
+
+func (e *NotificationEngine) checkDiscordPace(status QuotaStatus, cfg NotificationConfig, discord *DiscordSender) {
+	now := e.now()
+	pace, ok := EvaluateWeeklyPace(status.QuotaKey, status.Utilization, *status.ResetsAt, now)
+	if !ok {
+		return
+	}
+	provider := normalizeNotificationProvider(status.Provider)
+	quotaKey := notificationQuotaKey(status)
+	stateKey := provider + ":" + quotaKey
+
+	e.mu.RLock()
+	_, knownState := e.paceStates[stateKey]
+	e.mu.RUnlock()
+	if !knownState {
+		sentAt, lastUtil, err := e.store.GetLastNotification(provider, quotaKey, "discord_very_over")
+		if err != nil {
+			e.logger.Error("failed to restore Discord pace notification state", "error", err)
+			return
+		}
+		e.mu.Lock()
+		if _, exists := e.paceStates[stateKey]; !exists {
+			e.paceStates[stateKey] = paceAlertState{
+				veryOver:      !sentAt.IsZero(),
+				hasAlert:      !sentAt.IsZero(),
+				lastAlertUtil: lastUtil,
+			}
+		}
+		e.mu.Unlock()
+	}
+
+	e.mu.Lock()
+	state := e.paceStates[stateKey]
+	if pace.Tier != PaceVeryOver {
+		wasVeryOver := state.veryOver
+		state.veryOver = false
+		state.hasAlert = false
+		state.lastAlertUtil = 0
+		e.paceStates[stateKey] = state
+		e.mu.Unlock()
+		if wasVeryOver {
+			if err := e.store.DeleteNotificationLog(provider, quotaKey, "discord_very_over"); err != nil {
+				e.logger.Error("failed to clear Discord pace notification state", "error", err)
+			}
+		}
+	} else {
+		repeatPercent := cfg.OveruseRepeatPercent
+		if repeatPercent <= 0 {
+			repeatPercent = 10
+		}
+		shouldSend := !state.alertPending &&
+			(!state.veryOver || !state.hasAlert || status.Utilization >= state.lastAlertUtil+repeatPercent)
+		state.veryOver = true
+		if shouldSend && cfg.Types.Overuse {
+			state.alertPending = true
+		}
+		e.paceStates[stateKey] = state
+		e.mu.Unlock()
+		if shouldSend && cfg.Types.Overuse {
+			sent := e.sendDiscordPace(discord, status, pace, "discord_very_over")
+			e.mu.Lock()
+			state = e.paceStates[stateKey]
+			state.alertPending = false
+			if sent {
+				state.hasAlert = true
+				state.lastAlertUtil = status.Utilization
+			}
+			e.paceStates[stateKey] = state
+			e.mu.Unlock()
+		}
+		return
+	}
+	e.checkDiscordUnderuse(status, cfg, discord, pace, now)
+}
+
+func (e *NotificationEngine) checkDiscordUnderuse(status QuotaStatus, cfg NotificationConfig, discord *DiscordSender, pace WeeklyPace, now time.Time) {
+	if !cfg.Types.Underuse || pace.Tier != PaceVeryUnder {
+		return
+	}
+	var latestSlot time.Time
+	var latestValue string
+	for _, value := range cfg.UnderuseTimes {
+		parsed, err := time.Parse("15:04", value)
+		if err != nil {
+			continue
+		}
+		slot := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, now.Location())
+		if !now.Before(slot) && now.Sub(slot) <= underuseNotificationWindow &&
+			(latestSlot.IsZero() || slot.After(latestSlot)) {
+			latestSlot = slot
+			latestValue = value
+		}
+	}
+	if latestSlot.IsZero() {
+		return
+	}
+	provider := normalizeNotificationProvider(status.Provider)
+	quotaKey := notificationQuotaKey(status)
+	notifType := "discord_very_under_" + strings.ReplaceAll(latestValue, ":", "")
+	sentAt, _, err := e.store.GetLastNotification(provider, quotaKey, notifType)
+	if err != nil {
+		e.logger.Error("failed to check under-usage notification log", "error", err)
+		return
+	}
+	if !sentAt.IsZero() && !sentAt.Before(latestSlot) {
+		return
+	}
+	e.sendDiscordPace(discord, status, pace, notifType)
+}
+
+func (e *NotificationEngine) sendDiscordPace(discord *DiscordSender, status QuotaStatus, pace WeeklyPace, notifType string) bool {
+	provider := normalizeNotificationProvider(status.Provider)
+	quotaKey := notificationQuotaKey(status)
+	providerName := titleCase(provider)
+	quotaName := strings.ReplaceAll(status.QuotaKey, "_", " ")
+	var subject, body string
+	if pace.Tier == PaceVeryUnder {
+		subject = fmt.Sprintf("[onWatch] %s Very Under Pace", providerName)
+		body = fmt.Sprintf("Quota: %s\nUsage: %.1f%%\nPace target: %.1f%%\nVery under pace by: %.1f%%",
+			quotaName, status.Utilization, pace.ExpectedUsed, -pace.Delta)
+	} else {
+		subject = fmt.Sprintf("[onWatch] %s Very Over Pace", providerName)
+		body = fmt.Sprintf("Quota: %s\nUsage: %.1f%%\nPace target: %.1f%%\nVery over pace by: %.1f%%",
+			quotaName, status.Utilization, pace.ExpectedUsed, pace.Delta)
+	}
+	if err := discord.Send(subject, body); err != nil {
+		e.logger.Error("failed to send Discord pace notification", "error", err,
+			"quota", quotaKey, "type", notifType)
+		return false
+	}
+	if err := e.store.UpsertNotificationLog(provider, quotaKey, notifType, status.Utilization); err != nil {
+		e.logger.Error("failed to log Discord pace notification", "error", err)
+	}
+	return true
 }
 
 func shouldSendResetNotification(types NotificationTypes, status QuotaStatus) bool {
@@ -737,10 +947,9 @@ func notificationOverrideKey(provider, quotaKey string) string {
 }
 
 // notificationQuotaKey generates a unique key for notification tracking.
-// For multi-account providers like Codex, the key includes the account ID.
+// For multi-account providers, the key includes the account ID.
 func notificationQuotaKey(status QuotaStatus) string {
 	key := status.QuotaKey
-	// Include account ID for multi-account providers (Codex)
 	// AccountID "1" is the default account, so we only prefix for other accounts
 	if status.AccountID != "" && status.AccountID != "1" {
 		key = status.AccountID + ":" + key

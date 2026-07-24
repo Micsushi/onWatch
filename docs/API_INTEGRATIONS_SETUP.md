@@ -46,7 +46,7 @@ Optional environment variables:
 ```env
 ONWATCH_API_INTEGRATIONS_ENABLED=true
 ONWATCH_API_INTEGRATIONS_DIR=~/.onwatch/api-integrations
-ONWATCH_API_INTEGRATIONS_RETENTION=1440h
+ONWATCH_API_INTEGRATIONS_RETENTION=0
 ONWATCH_AGENT_USAGE_PRICING_JSON=
 ONWATCH_CURSOR_USAGE_CSV=
 ```
@@ -56,8 +56,8 @@ If you change `ONWATCH_API_INTEGRATIONS_DIR`, point your scripts and onWatch at 
 Retention notes:
 
 - `ONWATCH_API_INTEGRATIONS_RETENTION` controls how long ingested API Integrations events are kept in SQLite
-- default retention is `1440h` which is 60 days
-- set `ONWATCH_API_INTEGRATIONS_RETENTION=0` to disable database pruning
+- default retention is `0`, so history is kept until you delete it
+- set a duration such as `1440h` to prune events older than 60 days
 - pruning applies only to the SQLite table, not to the source `.jsonl` files
 - `ONWATCH_AGENT_USAGE_PRICING_JSON` can point to a LiteLLM-compatible pricing JSON file to override built-in model prices
 - `ONWATCH_CURSOR_USAGE_CSV` can point to a Cursor usage export CSV for local Cursor token/cost ingestion
@@ -358,8 +358,7 @@ This means Custom API Integrations telemetry is identifiable and queryable indep
 
 Database retention behavior:
 
-- onWatch automatically prunes old rows from `api_integration_usage_events`
-- the pruning cutoff is controlled by `ONWATCH_API_INTEGRATIONS_RETENTION`
-- the default is 60 days
+- onWatch keeps rows in `api_integration_usage_events` until you delete them by default
+- automatic pruning is enabled only when `ONWATCH_API_INTEGRATIONS_RETENTION` is set to a positive duration
 - source `.jsonl` files are not pruned or compacted by onWatch
 - if you want smaller source logs, rotate or remove the JSONL files manually

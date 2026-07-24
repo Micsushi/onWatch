@@ -319,10 +319,15 @@ func TestHandler_CodexProfilesAndUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOrCreateProviderAccount(personal): %v", err)
 	}
+	if _, err := s.GetOrCreateProviderAccount("codex", "imported"); err != nil {
+		t.Fatalf("GetOrCreateProviderAccount(imported): %v", err)
+	}
 	insertCodexWebSnapshot(t, s, workAcc.ID, "pro")
 	insertCodexWebSnapshot(t, s, personalAcc.ID, "free")
 
-	h := NewHandler(s, nil, nil, nil, createTestConfigWithSynthetic())
+	cfg := createTestConfigWithSynthetic()
+	cfg.CodexToken = "codex_test_token"
+	h := NewHandler(s, nil, nil, nil, cfg)
 
 	rr := httptest.NewRecorder()
 	h.CodexProfiles(rr, httptest.NewRequest(http.MethodGet, "/api/codex/profiles", nil))
@@ -346,6 +351,35 @@ func TestHandler_CodexProfilesAndUsage(t *testing.T) {
 	h.CodexAccountsUsage(rr, httptest.NewRequest(http.MethodGet, "/api/codex/accounts", nil))
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"accounts"`) {
 		t.Fatalf("unexpected CodexAccountsUsage response: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var accountsResponse struct {
+		Accounts []map[string]interface{} `json:"accounts"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &accountsResponse); err != nil {
+		t.Fatalf("decode CodexAccountsUsage response: %v", err)
+	}
+	if len(accountsResponse.Accounts) != 3 {
+		t.Fatalf("expected all saved accounts from account usage endpoint, got %d: %s", len(accountsResponse.Accounts), rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	h.Current(rr, httptest.NewRequest(http.MethodGet, "/api/current?provider=both", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected current response status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var currentResponse struct {
+		CodexAccounts []map[string]interface{} `json:"codexAccounts"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &currentResponse); err != nil {
+		t.Fatalf("decode current response: %v", err)
+	}
+	if len(currentResponse.CodexAccounts) != 2 {
+		t.Fatalf("expected only Codex accounts with quota telemetry on dashboard, got %d: %s", len(currentResponse.CodexAccounts), rr.Body.String())
+	}
+	for _, account := range currentResponse.CodexAccounts {
+		if account["accountName"] == "imported" {
+			t.Fatalf("quota-less imported account should not become a dashboard card: %s", rr.Body.String())
+		}
 	}
 }
 

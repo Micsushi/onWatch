@@ -255,8 +255,8 @@ func TestConfig_DefaultValues(t *testing.T) {
 	if cfg.LogLevel != "info" {
 		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "info")
 	}
-	if cfg.APIIntegrationsRetention != 60*24*time.Hour {
-		t.Errorf("APIIntegrationsRetention = %v, want %v", cfg.APIIntegrationsRetention, 60*24*time.Hour)
+	if cfg.APIIntegrationsRetention != 0 {
+		t.Errorf("APIIntegrationsRetention = %v, want disabled retention", cfg.APIIntegrationsRetention)
 	}
 }
 

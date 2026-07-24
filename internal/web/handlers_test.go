@@ -4048,6 +4048,64 @@ func TestHandler_UpdateSettings_Notifications(t *testing.T) {
 	}
 }
 
+func TestHandler_UpdateSettings_NotificationPaceSchedule(t *testing.T) {
+	t.Parallel()
+	s, _ := store.New(":memory:")
+	defer s.Close()
+	h := NewHandler(s, nil, nil, nil, createTestConfigWithSynthetic())
+
+	body := strings.NewReader(`{"notifications":{"warning_threshold":60,"critical_threshold":85,"notify_overuse":false,"overuse_repeat_percent":7.5,"notify_underuse":true,"underuse_times":["09:15","21:45"],"cooldown_minutes":15}}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/settings", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.UpdateSettings(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	value, _ := s.GetSetting("notifications")
+	if !strings.Contains(value, `"notify_overuse":false`) ||
+		!strings.Contains(value, `"overuse_repeat_percent":7.5`) ||
+		!strings.Contains(value, `"notify_underuse":true`) ||
+		!strings.Contains(value, `"underuse_times":["09:15","21:45"]`) {
+		t.Fatalf("pace schedule not saved: %s", value)
+	}
+}
+
+func TestHandler_UpdateSettings_NotificationPaceRejectsInvalidRepeatStep(t *testing.T) {
+	t.Parallel()
+	s, _ := store.New(":memory:")
+	defer s.Close()
+	h := NewHandler(s, nil, nil, nil, createTestConfigWithSynthetic())
+
+	body := strings.NewReader(`{"notifications":{"warning_threshold":60,"critical_threshold":85,"overuse_repeat_percent":0,"cooldown_minutes":15}}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/settings", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.UpdateSettings(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandler_UpdateSettings_NotificationPaceScheduleRejectsInvalidTime(t *testing.T) {
+	t.Parallel()
+	s, _ := store.New(":memory:")
+	defer s.Close()
+	h := NewHandler(s, nil, nil, nil, createTestConfigWithSynthetic())
+
+	body := strings.NewReader(`{"notifications":{"warning_threshold":60,"critical_threshold":85,"notify_underuse":true,"underuse_times":["25:00"],"cooldown_minutes":15}}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/settings", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.UpdateSettings(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestHandler_UpdateSettings_Notifications_InvalidThresholds(t *testing.T) {
 	t.Parallel()
 	s, _ := store.New(":memory:")

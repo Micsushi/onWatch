@@ -335,6 +335,7 @@ func (a *CodexAgent) poll(ctx context.Context) {
 				AccountID:   fmt.Sprintf("%d", a.accountID),
 				Utilization: q.Utilization,
 				Limit:       100,
+				ResetsAt:    q.ResetsAt,
 			})
 		}
 	}

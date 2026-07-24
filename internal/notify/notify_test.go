@@ -114,6 +114,12 @@ func TestNotificationEngine_Reload_Defaults(t *testing.T) {
 	if cfg.Types.Reset {
 		t.Error("Default Types.Reset should be false")
 	}
+	if !cfg.Types.Underuse {
+		t.Error("Default Types.Underuse should be true")
+	}
+	if got := strings.Join(cfg.UnderuseTimes, ","); got != "10:00,22:00" {
+		t.Errorf("Default UnderuseTimes = %q, want 10:00,22:00", got)
+	}
 }
 
 func TestNotificationEngine_Reload_CustomValues(t *testing.T) {

@@ -33,7 +33,11 @@ This fork keeps upstream onWatch as the base, but it is tuned for my local Windo
 - Discord webhook settings live in dashboard settings.
 - Discord webhook URLs are encrypted before storage when an encryption key is available.
 - Settings includes a dedicated Discord test button.
-- Discord delivery is used for quota, reset, and auth error notifications when enabled.
+- Discord threshold delivery follows weekly pace state: orange is silent, red notifies on entry and after a configurable additional-usage step that defaults to 10 percentage points.
+- Purple very-under-pace quotas notify at configurable local times, defaulting to 10:00 and 22:00.
+- Red over-usage and purple under-usage Discord alerts can be enabled independently in Settings.
+- Discord pace state and scheduled under-usage delivery are tracked independently per provider, quota, and account.
+- Discord delivery remains available for reset and auth error notifications when enabled.
 - 5-hour reset notifications are off by default and can be enabled separately from other reset notifications.
 - Browser push and SMTP notification behavior remains available.
 
@@ -54,14 +58,12 @@ This fork keeps upstream onWatch as the base, but it is tuned for my local Windo
 - Notification channel settings now support `email`, `push`, and `discord`.
 - Personal fork preferences are stored in the database under the `fork_preferences` setting.
 - Notification settings support `notify_reset_five_hour`; it defaults to false.
+- Notification settings support `notify_overuse`, `overuse_repeat_percent`, `notify_underuse`, and `underuse_times`; defaults enable both pace alerts, repeat red alerts every 10 additional percentage points, and check purple quotas at `10:00` and `22:00`.
 
 ## Still Planned
 
 - Reset-refresh activator: send one minimal provider-specific message after a quota reset to start providers that only begin timers after first use.
 - Codex-first refresh activator rollout, followed by other weekly-limit providers.
-- Peak-hour Discord warnings, capped at once per day per provider.
-- Weekly burst warnings per provider at 20% used in 24 hours, then every additional 10%.
-- Underuse warnings when a weekly quota is likely to go unused.
 - Cross-service equivalent capacity metric for comparing Codex Pro capacity against lower-tier provider plans.
 - Better Antigravity display for its separate quota model.
 

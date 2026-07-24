@@ -46,3 +46,19 @@ func TestAgentUsageCollectorAgentRunCollectsImmediately(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 }
+
+func TestNewAgentUsageCollectorAgentPreservesConfiguredInterval(t *testing.T) {
+	ag := NewAgentUsageCollectorAgent(t.TempDir(), nil, nil, 120*time.Second, nil)
+
+	if ag.interval != 120*time.Second {
+		t.Fatalf("interval = %s, want 2m0s", ag.interval)
+	}
+}
+
+func TestNewAgentUsageCollectorAgentDefaultsNonPositiveInterval(t *testing.T) {
+	ag := NewAgentUsageCollectorAgent(t.TempDir(), nil, nil, 0, nil)
+
+	if ag.interval != agentUsageCollectorIntervalDefault {
+		t.Fatalf("interval = %s, want %s", ag.interval, agentUsageCollectorIntervalDefault)
+	}
+}
