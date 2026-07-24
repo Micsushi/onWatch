@@ -1,6 +1,100 @@
 package agentusage
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestPricingMapCalculateCostAtUsesEffectivePeriod(t *testing.T) {
+	pricing, err := NewPricingMapFromJSON([]byte(`{
+		"gpt-test": {
+			"history": [
+				{
+					"effective_from": "2026-01-01T00:00:00Z",
+					"input_cost_per_token": 0.000010
+				},
+				{
+					"effective_from": "2026-07-01T00:00:00Z",
+					"input_cost_per_token": 0.000005
+				}
+			]
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("NewPricingMapFromJSON() error = %v", err)
+	}
+
+	counts := TokenCounts{InputTokens: 100}
+	tests := []struct {
+		name string
+		at   time.Time
+		want float64
+	}{
+		{name: "before earliest uses earliest", at: time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC), want: 0.001},
+		{name: "old period", at: time.Date(2026, 6, 30, 23, 59, 59, 0, time.UTC), want: 0.001},
+		{name: "new period", at: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), want: 0.0005},
+		{name: "zero uses latest", at: time.Time{}, want: 0.0005},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := pricing.CalculateCostAt("gpt-test", test.at, counts, CostOptions{})
+			if got != test.want {
+				t.Fatalf("cost = %.8f, want %.8f", got, test.want)
+			}
+		})
+	}
+
+	if got := pricing.CalculateCost("gpt-test", counts, CostOptions{}); got != 0.0005 {
+		t.Fatalf("latest cost = %.8f, want %.8f", got, 0.0005)
+	}
+}
+
+func TestPricingMapRejectsEmptyHistory(t *testing.T) {
+	_, err := NewPricingMapFromJSON([]byte(`{"gpt-test":{"history":[]}}`))
+	if err == nil || !strings.Contains(err.Error(), "history is empty") {
+		t.Fatalf("error = %v, want empty history error", err)
+	}
+}
+
+func TestPricingMapRejectsInvalidEffectiveDate(t *testing.T) {
+	_, err := NewPricingMapFromJSON([]byte(`{
+		"gpt-test": {
+			"history": [{
+				"effective_from": "not-a-date",
+				"input_cost_per_token": 0.000005
+			}]
+		}
+	}`))
+	if err == nil || !strings.Contains(err.Error(), "effective_from") {
+		t.Fatalf("error = %v, want effective_from error", err)
+	}
+}
+
+func TestDefaultPricingMapVersionsGPTPricingByLaunchDate(t *testing.T) {
+	pricing, err := DefaultPricingMap()
+	if err != nil {
+		t.Fatalf("DefaultPricingMap() error = %v", err)
+	}
+
+	tests := []struct {
+		model string
+		want  time.Time
+	}{
+		{model: "gpt-5.5", want: time.Date(2026, 4, 23, 0, 0, 0, 0, time.UTC)},
+		{model: "gpt-5.6-sol", want: time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC)},
+		{model: "gpt-5.6-terra", want: time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, test := range tests {
+		periods, ok := pricing.lookup(test.model, nil)
+		if !ok || len(periods) != 1 {
+			t.Fatalf("%s periods = %v, want one period", test.model, periods)
+		}
+		if !periods[0].EffectiveFrom.Equal(test.want) {
+			t.Fatalf("%s effective_from = %s, want %s", test.model, periods[0].EffectiveFrom, test.want)
+		}
+	}
+}
 
 func TestPricingMapCalculateCostUsesInputOutputCacheAndReasoning(t *testing.T) {
 	pricing, err := NewPricingMapFromJSON([]byte(`{
