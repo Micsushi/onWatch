@@ -112,10 +112,14 @@ func TestNotificationEngine_DiscordVeryOverPaceEntryAndTenPointSteps(t *testing.
 	if len(messages) != 4 {
 		t.Fatalf("Discord messages = %d, want 4: %v", len(messages), messages)
 	}
-	for _, want := range []string{"72.0%", "82.0%", "Codex"} {
+	for _, want := range []string{"72.0%", "82.0%", "[codex]"} {
 		if !strings.Contains(strings.Join(messages, "\n"), want) {
 			t.Errorf("Discord messages missing %q: %v", want, messages)
 		}
+	}
+	if joined := strings.Join(messages, "\n"); !strings.Contains(joined,
+		"[codex] very over pace: 72% instead of 43%, resets in 4d") {
+		t.Errorf("Discord messages missing detailed Codex title: %v", messages)
 	}
 }
 
@@ -326,6 +330,10 @@ func TestNotificationEngine_DiscordVeryUnderPaceAtDefaultTimes(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(messages, "\n"), "Very under pace") {
 		t.Fatalf("under-usage message missing pace state: %v", messages)
+	}
+	if !strings.Contains(messages[0],
+		"[claude] very under pace: 20% instead of 43%, resets in 4d") {
+		t.Errorf("under-usage message missing detailed Claude title: %v", messages)
 	}
 }
 

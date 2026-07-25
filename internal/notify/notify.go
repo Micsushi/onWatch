@@ -764,15 +764,20 @@ func (e *NotificationEngine) checkDiscordUnderuse(status QuotaStatus, cfg Notifi
 func (e *NotificationEngine) sendDiscordPace(discord *DiscordSender, status QuotaStatus, pace WeeklyPace, notifType string) bool {
 	provider := normalizeNotificationProvider(status.Provider)
 	quotaKey := notificationQuotaKey(status)
-	providerName := titleCase(provider)
 	quotaName := strings.ReplaceAll(status.QuotaKey, "_", " ")
+	resetIn := "unknown"
+	if status.ResetsAt != nil {
+		resetIn = formatPaceResetDuration(status.ResetsAt.Sub(e.now()))
+	}
 	var subject, body string
 	if pace.Tier == PaceVeryUnder {
-		subject = fmt.Sprintf("[onWatch] %s Very Under Pace", providerName)
+		subject = fmt.Sprintf("[%s] very under pace: %.0f%% instead of %.0f%%, resets in %s",
+			paceDiscordProvider(provider), status.Utilization, pace.ExpectedUsed, resetIn)
 		body = fmt.Sprintf("Quota: %s\nUsage: %.1f%%\nPace target: %.1f%%\nVery under pace by: %.1f%%",
 			quotaName, status.Utilization, pace.ExpectedUsed, -pace.Delta)
 	} else {
-		subject = fmt.Sprintf("[onWatch] %s Very Over Pace", providerName)
+		subject = fmt.Sprintf("[%s] very over pace: %.0f%% instead of %.0f%%, resets in %s",
+			paceDiscordProvider(provider), status.Utilization, pace.ExpectedUsed, resetIn)
 		body = fmt.Sprintf("Quota: %s\nUsage: %.1f%%\nPace target: %.1f%%\nVery over pace by: %.1f%%",
 			quotaName, status.Utilization, pace.ExpectedUsed, pace.Delta)
 	}
@@ -785,6 +790,35 @@ func (e *NotificationEngine) sendDiscordPace(discord *DiscordSender, status Quot
 		e.logger.Error("failed to log Discord pace notification", "error", err)
 	}
 	return true
+}
+
+func paceDiscordProvider(provider string) string {
+	if normalizeNotificationProvider(provider) == "anthropic" {
+		return "claude"
+	}
+	return normalizeNotificationProvider(provider)
+}
+
+func formatPaceResetDuration(duration time.Duration) string {
+	if duration <= 0 {
+		return "now"
+	}
+	duration = duration.Truncate(time.Minute)
+	days := duration / (24 * time.Hour)
+	hours := (duration % (24 * time.Hour)) / time.Hour
+	minutes := (duration % time.Hour) / time.Minute
+	switch {
+	case days > 0 && hours > 0:
+		return fmt.Sprintf("%dd %dh", days, hours)
+	case days > 0:
+		return fmt.Sprintf("%dd", days)
+	case hours > 0 && minutes > 0:
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	case hours > 0:
+		return fmt.Sprintf("%dh", hours)
+	default:
+		return fmt.Sprintf("%dm", minutes)
+	}
 }
 
 func shouldSendResetNotification(types NotificationTypes, status QuotaStatus) bool {

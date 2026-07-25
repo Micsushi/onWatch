@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/onllm-dev/onwatch/v2/internal/notify"
 	"golang.org/x/crypto/hkdf"
@@ -101,8 +102,59 @@ func ReEncryptAllData(store interface {
 	if err := reEncryptSMTPPassword(store, oldKey, newKey); err != nil {
 		errors["smtp"] = err.Error()
 	}
+	if err := reEncryptDiscordWebhook(store, oldKey, newKey); err != nil {
+		errors["discord"] = err.Error()
+	}
 
 	return errors
+}
+
+func reEncryptDiscordWebhook(store interface {
+	GetSetting(key string) (string, error)
+	SetSetting(key, value string) error
+}, oldKey, newKey string) error {
+	discordJSON, err := store.GetSetting("discord")
+	if err != nil || discordJSON == "" {
+		return nil
+	}
+
+	var discordSettings map[string]interface{}
+	if err := json.Unmarshal([]byte(discordJSON), &discordSettings); err != nil {
+		return fmt.Errorf("failed to parse Discord settings: %w", err)
+	}
+
+	webhook, _ := discordSettings["webhook_url"].(string)
+	if webhook == "" {
+		return nil
+	}
+
+	plaintext := webhook
+	if !strings.HasPrefix(webhook, "https://discord.com/api/webhooks/") &&
+		!strings.HasPrefix(webhook, "https://discordapp.com/api/webhooks/") {
+		ciphertext := strings.TrimPrefix(webhook, "enc:")
+		plaintext, err = notify.Decrypt(ciphertext, oldKey)
+		if err != nil {
+			if _, newErr := notify.Decrypt(ciphertext, newKey); newErr == nil {
+				return nil
+			}
+			return fmt.Errorf("failed to decrypt Discord webhook with old key: %w", err)
+		}
+	}
+
+	encryptedWebhook, err := notify.Encrypt(plaintext, newKey)
+	if err != nil {
+		return fmt.Errorf("failed to re-encrypt Discord webhook: %w", err)
+	}
+	discordSettings["webhook_url"] = encryptedWebhook
+
+	updatedJSON, err := json.Marshal(discordSettings)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Discord settings: %w", err)
+	}
+	if err := store.SetSetting("discord", string(updatedJSON)); err != nil {
+		return fmt.Errorf("failed to save Discord settings: %w", err)
+	}
+	return nil
 }
 
 // reEncryptSMTPPassword re-encrypts the SMTP password when admin password changes.

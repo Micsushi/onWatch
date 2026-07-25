@@ -199,6 +199,40 @@ func TestReEncryptAllData_Success(t *testing.T) {
 	}
 }
 
+func TestReEncryptAllData_ReEncryptsDiscordWebhook(t *testing.T) {
+	setTestEncryptionSalt(t, []byte("abcdefghijklmnop"))
+	store := newMemorySettingStore()
+	oldKey := DeriveEncryptionKey("old-hash", nil)
+	newKey := DeriveEncryptionKey("new-hash", nil)
+	webhook := "https://discord.com/api/webhooks/123/token"
+	encryptedWebhook, err := notify.Encrypt(webhook, oldKey)
+	if err != nil {
+		t.Fatalf("notify.Encrypt() error = %v", err)
+	}
+	store.settings["discord"] = `{"enabled":true,"webhook_url":"` + encryptedWebhook + `"}`
+
+	errs := ReEncryptAllData(store, "old-hash", "new-hash")
+	if len(errs) != 0 {
+		t.Fatalf("ReEncryptAllData() errors = %v, want none", errs)
+	}
+
+	var gotDiscord map[string]any
+	if err := json.Unmarshal([]byte(store.settings["discord"]), &gotDiscord); err != nil {
+		t.Fatalf("failed to parse updated Discord setting: %v", err)
+	}
+	ciphertext, _ := gotDiscord["webhook_url"].(string)
+	plaintext, err := notify.Decrypt(ciphertext, newKey)
+	if err != nil {
+		t.Fatalf("notify.Decrypt() with new key error = %v", err)
+	}
+	if plaintext != webhook {
+		t.Fatalf("decrypted webhook = %q, want %q", plaintext, webhook)
+	}
+	if enabled, _ := gotDiscord["enabled"].(bool); !enabled {
+		t.Fatal("Discord enabled setting was not preserved")
+	}
+}
+
 func TestReEncryptSMTPPassword_Branches(t *testing.T) {
 	setTestEncryptionSalt(t, []byte("abcdefghijklmnop"))
 	oldKey := DeriveEncryptionKey("old-hash", nil)
