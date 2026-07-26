@@ -306,13 +306,18 @@ func (a *APIIntegrationsIngestAgent) pruneExpiredUsageEvents() error {
 	}
 
 	cutoff := now.Add(-a.retention)
-	deleted, err := a.store.DeleteAPIIntegrationUsageEventsOlderThan(cutoff)
+	result, err := a.store.CompactAPIIntegrationUsageEvents(cutoff)
 	if err != nil {
 		return err
 	}
 	a.lastPrune = now
-	if deleted > 0 {
-		a.logger.Info("API integrations usage retention pruned events", "deleted", deleted, "cutoff", cutoff.Format(time.RFC3339))
+	if result.CompactedEvents > 0 {
+		a.logger.Info(
+			"API integrations usage retention compacted events",
+			"compacted_events", result.CompactedEvents,
+			"hourly_rows", result.HourlyRows,
+			"cutoff", cutoff.Format(time.RFC3339),
+		)
 	}
 	return nil
 }

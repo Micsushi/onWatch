@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +22,48 @@ func insertAPIIntegrationEventForTest(t *testing.T, s *store.Store, line, source
 	}
 	if _, err := s.InsertAPIIntegrationUsageEvent(event); err != nil {
 		t.Fatalf("InsertAPIIntegrationUsageEvent: %v", err)
+	}
+}
+
+func TestAPIIntegrationResponseCacheKeepsStalePayload(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	payload := map[string]interface{}{"saved": true}
+	var cache apiIntegrationResponseCache
+	cache.set("current", 1, now, payload)
+
+	if _, ok := cache.get("current", 2, now); ok {
+		t.Fatal("version-mismatched payload reported as fresh")
+	}
+	stale, ok := cache.getStale("current")
+	if !ok {
+		t.Fatal("version-mismatched payload was discarded instead of remaining available as stale data")
+	}
+	if stale["saved"] != true {
+		t.Fatalf("stale payload=%v want saved payload", stale)
+	}
+}
+
+func TestAPIIntegrationsCurrentUsesOneAggregateQuery(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("api_integrations_handlers.go")
+	if err != nil {
+		t.Fatalf("read API integrations handler: %v", err)
+	}
+	text := string(source)
+	start := strings.Index(text, "func (h *Handler) buildAPIIntegrationsCurrent()")
+	end := strings.Index(text[start:], "\n// APIIntegrationsHistory")
+	if start < 0 || end < 0 {
+		t.Fatal("could not isolate buildAPIIntegrationsCurrent")
+	}
+	currentBuilder := text[start : start+end]
+	if strings.Contains(currentBuilder, "QueryAPIIntegrationUsageSummary()") {
+		t.Fatal("current summary still performs a separate full-table summary query")
+	}
+	if !strings.Contains(currentBuilder, "QueryAPIIntegrationUsageEffortSummary()") {
+		t.Fatal("current summary must retain the detailed aggregate query")
 	}
 }
 
@@ -131,6 +175,59 @@ func TestHandler_APIIntegrationsCurrent_GroupedTotals(t *testing.T) {
 	}
 	if len(report.Providers) != 1 || report.Providers[0].Accounts[0].Account != "default" {
 		t.Fatalf("report providers=%+v", report.Providers)
+	}
+}
+
+func TestHandler_APIIntegrationsCurrent_ServesStaleWhileRefreshing(t *testing.T) {
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	defer s.Close()
+
+	insertAPIIntegrationEventForTest(t, s, `{"ts":"2026-04-03T12:00:00Z","integration":"notes","provider":"anthropic","model":"claude","prompt_tokens":10,"completion_tokens":5}`, "/tmp/api-integrations/notes.jsonl")
+	h := NewHandler(s, nil, nil, nil, &config.Config{APIIntegrationsEnabled: true, APIIntegrationsDir: "/tmp/api-integrations"})
+	req := httptest.NewRequest(http.MethodGet, "/api/api-integrations/current", nil)
+	first := httptest.NewRecorder()
+	h.APIIntegrationsCurrent(first, req)
+
+	insertAPIIntegrationEventForTest(t, s, `{"ts":"2026-04-03T12:01:00Z","integration":"notes","provider":"anthropic","model":"claude","prompt_tokens":4,"completion_tokens":2}`, "/tmp/api-integrations/notes.jsonl")
+	stale := httptest.NewRecorder()
+	h.APIIntegrationsCurrent(stale, req)
+
+	if got := stale.Header().Get("X-OnWatch-Data-State"); got != "stale" {
+		t.Fatalf("data state=%q want stale", got)
+	}
+	var staleResponse map[string]struct {
+		RequestCount int `json:"requestCount"`
+	}
+	if err := json.Unmarshal(stale.Body.Bytes(), &staleResponse); err != nil {
+		t.Fatalf("json.Unmarshal stale response: %v", err)
+	}
+	if got := staleResponse["notes"].RequestCount; got != 1 {
+		t.Fatalf("stale requestCount=%d want 1", got)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current := httptest.NewRecorder()
+		h.APIIntegrationsCurrent(current, req)
+		if current.Header().Get("X-OnWatch-Data-State") == "fresh" {
+			var response map[string]struct {
+				RequestCount int `json:"requestCount"`
+			}
+			if err := json.Unmarshal(current.Body.Bytes(), &response); err != nil {
+				t.Fatalf("json.Unmarshal fresh response: %v", err)
+			}
+			if got := response["notes"].RequestCount; got != 2 {
+				t.Fatalf("fresh requestCount=%d want 2", got)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for refreshed API integration summary")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -298,6 +395,41 @@ func TestHandler_APIIntegrationsSessions_IncludesUnsampledTotals(t *testing.T) {
 	}
 }
 
+func TestHandler_APIIntegrationsSessions_CanSkipSessionGrouping(t *testing.T) {
+	t.Parallel()
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	defer s.Close()
+
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Minute)
+	for i := 0; i < 3; i++ {
+		line := `{"ts":"` + base.Add(time.Duration(i)*time.Minute).Format(time.RFC3339) + `","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":10,"completion_tokens":5,"cost_usd":0.25,"metadata":{"session_id":"chat-a"}}`
+		insertAPIIntegrationEventForTest(t, s, line, "/tmp/api-integrations/codex-a.jsonl")
+	}
+
+	h := NewHandler(s, nil, nil, nil, &config.Config{APIIntegrationsEnabled: true, APIIntegrationsDir: "/tmp/api-integrations"})
+	req := httptest.NewRequest(http.MethodGet, "/api/api-integrations/sessions?range=24h&integration=Codex%20CLI&includeSessions=false", nil)
+	rr := httptest.NewRecorder()
+
+	h.APIIntegrationsSessions(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200", rr.Code)
+	}
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if _, ok := response["Codex CLI"]; ok {
+		t.Fatal("session rows were returned even though includeSessions=false")
+	}
+	if len(response["_totals"]) == 0 || len(response["_models"]) == 0 {
+		t.Fatalf("summary data missing: %s", rr.Body.String())
+	}
+}
+
 func TestHandler_APIIntegrationsHistory_InvalidRange(t *testing.T) {
 	t.Parallel()
 	s, err := store.New(":memory:")
@@ -314,6 +446,56 @@ func TestHandler_APIIntegrationsHistory_InvalidRange(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", rr.Code)
+	}
+}
+
+func TestHandler_APIIntegrationsHistory_CustomRangeReportsHourlyArchive(t *testing.T) {
+	t.Parallel()
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	defer s.Close()
+
+	insertAPIIntegrationEventForTest(t, s,
+		`{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"cost_usd":0.25}`,
+		"/tmp/api-integrations/archive.jsonl",
+	)
+	if _, err := s.CompactAPIIntegrationUsageEvents(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("CompactAPIIntegrationUsageEvents: %v", err)
+	}
+
+	h := NewHandler(s, nil, nil, nil, &config.Config{
+		APIIntegrationsEnabled:   true,
+		APIIntegrationsDir:       "/tmp/api-integrations",
+		APIIntegrationsRetention: 30 * 24 * time.Hour,
+	})
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/api-integrations/history?range=custom&start=2026-01-15T00:00:00Z&end=2026-01-16T00:00:00Z",
+		nil,
+	)
+	rr := httptest.NewRecorder()
+
+	h.APIIntegrationsHistory(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-OnWatch-Archived-Data") != "true" ||
+		rr.Header().Get("X-OnWatch-Archive-Resolution") != "1h" ||
+		rr.Header().Get("X-OnWatch-Raw-Retention-Days") != "30" {
+		t.Fatalf("archive headers=%v", rr.Header())
+	}
+	var response map[string][]struct {
+		RequestCount int `json:"requestCount"`
+		TotalTokens  int `json:"totalTokens"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	codex := response["Codex CLI"]
+	if len(codex) != 1 || codex[0].RequestCount != 1 || codex[0].TotalTokens != 120 {
+		t.Fatalf("Codex history=%+v", codex)
 	}
 }
 

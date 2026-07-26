@@ -392,6 +392,43 @@ button, input, select { font-family: inherit; }
   margin-left: auto;
 }
 
+.dashboard-refresh-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: min(320px, 32vw);
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-teal) 38%, var(--border-default));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent-teal) 10%, var(--surface-card));
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dashboard-refresh-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-actions.is-refreshing .header-meta {
+  display: none;
+}
+
+.dashboard-refresh-status[hidden] {
+  display: none;
+}
+
+.dashboard-refresh-status .loading-spinner {
+  width: 13px;
+  height: 13px;
+  border-width: 2px;
+}
+
 .header-controls {
   display: flex;
   align-items: center;
@@ -2158,6 +2195,70 @@ body.all-density-comfortable .provider-kpi-card {
    10. CHART
    ═══════════════════════════════════════════ */
 
+.graph-history-control {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
+.graph-history-presets {
+  flex-wrap: wrap;
+}
+
+.graph-history-dates {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-history-dates label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.graph-history-dates input {
+  width: 126px;
+  min-height: 32px;
+  padding: 4px 7px;
+  border: 1px solid var(--border-default);
+  border-radius: 7px;
+  background: var(--surface-inset);
+  color: var(--text-primary);
+  font: 600 11px var(--font-mono);
+  color-scheme: dark;
+}
+
+[data-theme="light"] .graph-history-dates input {
+  color-scheme: light;
+}
+
+.graph-history-dates input:focus-visible {
+  outline: 2px solid var(--accent-teal);
+  outline-offset: 2px;
+}
+
+.graph-history-date-separator {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.graph-history-error {
+  flex-basis: 100%;
+  width: 100%;
+  margin: 0;
+  color: var(--status-danger);
+  text-align: right;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .range-selector {
   display: flex;
   gap: 4px;
@@ -2167,6 +2268,7 @@ body.all-density-comfortable .provider-kpi-card {
 }
 
 .range-btn,
+.chart-range-btn,
 .platform-cost-range-btn,
 .platform-cost-breakdown-range-btn {
   min-height: 32px;
@@ -2181,12 +2283,14 @@ body.all-density-comfortable .provider-kpi-card {
   transition: all var(--transition-fast);
 }
 .range-btn:hover,
+.chart-range-btn:hover,
 .platform-cost-range-btn:hover,
 .platform-cost-breakdown-range-btn:hover {
   color: var(--text-primary);
   background: var(--surface-card);
 }
 .range-btn.active,
+.chart-range-btn.active,
 .platform-cost-range-btn.active,
 .platform-cost-breakdown-range-btn.active {
   background: var(--surface-card);
@@ -2842,13 +2946,23 @@ body.all-density-comfortable .provider-kpi-card {
   .provider-chart canvas { height: 170px !important; max-height: 170px; }
   .quota-card { padding: 18px; }
   .range-selector { width: 100%; }
+  .graph-history-control { align-items: stretch; justify-content: flex-start; }
+  .graph-history-dates { width: 100%; }
+  .graph-history-dates label { flex: 1; min-width: 0; }
+  .graph-history-dates input { width: 100%; }
+  .graph-history-error { text-align: left; }
   .chart-controls { align-items: stretch; }
   .range-btn,
-  .platform-cost-range-btn { flex: 1; padding: 8px; font-size: 12px; }
+  .chart-range-btn,
+  .platform-cost-range-btn,
+  .platform-cost-breakdown-range-btn { flex: 1; padding: 8px; font-size: 12px; }
   .login-card { padding: 32px 24px; }
   .table-controls { flex-direction: column; align-items: stretch; }
   .section-header { flex-direction: column; align-items: flex-start; }
   .header-meta { gap: 8px; }
+  .dashboard-refresh-status {
+    order: 2;
+  }
   .session-detail-grid { grid-template-columns: repeat(2, 1fr); }
   .cycles-filters-inline { gap: 6px; }
   .cycles-filters-inline .filter-group { width: 100%; }
@@ -2900,6 +3014,11 @@ body.all-density-comfortable .provider-kpi-card {
   .modal-kpi-row { grid-template-columns: repeat(2, 1fr); }
   .session-detail-grid { grid-template-columns: 1fr; }
   .last-updated { font-size: 11px; }
+  .dashboard-refresh-status {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .welcome-title { font-size: 20px; }
   .codex-profile-menu { left: auto; right: 0; }
 }

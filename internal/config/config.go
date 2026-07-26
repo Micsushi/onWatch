@@ -342,7 +342,7 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 	// Custom API Integrations telemetry ingestion
 	cfg.APIIntegrationsDir = strings.TrimSpace(os.Getenv("ONWATCH_API_INTEGRATIONS_DIR"))
 	cfg.APIIntegrationsEnabled = true
-	cfg.APIIntegrationsRetention = 0
+	cfg.APIIntegrationsRetention = 30 * 24 * time.Hour
 	if env := strings.ToLower(strings.TrimSpace(os.Getenv("ONWATCH_API_INTEGRATIONS_ENABLED"))); env != "" {
 		cfg.APIIntegrationsEnabled = env == "true" || env == "1" || env == "yes" || env == "on"
 	}

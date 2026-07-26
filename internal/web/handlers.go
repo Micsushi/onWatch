@@ -1091,6 +1091,60 @@ func parseTimeRange(rangeStr string) (time.Duration, error) {
 	}
 }
 
+type historyWindow struct {
+	Start    time.Time
+	End      time.Time
+	Duration time.Duration
+	CacheKey string
+	Explicit bool
+}
+
+func historyWindowForRequest(r *http.Request, now time.Time) (historyWindow, error) {
+	now = now.UTC()
+	startRaw := strings.TrimSpace(r.URL.Query().Get("start"))
+	endRaw := strings.TrimSpace(r.URL.Query().Get("end"))
+	if startRaw != "" || endRaw != "" {
+		if startRaw == "" || endRaw == "" {
+			return historyWindow{}, fmt.Errorf("start and end must be provided together")
+		}
+		start, err := time.Parse(time.RFC3339Nano, startRaw)
+		if err != nil {
+			return historyWindow{}, fmt.Errorf("invalid start time")
+		}
+		end, err := time.Parse(time.RFC3339Nano, endRaw)
+		if err != nil {
+			return historyWindow{}, fmt.Errorf("invalid end time")
+		}
+		start = start.UTC()
+		end = end.UTC()
+		if !start.Before(end) {
+			return historyWindow{}, fmt.Errorf("start must be before end")
+		}
+		if end.Sub(start) > 100*365*24*time.Hour {
+			return historyWindow{}, fmt.Errorf("history range cannot exceed 100 years")
+		}
+		return historyWindow{
+			Start:    start,
+			End:      end,
+			Duration: end.Sub(start),
+			CacheKey: start.Format(time.RFC3339Nano) + ":" + end.Format(time.RFC3339Nano),
+			Explicit: true,
+		}, nil
+	}
+
+	rangeStr := r.URL.Query().Get("range")
+	duration, err := parseTimeRange(rangeStr)
+	if err != nil {
+		return historyWindow{}, err
+	}
+	return historyWindow{
+		Start:    now.Add(-duration),
+		End:      now,
+		Duration: duration,
+		CacheKey: "range:" + rangeStr,
+	}, nil
+}
+
 // maxChartPoints is the target number of data points for chart responses.
 // Charts beyond this density add no visual value on typical displays (~1000px wide)
 // but increase JSON size and browser rendering time.
@@ -2478,15 +2532,14 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{}
 	visibility := h.providerVisibilitySettings()
 
-	rangeStr := r.URL.Query().Get("range")
-	duration, err := parseTimeRange(rangeStr)
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	now := time.Now().UTC()
-	start := now.Add(-duration)
+	now := window.End
+	start := window.Start
 
 	if h.config.HasProvider("synthetic") && providerTelemetryEnabled(visibility, "synthetic") && h.store != nil {
 		snapshots, err := h.store.QueryRange(start, now)
@@ -2551,7 +2604,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.config.HasProvider("anthropic") && providerTelemetryEnabled(visibility, "anthropic") && h.store != nil {
-		snapshots, err := h.store.QueryAnthropicRange(start, now)
+		snapshots, err := h.store.QueryAnthropicRangeSampled(start, now, maxChartPoints)
 		if err == nil {
 			step := downsampleStep(len(snapshots), maxChartPoints)
 			last := len(snapshots) - 1
@@ -2604,7 +2657,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 			if !codexAccountTelemetryEnabled(visibility, accountID) {
 				continue
 			}
-			snapshots, err := h.store.QueryCodexRange(accountID, start, now)
+			snapshots, err := h.store.QueryCodexRangeSampled(accountID, start, now, maxChartPoints)
 			if err != nil {
 				continue
 			}
@@ -2736,7 +2789,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.config.HasProvider("gemini") && providerTelemetryEnabled(visibility, "gemini") && h.store != nil {
-		snapshots, err := h.store.QueryGeminiRange(start, now)
+		snapshots, err := h.store.QueryGeminiRangeSampled(start, now, maxChartPoints)
 		if err == nil {
 			// Filter empty snapshots and aggregate by family
 			var valid []*api.GeminiSnapshot
@@ -2795,16 +2848,14 @@ func (h *Handler) historySynthetic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rangeStr := r.URL.Query().Get("range")
-	duration, err := parseTimeRange(rangeStr)
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	now := time.Now().UTC()
-	start := now.Add(-duration)
-	end := now
+	start := window.Start
+	end := window.End
 
 	snapshots, err := h.store.QueryRange(start, end)
 	if err != nil {
@@ -2860,16 +2911,14 @@ func (h *Handler) historyZai(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rangeStr := r.URL.Query().Get("range")
-	duration, err := parseTimeRange(rangeStr)
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	now := time.Now().UTC()
-	start := now.Add(-duration)
-	end := now
+	start := window.Start
+	end := window.End
 
 	snapshots, err := h.store.QueryZaiRange(start, end)
 	if err != nil {
@@ -2982,16 +3031,14 @@ func (h *Handler) historyOpenRouter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rangeStr := r.URL.Query().Get("range")
-	duration, err := parseTimeRange(rangeStr)
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	now := time.Now().UTC()
-	start := now.Add(-duration)
-	end := now
+	start := window.Start
+	end := window.End
 
 	snapshots, err := h.store.QueryOpenRouterRange(start, end)
 	if err != nil {
@@ -5317,15 +5364,12 @@ func (h *Handler) historyAnthropic(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, []interface{}{})
 		return
 	}
-	rangeStr := r.URL.Query().Get("range")
-	duration, err := parseTimeRange(rangeStr)
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	now := time.Now().UTC()
-	start := now.Add(-duration)
-	snapshots, err := h.store.QueryAnthropicRange(start, now)
+	snapshots, err := h.store.QueryAnthropicRange(window.Start, window.End)
 	if err != nil {
 		h.logger.Error("failed to query Anthropic history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")
@@ -7442,15 +7486,12 @@ func (h *Handler) historyCopilot(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, []interface{}{})
 		return
 	}
-	rangeStr := r.URL.Query().Get("range")
-	duration, err := parseTimeRange(rangeStr)
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	now := time.Now().UTC()
-	start := now.Add(-duration)
-	snapshots, err := h.store.QueryCopilotRange(start, now)
+	snapshots, err := h.store.QueryCopilotRange(window.Start, window.End)
 	if err != nil {
 		h.logger.Error("failed to query Copilot history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")
@@ -8492,16 +8533,13 @@ func (h *Handler) historyAntigravity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	duration, err := parseTimeRange(r.URL.Query().Get("range"))
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	end := time.Now().UTC()
-	start := end.Add(-duration)
-
-	snapshots, err := h.store.QueryAntigravityRange(start, end)
+	snapshots, err := h.store.QueryAntigravityRange(window.Start, window.End)
 	if err != nil {
 		h.logger.Error("failed to query antigravity history", "error", err)
 		respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -8578,14 +8616,12 @@ func (h *Handler) historyCodex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	accountID := parseCodexAccountID(r)
-	duration, err := parseTimeRange(r.URL.Query().Get("range"))
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	end := time.Now().UTC()
-	start := end.Add(-duration)
-	snapshots, err := h.store.QueryCodexRange(accountID, start, end)
+	snapshots, err := h.store.QueryCodexRange(accountID, window.Start, window.End)
 	if err != nil {
 		h.logger.Error("failed to query Codex history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")
@@ -9612,16 +9648,13 @@ func (h *Handler) historyMiniMax(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, []interface{}{})
 		return
 	}
-	rangeStr := r.URL.Query().Get("range")
-	duration, err := parseTimeRange(rangeStr)
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	now := time.Now().UTC()
-	start := now.Add(-duration)
 	minimaxAccID := h.parseMiniMaxAccountID(r)
-	snapshots, err := h.store.QueryMiniMaxRange(start, now, minimaxAccID)
+	snapshots, err := h.store.QueryMiniMaxRange(window.Start, window.End, minimaxAccID)
 	if err != nil {
 		h.logger.Error("failed to query MiniMax history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")

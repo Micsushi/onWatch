@@ -96,6 +96,18 @@ function providerParam() {
   return param;
 }
 
+function providerParamFor(provider, accountKey = '') {
+  let param = `provider=${encodeURIComponent(provider || '')}`;
+  if (provider === 'codex') {
+    const accountID = String(accountKey || '').replace(/^codex:/, '') || '1';
+    param += `&account=${encodeURIComponent(accountID)}`;
+  } else if (provider === 'minimax') {
+    const account = String(accountKey || '').replace(/^minimax:/, '');
+    if (account) param += `&account=${encodeURIComponent(account)}`;
+  }
+  return param;
+}
+
 function shouldShowSessionsTable(provider = getCurrentProvider()) {
   return provider !== 'both' && provider !== 'cursor' && provider !== 'api-integrations';
 }
@@ -154,6 +166,11 @@ const State = {
   // Dynamic Y-axis max (preserved across theme changes)
   chartYMax: 100,
   currentRange: '7d',
+  historyWindowStart: null,
+  historyWindowEnd: null,
+  historyStartDate: null,
+  historyEndDate: null,
+  archivedToastSelectionKey: null,
   // Hidden quota datasets (persisted in localStorage)
   hiddenQuotas: new Set(),
   // Hidden insight keys (persisted in DB via settings API)
@@ -206,20 +223,40 @@ const State = {
   platformCostGraphMode: 'cumulative',
   platformCostBreakdownView: 'types',
   platformCostRange: '7d',
+  platformCostWindowStart: null,
+  platformCostWindowEnd: null,
+  platformCostStartDate: null,
+  platformCostEndDate: null,
   platformCostBreakdownRange: '7d',
+  platformCostBreakdownWindowStart: null,
+  platformCostBreakdownWindowEnd: null,
+  platformCostBreakdownStartDate: null,
+  platformCostBreakdownEndDate: null,
   platformCostHistoryRange: null,
   platformCostHistoryLoading: false,
   platformCostHistoryInflightKey: null,
   platformCostSessionHistory: null,
   platformCostSessionTotals: null,
   platformCostSessionModels: null,
+  platformCostUsesArchivedData: false,
   platformCostBreakdownHistoryRange: null,
   platformCostBreakdownLoading: false,
   platformCostBreakdownInflightKey: null,
   platformCostBreakdownSessionModels: null,
   platformCostHistoryCache: {},
+  platformCostPayloadInflight: {},
   platformCostPrefetchControllers: {},
+  platformCostWarmupActive: false,
+  platformCostWarmupGeneration: 0,
+  graphRefreshQueue: [],
+  graphRefreshActive: null,
+  graphRefreshCurrent: null,
+  graphRefreshDraining: false,
+  graphFallbackTimers: {},
+  customGraphRefreshControllers: {},
   refreshInFlight: false,
+  dashboardRefreshCount: 0,
+  dashboardRefreshMessage: 'Updating data...',
   dashboardToastTimer: null,
 };
 
@@ -232,11 +269,17 @@ const PROVIDER_CURRENT_CACHE_TTL_MS = 120000;
 const PROVIDER_HISTORY_CACHE_TTL_MS = 120000;
 const PROVIDER_INSIGHTS_CACHE_TTL_MS = 120000;
 const PROVIDER_STALE_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+const GRAPH_SAVED_FALLBACK_MAX_MS = Number.MAX_SAFE_INTEGER;
 const DEFAULT_CHART_RANGE = '7d';
 const CHART_RANGE_STORAGE_KEY = 'onwatch-chart-range';
+const HISTORY_DATE_RANGE_STORAGE_KEY = 'onwatch-history-date-range-v1';
 const PLATFORM_COST_RANGE_STORAGE_KEY = 'onwatch-platform-cost-range';
+const PLATFORM_COST_DATE_RANGE_STORAGE_KEY = 'onwatch-platform-cost-date-range-v1';
 const PLATFORM_COST_BREAKDOWN_RANGE_STORAGE_KEY = 'onwatch-platform-cost-breakdown-range';
+const PLATFORM_COST_BREAKDOWN_DATE_RANGE_STORAGE_KEY = 'onwatch-platform-cost-breakdown-date-range-v1';
 const DASHBOARD_FOREGROUND_FETCH_TIMEOUT_MS = 15000;
+const GRAPH_PRESET_FALLBACK_DELAY_MS = 1000;
+const ARCHIVED_HISTORY_NOTICE = 'Older data is shown at hourly resolution because detailed records are kept for 30 days.';
 
 // Persistence
 function loadHiddenQuotas() {
@@ -289,42 +332,79 @@ function setCachedAPIIntegrationsCurrent(current, health) {
   writeJSONStorage(localStorage, API_INTEGRATIONS_CURRENT_CACHE_KEY, payload);
 }
 
-function providerDataCacheKey(kind, provider, extra = '') {
-  const account = provider === 'codex'
-    ? `codex:${State.codexAccount || 1}`
-    : (provider === 'minimax' ? `minimax:${State.minimaxAccount || ''}` : '');
+function providerDataCacheKey(kind, provider, extra = '', accountOverride) {
+  const account = accountOverride !== undefined
+    ? accountOverride
+    : (provider === 'codex'
+      ? `codex:${State.codexAccount || 1}`
+      : (provider === 'minimax' ? `minimax:${State.minimaxAccount || ''}` : ''));
   return [kind, provider || '', account, extra || ''].join(':');
 }
 
 function getProviderDataCache() {
-  const cached = readJSONStorage(sessionStorage, PROVIDER_DATA_CACHE_KEY);
+  const cached = readJSONStorage(localStorage, PROVIDER_DATA_CACHE_KEY);
   return cached && typeof cached === 'object' ? cached : {};
 }
 
-function getCachedProviderData(kind, provider, extra = '', maxAgeMs = PROVIDER_CURRENT_CACHE_TTL_MS) {
+function getCachedProviderData(kind, provider, extra = '', maxAgeMs = PROVIDER_CURRENT_CACHE_TTL_MS, accountOverride) {
   const cache = getProviderDataCache();
-  const cached = cache[providerDataCacheKey(kind, provider, extra)];
+  const cached = cache[providerDataCacheKey(kind, provider, extra, accountOverride)];
   if (!cached || !cached.ts || Date.now() - cached.ts > maxAgeMs) return null;
   return cached;
 }
 
-function getStaleProviderData(kind, provider, extra = '') {
-  return getCachedProviderData(kind, provider, extra, PROVIDER_STALE_CACHE_MAX_MS);
+function getStaleProviderData(kind, provider, extra = '', accountOverride) {
+  return getCachedProviderData(kind, provider, extra, PROVIDER_STALE_CACHE_MAX_MS, accountOverride);
 }
 
-function setCachedProviderData(kind, provider, extra = '', payload = {}) {
-  if (!provider || !payload) return;
+function getStaleProviderHistory(provider, range, selectionKey, accountOverride) {
+  const exact = getCachedProviderData(
+    'history',
+    provider,
+    selectionKey,
+    GRAPH_SAVED_FALLBACK_MAX_MS,
+    accountOverride,
+  );
+  if (exact) return exact;
+
+  const normalized = normalizeChartRange(range);
+  if (normalized === 'custom') return null;
+
   const cache = getProviderDataCache();
-  cache[providerDataCacheKey(kind, provider, extra)] = { ts: Date.now(), ...payload };
-  writeJSONStorage(sessionStorage, PROVIDER_DATA_CACHE_KEY, cache);
+  const legacyPrefix = providerDataCacheKey('history', provider, `chart:${normalized}:`, accountOverride);
+  const now = Date.now();
+  let latest = null;
+  Object.entries(cache).forEach(([key, cached]) => {
+    if (!key.startsWith(legacyPrefix)) return;
+    if (!cached || !cached.ts || now - cached.ts > GRAPH_SAVED_FALLBACK_MAX_MS) return;
+    if (!latest || cached.ts > latest.ts) latest = cached;
+  });
+  return latest;
 }
 
-function updateCachedProviderData(kind, provider, extra = '', payload = {}) {
+function pruneLegacyPresetHistoryEntries(cache) {
+  const legacyPresetPattern = /:chart:(?:1h|6h|24h|7d|30d|all):/;
+  Object.keys(cache).forEach((key) => {
+    if (key.startsWith('history:') && legacyPresetPattern.test(key)) {
+      delete cache[key];
+    }
+  });
+}
+
+function setCachedProviderData(kind, provider, extra = '', payload = {}, accountOverride) {
   if (!provider || !payload) return;
   const cache = getProviderDataCache();
-  const key = providerDataCacheKey(kind, provider, extra);
+  if (kind === 'history') pruneLegacyPresetHistoryEntries(cache);
+  cache[providerDataCacheKey(kind, provider, extra, accountOverride)] = { ts: Date.now(), ...payload };
+  writeJSONStorage(localStorage, PROVIDER_DATA_CACHE_KEY, cache);
+}
+
+function updateCachedProviderData(kind, provider, extra = '', payload = {}, accountOverride) {
+  if (!provider || !payload) return;
+  const cache = getProviderDataCache();
+  const key = providerDataCacheKey(kind, provider, extra, accountOverride);
   cache[key] = { ...(cache[key] || {}), ts: Date.now(), ...payload };
-  writeJSONStorage(sessionStorage, PROVIDER_DATA_CACHE_KEY, cache);
+  writeJSONStorage(localStorage, PROVIDER_DATA_CACHE_KEY, cache);
 }
 
 function formatCacheTime(ts) {
@@ -344,6 +424,190 @@ function setDashboardFreshness(options = {}) {
   if (statusDot) {
     statusDot.classList.toggle('stale', stale);
     statusDot.title = stale ? 'Cached data' : 'Fresh data';
+  }
+}
+
+function setDashboardRefreshState(refreshing, message = 'Updating data...') {
+  if (refreshing) {
+    State.dashboardRefreshCount = (State.dashboardRefreshCount || 0) + 1;
+    State.dashboardRefreshMessage = message;
+  } else {
+    State.dashboardRefreshCount = Math.max(0, (State.dashboardRefreshCount || 0) - 1);
+  }
+  renderDashboardRefreshStatus();
+}
+
+function graphRefreshStatusMessage(job) {
+  if (!job) return '';
+  const active = State.graphRefreshActive;
+  if (job.range === 'custom' || !active || active.key === job.key) {
+    return `Refreshing data for ${job.label} graph.`;
+  }
+  return `Finishing ${active.label} before refreshing ${job.label}.`;
+}
+
+function renderDashboardRefreshStatus() {
+  const graphJob = State.graphRefreshCurrent;
+  const active = Boolean(graphJob || State.dashboardRefreshCount > 0);
+  const status = document.getElementById('dashboard-refresh-status');
+  const messageEl = document.getElementById('dashboard-refresh-message');
+  const headerActions = status?.closest('.header-actions');
+  if (status) status.hidden = !active;
+  if (headerActions) headerActions.classList.toggle('is-refreshing', active);
+  if (messageEl && active) {
+    messageEl.textContent = graphJob
+      ? graphRefreshStatusMessage(graphJob)
+      : (State.dashboardRefreshMessage || 'Updating data...');
+  }
+}
+
+function graphJobIsCurrent(job) {
+  return Boolean(job && State.graphRefreshCurrent?.key === job.key);
+}
+
+function clearGraphFallbackTimer(key) {
+  const timer = State.graphFallbackTimers[key];
+  if (!timer) return;
+  window.clearTimeout(timer);
+  delete State.graphFallbackTimers[key];
+}
+
+function showBestSavedGraphFallback(job) {
+  if (!graphJobIsCurrent(job) || job.range === 'custom') return;
+  if (job.kind === 'cost') {
+    const cached = getStalePlatformCostHistory(job.provider, job.range, job.scope);
+    if (cached) {
+      applyPlatformCostHistoryPayload(job.range, cached);
+      if (getCurrentProvider() === job.provider) renderPlatformCostPanel(job.provider);
+    }
+    setPlatformCostChartLoading(false);
+    return;
+  }
+  const cached = getStaleProviderHistory(job.provider, job.range, job.selectionKey);
+  if (!cached || !cached.data || getCurrentProvider() !== job.provider) return;
+  if (cached.chartDatasets && job.provider !== 'api-integrations' && job.provider !== 'both') {
+    if (!State.chart) initChart();
+    setMainChartDatasets(cached.chartDatasets, job.range, { preserveExistingOnEmpty: true });
+  } else if (job.provider === 'api-integrations' || job.provider === 'both') {
+    applyProviderHistoryPayload(job.provider, job.range, cached.data, cached.apiIntegrationsHistory || null);
+  }
+}
+
+function schedulePresetGraphFallback(job) {
+  if (job.range === 'custom') return;
+  clearGraphFallbackTimer(job.key);
+  State.graphFallbackTimers[job.key] = window.setTimeout(() => {
+    delete State.graphFallbackTimers[job.key];
+    showBestSavedGraphFallback(job);
+  }, GRAPH_PRESET_FALLBACK_DELAY_MS);
+}
+
+function finishGraphRefreshJob(job) {
+  clearGraphFallbackTimer(job.key);
+  if (graphJobIsCurrent(job)) {
+    State.graphRefreshCurrent = null;
+  }
+  renderDashboardRefreshStatus();
+}
+
+async function drainGraphRefreshQueue() {
+  if (State.graphRefreshDraining) return;
+  State.graphRefreshDraining = true;
+  try {
+    while (State.graphRefreshQueue.length > 0) {
+      const job = State.graphRefreshQueue.shift();
+      State.graphRefreshActive = job;
+      renderDashboardRefreshStatus();
+      try {
+        await job.run(job.controller.signal);
+        job.resolve?.({ ok: true });
+      } catch (error) {
+        job.resolve?.({ ok: false, error });
+      } finally {
+        finishGraphRefreshJob(job);
+        State.graphRefreshActive = null;
+        renderDashboardRefreshStatus();
+      }
+    }
+  } finally {
+    State.graphRefreshDraining = false;
+    State.graphRefreshActive = null;
+    renderDashboardRefreshStatus();
+  }
+}
+
+function enqueueGraphRefresh(job, options = {}) {
+  const foreground = options.foreground !== false;
+  const active = State.graphRefreshActive;
+  if (active?.key === job.key) {
+    if (foreground) {
+      State.graphRefreshCurrent = active;
+      schedulePresetGraphFallback(active);
+      renderDashboardRefreshStatus();
+    }
+    return active.promise;
+  }
+
+  const pendingIndex = State.graphRefreshQueue.findIndex((item) => item.key === job.key);
+  if (pendingIndex >= 0) {
+    const pending = State.graphRefreshQueue.splice(pendingIndex, 1)[0];
+    if (foreground) {
+      pending.background = false;
+      State.graphRefreshQueue.unshift(pending);
+      State.graphRefreshCurrent = pending;
+      schedulePresetGraphFallback(pending);
+    } else {
+      State.graphRefreshQueue.push(pending);
+    }
+    renderDashboardRefreshStatus();
+    return pending.promise;
+  }
+
+  job.controller = new AbortController();
+  job.background = !foreground;
+  job.promise = new Promise((resolve, reject) => {
+    job.resolve = resolve;
+    job.reject = reject;
+  });
+  if (foreground) {
+    State.graphRefreshQueue.unshift(job);
+    State.graphRefreshCurrent = job;
+    schedulePresetGraphFallback(job);
+  } else {
+    State.graphRefreshQueue.push(job);
+    const backgroundJobs = State.graphRefreshQueue.filter((item) => item.background);
+    while (backgroundJobs.length > 12) {
+      const oldest = backgroundJobs.shift();
+      const oldestIndex = State.graphRefreshQueue.indexOf(oldest);
+      if (oldestIndex >= 0) State.graphRefreshQueue.splice(oldestIndex, 1);
+      oldest.resolve?.({ ok: false, skipped: true });
+    }
+  }
+  renderDashboardRefreshStatus();
+  void drainGraphRefreshQueue();
+  return job.promise;
+}
+
+async function runCustomGraphRefresh(job) {
+  const previousController = State.customGraphRefreshControllers[job.scope];
+  if (previousController) previousController.abort();
+  job.controller = new AbortController();
+  State.customGraphRefreshControllers[job.scope] = job.controller;
+  State.graphRefreshCurrent = job;
+  renderDashboardRefreshStatus();
+  try {
+    return await job.run(job.controller.signal);
+  } catch (error) {
+    if (!job.controller.signal.aborted) {
+      setDashboardFreshness({ stale: true });
+      showDashboardToast('Custom graph could not be refreshed.', 'error', 3600);
+    }
+    return null;
+  } finally {
+    if (State.customGraphRefreshControllers[job.scope] === job.controller) {
+      delete State.customGraphRefreshControllers[job.scope];
+      finishGraphRefreshJob(job);
+    }
   }
 }
 
@@ -395,47 +659,52 @@ function applyAPIIntegrationsCurrentData(current, health, options = {}) {
 }
 
 function loadPlatformCostHistoryCache() {
-  const cached = readJSONStorage(sessionStorage, PLATFORM_COST_HISTORY_CACHE_KEY);
+  const cached = readJSONStorage(localStorage, PLATFORM_COST_HISTORY_CACHE_KEY);
   State.platformCostHistoryCache = cached && typeof cached === 'object' ? cached : {};
 }
 
-function platformCostCacheKey(provider, range) {
-  return `${provider || ''}:${normalizePlatformCostRange(range)}`;
+function platformCostCacheKey(provider, range, scope = 'platformCost') {
+  const normalized = normalizePlatformCostRange(range);
+  const rangeKey = normalized === 'custom' ? historySelectionKey(normalized, scope) : normalized;
+  return `${provider || ''}:${scope}:${rangeKey}`;
 }
 
-function getCachedPlatformCostHistory(provider, range, maxAgeMs = PLATFORM_COST_HISTORY_CACHE_TTL_MS) {
+function getCachedPlatformCostHistory(provider, range, maxAgeMs = PLATFORM_COST_HISTORY_CACHE_TTL_MS, scope = 'platformCost') {
   const cache = State.platformCostHistoryCache || {};
-  const cached = cache[platformCostCacheKey(provider, range)];
+  let cached = cache[platformCostCacheKey(provider, range, scope)];
+  if (!cached && normalizePlatformCostRange(range) !== 'custom') {
+    const alternateScope = scope === 'platformCost' ? 'platformCostBreakdown' : 'platformCost';
+    cached = cache[platformCostCacheKey(provider, range, alternateScope)];
+  }
   if (!cached || !cached.ts || Date.now() - cached.ts > maxAgeMs) return null;
   return cached;
 }
 
-function getStalePlatformCostHistory(provider, range) {
-  return getCachedPlatformCostHistory(provider, range, PROVIDER_STALE_CACHE_MAX_MS);
+function getStalePlatformCostHistory(provider, range, scope = 'platformCost') {
+  return getCachedPlatformCostHistory(provider, range, GRAPH_SAVED_FALLBACK_MAX_MS, scope);
 }
 
-function setCachedPlatformCostHistory(provider, range, payload) {
+function setCachedPlatformCostHistory(provider, range, payload, scope = 'platformCost') {
   if (!provider || !payload) return;
   const cache = State.platformCostHistoryCache || {};
-  cache[platformCostCacheKey(provider, range)] = { ts: Date.now(), ...payload };
+  cache[platformCostCacheKey(provider, range, scope)] = { ts: Date.now(), ...payload };
   State.platformCostHistoryCache = cache;
-  writeJSONStorage(sessionStorage, PLATFORM_COST_HISTORY_CACHE_KEY, cache);
+  writeJSONStorage(localStorage, PLATFORM_COST_HISTORY_CACHE_KEY, cache);
 }
 
 function applyPlatformCostHistoryPayload(range, payload) {
   State.platformCostSessionTotals = payload.sessionTotals || {};
   State.platformCostSessionModels = payload.sessionModels || {};
   State.platformCostSessionHistory = payload.sessionHistory || {};
+  State.platformCostUsesArchivedData = Boolean(payload.usesArchivedData);
   if (payload.apiHistory) State.apiIntegrationsHistory = payload.apiHistory;
   State.platformCostHistoryRange = normalizePlatformCostRange(range);
-  if (normalizePlatformCostRange(State.platformCostBreakdownRange || DEFAULT_CHART_RANGE) === State.platformCostHistoryRange) {
-    State.platformCostBreakdownSessionModels = payload.sessionModels || {};
-    State.platformCostBreakdownHistoryRange = State.platformCostHistoryRange;
-  }
 }
 
 function abortPlatformCostPrefetches(exceptProvider = '') {
   const keepPrefix = exceptProvider ? `${exceptProvider}:` : '';
+  State.platformCostWarmupGeneration = (State.platformCostWarmupGeneration || 0) + 1;
+  State.platformCostWarmupActive = false;
   Object.entries(State.platformCostPrefetchControllers || {}).forEach(([key, controller]) => {
     if (keepPrefix && key.startsWith(keepPrefix)) return;
     try {
@@ -447,34 +716,88 @@ function abortPlatformCostPrefetches(exceptProvider = '') {
   });
 }
 
-async function fetchPlatformCostPayload(provider, range, signal) {
-  range = normalizePlatformCostRange(range);
-  const integration = platformCostIntegrationNames[provider] || '';
-  const requests = [
-    authFetch(`${API_BASE}/api/api-integrations/sessions?range=${range}&integration=${encodeURIComponent(integration)}`, { signal }),
-  ];
-  if (range !== 'all') {
-    requests.push(authFetch(`${API_BASE}/api/api-integrations/history?range=${range}`, { signal }));
-  }
-  const [sessionRes, bucketRes] = await Promise.all(requests);
-  let sessionHistory = {};
-  let sessionTotals = {};
-  let sessionModels = {};
-  let apiHistory = null;
-  if (sessionRes.ok) {
-    const sessionData = await sessionRes.json();
-    sessionTotals = sessionData && typeof sessionData === 'object' ? (sessionData._totals || {}) : {};
-    sessionModels = sessionData && typeof sessionData === 'object' ? (sessionData._models || {}) : {};
-    if (sessionData && typeof sessionData === 'object') {
-      delete sessionData._totals;
-      delete sessionData._models;
+function cancelPlatformCostWarmup(provider, keepKey = '') {
+  State.platformCostWarmupGeneration = (State.platformCostWarmupGeneration || 0) + 1;
+  State.platformCostWarmupActive = false;
+  const providerPrefix = `${provider || ''}:`;
+  Object.entries(State.platformCostPrefetchControllers || {}).forEach(([key, controller]) => {
+    if (!key.startsWith(providerPrefix) || key === keepKey) return;
+    try {
+      controller.abort();
+    } catch (e) {
+      // silent - foreground graph work takes priority
     }
-    sessionHistory = sessionData || {};
+    delete State.platformCostPrefetchControllers[key];
+  });
+}
+
+function platformCostPayloadRequestKey(provider, range, scope = 'platformCost') {
+  const normalized = normalizePlatformCostRange(range);
+  const rangeKey = normalized === 'custom' ? historySelectionKey(normalized, scope) : normalized;
+  return `${provider || ''}:${rangeKey}`;
+}
+
+async function fetchPlatformCostPayload(provider, range, signal, scope = 'platformCost') {
+  range = normalizePlatformCostRange(range);
+  const requestKey = platformCostPayloadRequestKey(provider, range, scope);
+  const existing = State.platformCostPayloadInflight[requestKey];
+  if (existing) return existing;
+
+  const request = (async () => {
+    const integration = platformCostIntegrationNames[provider] || '';
+    const query = platformCostHistoryRequestQuery(range, scope);
+    const requests = [
+      authFetch(`${API_BASE}/api/api-integrations/sessions?${query}&integration=${encodeURIComponent(integration)}&includeSessions=false`, { signal }),
+      authFetch(`${API_BASE}/api/api-integrations/history?${query}`, { signal }),
+    ];
+    const [sessionRes, bucketRes] = await Promise.all(requests);
+    let sessionHistory = {};
+    let sessionTotals = {};
+    let sessionModels = {};
+    let apiHistory = null;
+    let usesArchivedData = false;
+    if (sessionRes.ok) {
+      usesArchivedData = sessionRes.headers.get('X-OnWatch-Archived-Data') === 'true';
+      const sessionData = await sessionRes.json();
+      sessionTotals = sessionData && typeof sessionData === 'object' ? (sessionData._totals || {}) : {};
+      sessionModels = sessionData && typeof sessionData === 'object' ? (sessionData._models || {}) : {};
+      if (sessionData && typeof sessionData === 'object') {
+        delete sessionData._totals;
+        delete sessionData._models;
+      }
+      sessionHistory = sessionData || {};
+    }
+    if (bucketRes && bucketRes.ok) {
+      usesArchivedData = usesArchivedData || bucketRes.headers.get('X-OnWatch-Archived-Data') === 'true';
+      apiHistory = await bucketRes.json();
+    }
+    return { sessionHistory, sessionTotals, sessionModels, apiHistory, usesArchivedData };
+  })();
+
+  State.platformCostPayloadInflight[requestKey] = request;
+  try {
+    return await request;
+  } finally {
+    if (State.platformCostPayloadInflight[requestKey] === request) {
+      delete State.platformCostPayloadInflight[requestKey];
+    }
   }
-  if (bucketRes && bucketRes.ok) {
-    apiHistory = await bucketRes.json();
-  }
-  return { sessionHistory, sessionTotals, sessionModels, apiHistory };
+}
+
+function schedulePlatformCostWarmup(provider, activeRange) {
+  const preferredRanges = ['30d', '24h', '6h', '1h', '7d', 'all'];
+  if (document.hidden) return;
+  if (!supportsPlatformCost(provider) || getCurrentProvider() !== provider) return;
+
+  const normalizedActiveRange = normalizePlatformCostRange(activeRange);
+  const ranges = preferredRanges.filter((range) => (
+    range !== normalizedActiveRange
+    && !getCachedPlatformCostHistory(provider, range, PLATFORM_COST_HISTORY_CACHE_TTL_MS, 'platformCost')
+  ));
+  ranges.forEach((range) => {
+    const job = createPlatformCostRefreshJob(range, provider, 'platformCost');
+    enqueueGraphRefresh(job, { foreground: false });
+  });
 }
 
 window.addEventListener('pagehide', () => {
@@ -617,11 +940,13 @@ function updateCodexProfileTabsVisibility() {
 function refreshAll() {
   const refreshBtn = document.getElementById('refresh-btn');
   if (refreshBtn) refreshBtn.classList.add('spinning');
+  setDashboardRefreshState(true, 'Updating saved data...');
   const tasks = [fetchCurrent(), fetchDeepInsights(), fetchHistory()];
   if (shouldShowCyclesTable()) tasks.push(fetchCycles());
   if (shouldShowSessionsTable()) tasks.push(fetchSessions());
   if (shouldShowOverviewTable()) tasks.push(fetchCycleOverview());
-  Promise.all(tasks).finally(() => {
+  Promise.allSettled(tasks).finally(() => {
+    setDashboardRefreshState(false);
     if (refreshBtn) setTimeout(() => refreshBtn.classList.remove('spinning'), 600);
   });
 }
@@ -970,12 +1295,12 @@ function isPeriodGraphMode(mode) {
 
 function normalizeChartRange(range) {
   const value = String(range || '').trim().toLowerCase();
-  return ['1h', '6h', '24h', '7d', '30d', 'all'].includes(value) ? value : DEFAULT_CHART_RANGE;
+  return ['1h', '6h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : DEFAULT_CHART_RANGE;
 }
 
 function normalizeStoredChartRange(range) {
   const value = String(range || '').trim().toLowerCase();
-  return ['1h', '6h', '24h', '7d', '30d', 'all'].includes(value) ? value : null;
+  return ['1h', '6h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : null;
 }
 
 function scopedRangeStorageKey(baseKey, provider = getCurrentProvider()) {
@@ -987,29 +1312,48 @@ function getScopedStoredRange(baseKey, provider = getCurrentProvider()) {
 }
 
 function selectedChartRange() {
-  const activeBtn = document.querySelector('.range-btn[data-range].active');
-  const range = State.currentRange || (activeBtn ? activeBtn.dataset.range : DEFAULT_CHART_RANGE);
-  return normalizeChartRange(range);
+  return normalizeChartRange(State.currentRange || DEFAULT_CHART_RANGE);
 }
 
 function selectedPlatformCostRange() {
-  const activeBtn = document.querySelector('.platform-cost-range-btn[data-range].active');
-  const range = State.platformCostRange || (activeBtn ? activeBtn.dataset.range : DEFAULT_CHART_RANGE);
-  return normalizePlatformCostRange(range);
+  return normalizePlatformCostRange(State.platformCostRange || DEFAULT_CHART_RANGE);
 }
 
 function selectedPlatformCostBreakdownRange() {
-  const activeBtn = document.querySelector('.platform-cost-breakdown-range-btn[data-range].active');
-  const range = State.platformCostBreakdownRange || (activeBtn ? activeBtn.dataset.range : DEFAULT_CHART_RANGE);
-  return normalizePlatformCostRange(range);
+  return normalizePlatformCostRange(State.platformCostBreakdownRange || DEFAULT_CHART_RANGE);
 }
 
 function loadAPIIntegrationsPreferences() {
   try {
     const provider = getCurrentProvider();
-    State.currentRange = getScopedStoredRange(CHART_RANGE_STORAGE_KEY, provider) || DEFAULT_CHART_RANGE;
-    State.platformCostRange = getScopedStoredRange(PLATFORM_COST_RANGE_STORAGE_KEY, provider) || DEFAULT_CHART_RANGE;
-    State.platformCostBreakdownRange = getScopedStoredRange(PLATFORM_COST_BREAKDOWN_RANGE_STORAGE_KEY, provider) || DEFAULT_CHART_RANGE;
+    State.currentRange = normalizeStoredChartRange(localStorage.getItem(CHART_RANGE_STORAGE_KEY))
+      || getScopedStoredRange(CHART_RANGE_STORAGE_KEY, provider)
+      || DEFAULT_CHART_RANGE;
+    State.platformCostRange = getScopedStoredRange(PLATFORM_COST_RANGE_STORAGE_KEY, provider)
+      || DEFAULT_CHART_RANGE;
+    State.platformCostBreakdownRange = getScopedStoredRange(PLATFORM_COST_BREAKDOWN_RANGE_STORAGE_KEY, provider)
+      || DEFAULT_CHART_RANGE;
+    const storedDates = readJSONStorage(localStorage, HISTORY_DATE_RANGE_STORAGE_KEY);
+    if (storedDates && typeof storedDates === 'object') {
+      State.historyWindowStart = storedDates.start || null;
+      State.historyWindowEnd = storedDates.end || null;
+      State.historyStartDate = storedDates.startDate || null;
+      State.historyEndDate = storedDates.endDate || null;
+    }
+    const storedCostDates = readJSONStorage(localStorage, scopedRangeStorageKey(PLATFORM_COST_DATE_RANGE_STORAGE_KEY, provider));
+    if (storedCostDates && typeof storedCostDates === 'object') {
+      State.platformCostWindowStart = storedCostDates.start || null;
+      State.platformCostWindowEnd = storedCostDates.end || null;
+      State.platformCostStartDate = storedCostDates.startDate || null;
+      State.platformCostEndDate = storedCostDates.endDate || null;
+    }
+    const storedBreakdownDates = readJSONStorage(localStorage, scopedRangeStorageKey(PLATFORM_COST_BREAKDOWN_DATE_RANGE_STORAGE_KEY, provider));
+    if (storedBreakdownDates && typeof storedBreakdownDates === 'object') {
+      State.platformCostBreakdownWindowStart = storedBreakdownDates.start || null;
+      State.platformCostBreakdownWindowEnd = storedBreakdownDates.end || null;
+      State.platformCostBreakdownStartDate = storedBreakdownDates.startDate || null;
+      State.platformCostBreakdownEndDate = storedBreakdownDates.endDate || null;
+    }
     const metric = localStorage.getItem('onwatch-api-integrations-metric');
     State.apiIntegrationsSelectedMetric = normalizeAPIIntegrationsMetric(metric);
     State.graphMode = normalizeGraphMode(localStorage.getItem('onwatch-graph-mode'));
@@ -1025,7 +1369,7 @@ function loadAPIIntegrationsPreferences() {
 
 function saveChartRange(range) {
   try {
-    localStorage.setItem(scopedRangeStorageKey(CHART_RANGE_STORAGE_KEY), normalizeChartRange(range));
+    localStorage.setItem(CHART_RANGE_STORAGE_KEY, normalizeChartRange(range));
   } catch (e) {
     // silent
   }
@@ -1045,6 +1389,215 @@ function savePlatformCostBreakdownRange(range) {
   } catch (e) {
     // silent
   }
+}
+
+function formatHistoryDateInTimezone(value, timeZone = getEffectiveTimezone()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function historyDatePlusDays(dateString, days) {
+  const [year, month, day] = String(dateString || '').split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return [
+    String(date.getUTCFullYear()).padStart(4, '0'),
+    String(date.getUTCMonth() + 1).padStart(2, '0'),
+    String(date.getUTCDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function timezoneOffsetAt(instant, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(instant);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  const representedAsUTC = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second),
+  );
+  return representedAsUTC - Math.floor(instant.getTime() / 1000) * 1000;
+}
+
+function historyDateStartUTC(dateString, timeZone = getEffectiveTimezone()) {
+  const [year, month, day] = String(dateString || '').split('-').map(Number);
+  if (!year || !month || !day) return null;
+  const target = Date.UTC(year, month - 1, day);
+  let result = target - timezoneOffsetAt(new Date(target), timeZone);
+  result = target - timezoneOffsetAt(new Date(result), timeZone);
+  return new Date(result);
+}
+
+function presetHistoryWindow(range, now = new Date()) {
+  const normalized = normalizeChartRange(range);
+  const hour = 60 * 60 * 1000;
+  const durations = {
+    '1h': hour,
+    '6h': 6 * hour,
+    '24h': 24 * hour,
+    '7d': 7 * 24 * hour,
+    '30d': 30 * 24 * hour,
+    all: 100 * 365 * 24 * hour,
+  };
+  const duration = durations[normalized] || durations[DEFAULT_CHART_RANGE];
+  return {
+    start: new Date(now.getTime() - duration),
+    end: now,
+  };
+}
+
+function historyScopeWindow(scope = 'chart') {
+  if (scope === 'platformCost') {
+    return {
+      range: State.platformCostRange,
+      start: State.platformCostWindowStart,
+      end: State.platformCostWindowEnd,
+      startDate: State.platformCostStartDate,
+      endDate: State.platformCostEndDate,
+    };
+  }
+  if (scope === 'platformCostBreakdown') {
+    return {
+      range: State.platformCostBreakdownRange,
+      start: State.platformCostBreakdownWindowStart,
+      end: State.platformCostBreakdownWindowEnd,
+      startDate: State.platformCostBreakdownStartDate,
+      endDate: State.platformCostBreakdownEndDate,
+    };
+  }
+  return {
+    range: State.currentRange,
+    start: State.historyWindowStart,
+    end: State.historyWindowEnd,
+    startDate: State.historyStartDate,
+    endDate: State.historyEndDate,
+  };
+}
+
+function persistHistoryWindow(scope = 'chart') {
+  const windowState = historyScopeWindow(scope);
+  const payload = {
+    start: windowState.start,
+    end: windowState.end,
+    startDate: windowState.startDate,
+    endDate: windowState.endDate,
+  };
+  if (scope === 'platformCost') {
+    writeJSONStorage(localStorage, scopedRangeStorageKey(PLATFORM_COST_DATE_RANGE_STORAGE_KEY), payload);
+    return;
+  }
+  if (scope === 'platformCostBreakdown') {
+    writeJSONStorage(localStorage, scopedRangeStorageKey(PLATFORM_COST_BREAKDOWN_DATE_RANGE_STORAGE_KEY), payload);
+    return;
+  }
+  writeJSONStorage(localStorage, HISTORY_DATE_RANGE_STORAGE_KEY, payload);
+}
+
+function applyPresetHistoryWindow(range, now = new Date(), scope = 'chart') {
+  const normalized = normalizeChartRange(range);
+  const windowRange = presetHistoryWindow(normalized, now);
+  const start = windowRange.start.toISOString();
+  const end = windowRange.end.toISOString();
+  const startDate = formatHistoryDateInTimezone(windowRange.start);
+  const endDate = formatHistoryDateInTimezone(windowRange.end);
+  if (scope === 'platformCost') {
+    State.platformCostRange = normalized;
+    State.platformCostWindowStart = start;
+    State.platformCostWindowEnd = end;
+    State.platformCostStartDate = startDate;
+    State.platformCostEndDate = endDate;
+    savePlatformCostRange(normalized);
+  } else if (scope === 'platformCostBreakdown') {
+    State.platformCostBreakdownRange = normalized;
+    State.platformCostBreakdownWindowStart = start;
+    State.platformCostBreakdownWindowEnd = end;
+    State.platformCostBreakdownStartDate = startDate;
+    State.platformCostBreakdownEndDate = endDate;
+    savePlatformCostBreakdownRange(normalized);
+  } else {
+    State.currentRange = normalized;
+    State.historyWindowStart = start;
+    State.historyWindowEnd = end;
+    State.historyStartDate = startDate;
+    State.historyEndDate = endDate;
+    saveChartRange(normalized);
+  }
+  persistHistoryWindow(scope);
+}
+
+function ensureHistoryWindow(scope = 'chart') {
+  const windowState = historyScopeWindow(scope);
+  if (windowState.start && windowState.end) return;
+  applyPresetHistoryWindow(windowState.range || DEFAULT_CHART_RANGE, new Date(), scope);
+}
+
+function historySelectionKey(range, scope = 'chart') {
+  ensureHistoryWindow(scope);
+  const windowState = historyScopeWindow(scope);
+  const normalized = normalizeChartRange(range || windowState.range);
+  if (normalized !== 'custom') return `${scope}:${normalized}`;
+  return `${scope}:${normalized}:${windowState.start || ''}:${windowState.end || ''}`;
+}
+
+function historyRequestQuery(range, scope = 'chart') {
+  ensureHistoryWindow(scope);
+  const windowState = historyScopeWindow(scope);
+  return new URLSearchParams({
+    range: normalizeChartRange(range || windowState.range),
+    start: windowState.start,
+    end: windowState.end,
+  }).toString();
+}
+
+function platformCostHistoryRequestQuery(range, scope = 'platformCost') {
+  const normalized = normalizePlatformCostRange(range);
+  if (normalized === 'custom') return historyRequestQuery(normalized, scope);
+  const windowRange = presetHistoryWindow(normalized, new Date());
+  return new URLSearchParams({
+    range: normalized,
+    start: windowRange.start.toISOString(),
+    end: windowRange.end.toISOString(),
+  }).toString();
+}
+
+function shouldShowArchivedHistoryNotice(range, scope = 'chart') {
+  const normalized = normalizeChartRange(range);
+  if (normalized === 'all') return true;
+  if (normalized !== 'custom') return false;
+  const start = new Date(historyScopeWindow(scope).start || '');
+  if (Number.isNaN(start.getTime())) return false;
+  return start.getTime() < Date.now() - (30 * 24 * 60 * 60 * 1000);
+}
+
+function noteArchivedHistorySelection(range, scope = 'chart') {
+  if (!shouldShowArchivedHistoryNotice(range, scope)) return;
+  const selectionKey = historySelectionKey(range, scope);
+  if (State.archivedToastSelectionKey === selectionKey) return;
+  State.archivedToastSelectionKey = selectionKey;
+  showDashboardToast(ARCHIVED_HISTORY_NOTICE, 'warning', 6500);
+}
+
+function noteArchivedHistoryResponse(response, range, scope = 'chart') {
+  if (!response || response.headers.get('X-OnWatch-Archived-Data') !== 'true') return;
+  noteArchivedHistorySelection(range, scope);
 }
 
 function saveAPIIntegrationsMetric(metric) {
@@ -1727,7 +2280,7 @@ async function loadAnthropicModalChart(quotaName) {
   const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
 
   try {
-    const res = await authFetch(`${API_BASE}/api/history?range=${range}&provider=anthropic`);
+    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=anthropic`);
     if (!res.ok) return;
     const data = await res.json();
     if (!Array.isArray(data) || data.length === 0) return;
@@ -2124,7 +2677,7 @@ async function loadCopilotModalChart(quotaName) {
   const rangeKey = range.toLowerCase();
   const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
   try {
-    const res = await authFetch(`${API_BASE}/api/history?range=${range}&provider=copilot`);
+    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=copilot`);
     if (!res.ok) return;
     const history = await res.json();
     if (!history || history.length === 0) return;
@@ -2767,7 +3320,7 @@ async function loadAntigravityModalChart(groupKey) {
   const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
   const colors = getThemeColors();
   try {
-    const res = await authFetch(`${API_BASE}/api/history?range=${range}&provider=antigravity`);
+    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=antigravity`);
     if (!res.ok) return;
     const data = await res.json();
 
@@ -3132,7 +3685,7 @@ async function loadCodexModalChart(quotaName) {
   const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
 
   try {
-    const res = await authFetch(`${API_BASE}/api/history?range=${range}&provider=codex${codexAccountParam()}`);
+    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=codex${codexAccountParam()}`);
     if (!res.ok) return;
     const data = await res.json();
     if (!Array.isArray(data) || data.length === 0) return;
@@ -3249,6 +3802,16 @@ function formatDateTime(isoString) {
 }
 
 function platformCostTimeScale(range) {
+  if (range === 'custom') {
+    const duration = graphRangeDurationMs(range);
+    if (duration <= 2 * 60 * 60 * 1000) {
+      return { unit: 'minute', displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' } };
+    }
+    if (duration <= 2 * 24 * 60 * 60 * 1000) {
+      return { unit: 'hour', displayFormats: { hour: 'MMM d, HH:mm', minute: 'HH:mm', day: 'MMM d' } };
+    }
+    return { unit: 'day', displayFormats: { day: 'MMM d', hour: 'MMM d, HH:mm', minute: 'MMM d, HH:mm' } };
+  }
   if (range === 'all' || range === '30d' || range === '7d') {
     return { unit: 'day', displayFormats: { day: 'MMM d', hour: 'MMM d, HH:mm', minute: 'MMM d, HH:mm' } };
   }
@@ -3399,6 +3962,24 @@ function initTimezoneBadge() {
 
   loadTimezoneFromAPI().then(() => {
     updateBadgeText(badge);
+    ['chart', 'platformCost', 'platformCostBreakdown'].forEach(scope => {
+      const windowState = historyScopeWindow(scope);
+      if (windowState.range === 'custom' || !windowState.start || !windowState.end) return;
+      const startDate = formatHistoryDateInTimezone(windowState.start);
+      const endDate = formatHistoryDateInTimezone(windowState.end);
+      if (scope === 'platformCost') {
+        State.platformCostStartDate = startDate;
+        State.platformCostEndDate = endDate;
+      } else if (scope === 'platformCostBreakdown') {
+        State.platformCostBreakdownStartDate = startDate;
+        State.platformCostBreakdownEndDate = endDate;
+      } else {
+        State.historyStartDate = startDate;
+        State.historyEndDate = endDate;
+      }
+      syncGraphHistoryRangeControl(scope);
+      persistHistoryWindow(scope);
+    });
     badge.style.cursor = 'pointer';
     badge.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3816,6 +4397,46 @@ function applyProviderCurrentPayload(provider, data, apiIntegrationsCurrentData 
   setDashboardFreshness({ stale: Boolean(options.stale), ts: options.cacheTs });
 }
 
+function currentRequestIsActive(requestProvider, requestAccount, requestSeq) {
+  if (State.currentRequestSeq !== requestSeq) return false;
+  if (getCurrentProvider() !== requestProvider) return false;
+  return requestProvider !== 'codex' || State.codexAccount === requestAccount;
+}
+
+async function refreshAPIIntegrationsCurrent(requestProvider, requestAccount, requestSeq) {
+  const cached = getCachedAPIIntegrationsCurrent(PROVIDER_STALE_CACHE_MAX_MS);
+  let healthData = cached?.health || State.apiIntegrationsHealth || null;
+  try {
+    const healthRes = await authFetchWithTimeout(`${API_BASE}/api/api-integrations/health`);
+    if (healthRes.ok) healthData = await healthRes.json();
+  } catch (e) {
+    // Health is secondary. Keep the last successful value.
+  }
+
+  const deadline = Date.now() + 30000;
+  do {
+    const currentRes = await authFetchWithTimeout(`${API_BASE}/api/api-integrations/current`);
+    if (!currentRes.ok) throw new Error('Failed to fetch API integrations');
+    const currentData = await currentRes.json();
+    const dataState = currentRes.headers.get('X-OnWatch-Data-State') || 'fresh';
+    const stale = dataState !== 'fresh';
+
+    if (currentRequestIsActive(requestProvider, requestAccount, requestSeq)) {
+      if (!stale) setCachedAPIIntegrationsCurrent(currentData, healthData);
+      applyAPIIntegrationsCurrentData(currentData, healthData, {
+        stale,
+        cacheTs: stale ? cached?.ts : Date.now(),
+      });
+    }
+    if (!stale || Date.now() >= deadline) {
+      return { currentData, healthData, stale };
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  } while (currentRequestIsActive(requestProvider, requestAccount, requestSeq));
+
+  return null;
+}
+
 async function fetchCurrent(options = {}) {
   const requestProvider = getCurrentProvider();
   const requestAccount = requestProvider === 'codex' ? State.codexAccount : null;
@@ -3860,21 +4481,18 @@ async function fetchCurrent(options = {}) {
   }
   if (!options.force && servedFreshCache) return;
 
+  const shouldRefreshAPIIntegrations = (
+    requestProvider === 'api-integrations'
+    || requestProvider === 'both'
+    || supportsPlatformCost(requestProvider)
+  ) && State.apiIntegrationsVisibility?.dashboard !== false;
+  const apiIntegrationsCurrentPromise = shouldRefreshAPIIntegrations
+    ? refreshAPIIntegrationsCurrent(requestProvider, requestAccount, requestSeq).catch(() => null)
+    : Promise.resolve(null);
+
   try {
     if (requestProvider === 'api-integrations') {
-      const [currentRes, healthRes] = await Promise.all([
-        authFetchWithTimeout(`${API_BASE}/api/api-integrations/current`),
-        authFetchWithTimeout(`${API_BASE}/api/api-integrations/health`)
-      ]);
-      if (!currentRes.ok || !healthRes.ok) throw new Error('Failed to fetch API integrations');
-      const [currentData, healthData] = await Promise.all([currentRes.json(), healthRes.json()]);
-
-      requestAnimationFrame(() => {
-        if (State.currentRequestSeq !== requestSeq) return;
-        if (getCurrentProvider() !== requestProvider) return;
-        setCachedAPIIntegrationsCurrent(currentData, healthData);
-        applyAPIIntegrationsCurrentData(currentData, healthData);
-      });
+      await apiIntegrationsCurrentPromise;
       return;
     }
 
@@ -3882,37 +4500,23 @@ async function fetchCurrent(options = {}) {
     if (!res.ok) throw new Error('Failed to fetch');
     const data = await res.json();
 
-    let apiIntegrationsCurrentData = null;
-    let apiIntegrationsHealthData = null;
-    if ((requestProvider === 'both' || supportsPlatformCost(requestProvider)) && State.apiIntegrationsVisibility?.dashboard !== false) {
-      try {
-        const [apiIntegrationsCurrentRes, apiIntegrationsHealthRes] = await Promise.all([
-          authFetchWithTimeout(`${API_BASE}/api/api-integrations/current`),
-          authFetchWithTimeout(`${API_BASE}/api/api-integrations/health`)
-        ]);
-        if (apiIntegrationsCurrentRes.ok) apiIntegrationsCurrentData = await apiIntegrationsCurrentRes.json();
-        if (apiIntegrationsHealthRes.ok) apiIntegrationsHealthData = await apiIntegrationsHealthRes.json();
-        if (apiIntegrationsCurrentData) {
-          setCachedAPIIntegrationsCurrent(apiIntegrationsCurrentData, apiIntegrationsHealthData);
-        }
-      } catch (e) {
-        // silent - API integrations summary should not break all-provider current load
-      }
-      State.apiIntegrationsCurrentLoaded = true;
-    }
-
     requestAnimationFrame(() => {
-      if (State.currentRequestSeq !== requestSeq) return;
-      if (getCurrentProvider() !== requestProvider) return;
-      if (requestProvider === 'codex' && State.codexAccount !== requestAccount) return;
+      if (!currentRequestIsActive(requestProvider, requestAccount, requestSeq)) return;
 
       setCachedProviderData('current', requestProvider, '', {
         data,
-        apiIntegrationsCurrent: apiIntegrationsCurrentData,
-        apiIntegrationsHealth: apiIntegrationsHealthData,
+        apiIntegrationsCurrent: State.apiIntegrationsCurrent || null,
+        apiIntegrationsHealth: State.apiIntegrationsHealth || null,
       });
-      applyProviderCurrentPayload(requestProvider, data, apiIntegrationsCurrentData, apiIntegrationsHealthData, requestAccount);
+      applyProviderCurrentPayload(
+        requestProvider,
+        data,
+        State.apiIntegrationsCurrent || null,
+        State.apiIntegrationsHealth || null,
+        requestAccount
+      );
     });
+    await apiIntegrationsCurrentPromise;
   } catch (err) {
     // fetch error - cards show fallback state
     if (State.currentRequestSeq !== requestSeq) return;
@@ -4626,6 +5230,9 @@ function chartRangeUsageLabel(range) {
     '15d': 'past 15 days',
     '30d': 'past 30 days',
     all: 'all time',
+    custom: State.historyStartDate && State.historyEndDate
+      ? `${State.historyStartDate} through ${State.historyEndDate}`
+      : 'selected dates',
   };
   return labels[rangeKey] || `past ${rangeKey}`;
 }
@@ -4719,6 +5326,11 @@ function graphRangeDurationMs(range, points = []) {
     '15d': 15 * 24 * hour,
     '30d': 30 * 24 * hour,
   };
+  if (rangeKey === 'custom' && State.historyWindowStart && State.historyWindowEnd) {
+    const start = Date.parse(State.historyWindowStart);
+    const end = Date.parse(State.historyWindowEnd);
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) return end - start;
+  }
   if (rangeKey !== 'all') return durations[rangeKey] || durations['6h'];
   const validTimes = points
     .map(point => point && point.x instanceof Date ? point.x.getTime() : new Date(point && point.x).getTime())
@@ -5122,11 +5734,11 @@ function setMainChartDatasets(datasets, range, options = {}) {
   updateTimeScale(State.chart, range);
   State.chartYMax = computeYMax(State.chart.data.datasets, State.chart, { cap });
   State.chart.options.scales.y.max = State.chartYMax;
-  State.chart.update();
+  State.chart.update('none');
   State.currentChartProvider = getCurrentProvider();
   State.currentChartRange = range;
   if (State.currentChartProvider && State.currentChartProvider !== 'api-integrations' && State.currentChartProvider !== 'both') {
-    updateCachedProviderData('history', State.currentChartProvider, range, { chartDatasets: datasets });
+    updateCachedProviderData('history', State.currentChartProvider, historySelectionKey(range), { chartDatasets: datasets });
   }
 }
 
@@ -5191,6 +5803,7 @@ function initChart() {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation: false,
       interaction: { mode: 'index', intersect: false },
       layout: { padding: { top: 4 } },
       plugins: {
@@ -5358,7 +5971,8 @@ function renderPlatformCostChartForSelectedRange(provider = getCurrentProvider()
 
 async function refreshAPIIntegrationsHistoryForCombinedView(range, requestSeq) {
   try {
-    const res = await authFetch(`${API_BASE}/api/api-integrations/history?range=${range}`);
+    const res = await authFetch(`${API_BASE}/api/api-integrations/history?${historyRequestQuery(range)}`);
+    noteArchivedHistoryResponse(res, range);
     if (!res.ok) return;
     const data = await res.json();
     if (State.historyRequestSeq !== requestSeq) return;
@@ -5370,7 +5984,7 @@ async function refreshAPIIntegrationsHistoryForCombinedView(range, requestSeq) {
       ...(State.allProvidersHistory || {}),
       apiIntegrations: data,
     };
-    updateCachedProviderData('history', 'both', range, {
+    updateCachedProviderData('history', 'both', historySelectionKey(range), {
       apiIntegrationsHistory: data,
     });
     renderAllProvidersView();
@@ -5385,7 +5999,253 @@ function scheduleAPIIntegrationsHistoryRefresh(range, requestSeq) {
   }, 0);
 }
 
+function usageLineDataset(label, hiddenKey, rawData, color, range) {
+  const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
+  const border = color?.border || color || '#0D9488';
+  const background = color?.bg || `${border}15`;
+  return {
+    label,
+    data,
+    borderColor: border,
+    backgroundColor: background,
+    fill: true,
+    tension: 0.4,
+    borderWidth: 2,
+    pointRadius: pointRadii,
+    pointHoverRadius: 4,
+    hidden: State.hiddenQuotas.has(hiddenKey),
+    spanGaps: true,
+    segment: getSegmentStyle(gapSegments, border),
+  };
+}
+
+function buildFlatUsageDatasets(rows, range, provider, displayNames, colorMap, fallbackColors) {
+  const quotaKeys = new Set();
+  rows.forEach((row) => {
+    Object.keys(row || {}).forEach((key) => {
+      if (isHistoryQuotaKey(key)) quotaKeys.add(key);
+    });
+  });
+  const sortedKeys = provider === 'anthropic' || provider === 'codex'
+    ? sortQuotaKeysForProvider(quotaKeys, provider)
+    : [...quotaKeys].sort();
+  let fallbackIndex = 0;
+  return sortedKeys.map((key) => {
+    const color = colorMap[key] || fallbackColors[fallbackIndex++ % fallbackColors.length];
+    const rawData = rows.map((row) => ({ x: new Date(row.capturedAt), y: row[key] ?? 0 }));
+    return usageLineDataset(displayNames[key] || key, key, rawData, color, range);
+  });
+}
+
+function buildProviderHistoryDatasets(provider, range, data) {
+  if (provider === 'antigravity') {
+    const labels = data.labels || [];
+    const defaultColors = ['#D97757', '#10B981', '#3B82F6'];
+    return (data.datasets || []).map((dataset, index) => usageLineDataset(
+      dataset.label || dataset.modelId,
+      dataset.modelId,
+      (dataset.data || []).map((value, pointIndex) => ({ x: new Date(labels[pointIndex]), y: value })),
+      dataset.borderColor || defaultColors[index % defaultColors.length],
+      range,
+    ));
+  }
+
+  const rows = Array.isArray(data) ? data : [];
+  if (provider === 'anthropic') {
+    return buildFlatUsageDatasets(rows, range, provider, anthropicDisplayNames, anthropicChartColorMap, anthropicChartColorFallback);
+  }
+  if (provider === 'codex') {
+    return buildFlatUsageDatasets(rows, range, provider, codexDisplayNames, codexChartColorMap, codexChartColorFallback);
+  }
+  if (provider === 'minimax') {
+    return buildFlatUsageDatasets(rows, range, provider, minimaxDisplayNames, minimaxChartColorMap, minimaxChartColorFallback);
+  }
+  if (provider === 'gemini') {
+    return buildFlatUsageDatasets(rows, range, provider, geminiDisplayNames, geminiChartColorMap, geminiChartColorFallback);
+  }
+  if (provider === 'openrouter') {
+    const displayNames = { usage: 'Total Usage', usageDaily: 'Daily Usage', percent: 'Usage %' };
+    const colors = {
+      usage: { border: '#0D9488', bg: 'rgba(13, 148, 136, 0.06)' },
+      usageDaily: { border: '#F59E0B', bg: 'rgba(245, 158, 11, 0.06)' },
+      percent: { border: '#3B82F6', bg: 'rgba(59, 130, 246, 0.06)' },
+    };
+    const fallbacks = [
+      { border: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.06)' },
+      { border: '#EC4899', bg: 'rgba(236, 72, 153, 0.06)' },
+    ];
+    return buildFlatUsageDatasets(rows, range, provider, displayNames, colors, fallbacks);
+  }
+  if (provider === 'copilot' || provider === 'cursor') {
+    const names = provider === 'copilot' ? copilotDisplayNames : cursorDisplayNames;
+    const colors = provider === 'copilot' ? copilotChartColorMap : cursorChartColorMap;
+    const fallbacks = provider === 'copilot' ? copilotChartColorFallback : cursorChartColorFallback;
+    const keys = new Set();
+    rows.forEach((row) => (row.quotas || []).forEach((quota) => keys.add(quota.name)));
+    const sortedKeys = provider === 'cursor' ? sortQuotaKeysForProvider(keys, provider) : [...keys].sort();
+    let fallbackIndex = 0;
+    return sortedKeys.map((key) => {
+      const color = colors[key] || fallbacks[fallbackIndex++ % fallbacks.length];
+      const rawData = rows.map((row) => {
+        const quota = (row.quotas || []).find((candidate) => candidate.name === key);
+        const value = provider === 'copilot' ? quota?.usagePercent : quota?.utilization;
+        return { x: new Date(row.capturedAt), y: value ?? 0 };
+      });
+      return usageLineDataset(names[key] || key, key, rawData, color, range);
+    });
+  }
+
+  const style = getComputedStyle(document.documentElement);
+  const configs = provider === 'zai'
+    ? [
+      { label: 'Tokens', key: 'tokensPercent', hiddenKey: 'tokensLimit', color: style.getPropertyValue('--chart-subscription').trim() || '#0D9488', bg: 'rgba(13, 148, 136, 0.06)' },
+      { label: 'Time', key: 'timePercent', hiddenKey: 'timeLimit', color: style.getPropertyValue('--chart-search').trim() || '#F59E0B', bg: 'rgba(245, 158, 11, 0.06)' },
+      { label: 'Tool Calls', key: 'toolCallsPercent', hiddenKey: 'toolCalls', color: style.getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', bg: 'rgba(59, 130, 246, 0.06)' },
+    ]
+    : [
+      { label: 'Subscription', key: 'subscriptionPercent', hiddenKey: 'subscription', color: '#0D9488', bg: 'rgba(13, 148, 136, 0.06)' },
+      { label: 'Search', key: 'searchPercent', hiddenKey: 'search', color: '#F59E0B', bg: 'rgba(245, 158, 11, 0.06)' },
+      { label: 'Tool Calls', key: 'toolCallsPercent', hiddenKey: 'toolCalls', color: '#3B82F6', bg: 'rgba(59, 130, 246, 0.06)' },
+    ];
+  return configs.map((config) => usageLineDataset(
+    config.label,
+    config.hiddenKey,
+    rows.map((row) => ({ x: new Date(row.capturedAt), y: row[config.key] })),
+    { border: config.color, bg: config.bg },
+    range,
+  ));
+}
+
+function usageGraphAccountKey(provider) {
+  if (provider === 'codex') return `codex:${State.codexAccount || 1}`;
+  if (provider === 'minimax') return `minimax:${State.minimaxAccount || ''}`;
+  return '';
+}
+
+function usageGraphJobIsSelected(job) {
+  if (getCurrentProvider() !== job.provider || selectedChartRange() !== job.range) return false;
+  if (usageGraphAccountKey(job.provider) !== job.accountKey) return false;
+  return historySelectionKey(job.range) === job.selectionKey;
+}
+
+function applyUsageGraphJob(job, payload, options = {}) {
+  if (!usageGraphJobIsSelected(job)) return;
+  if (payload.usesArchivedData) noteArchivedHistorySelection(job.range);
+  if (job.provider === 'api-integrations' || job.provider === 'both') {
+    applyProviderHistoryPayload(job.provider, job.range, payload.data, payload.apiIntegrationsHistory || null);
+  } else {
+    if (!State.chart) initChart();
+    setMainChartDatasets(payload.chartDatasets || [], job.range, { preserveExistingOnEmpty: true });
+    if (supportsPlatformCost(job.provider)) renderPlatformCostChartForSelectedRange(job.provider);
+  }
+  setDashboardFreshness({ stale: Boolean(options.stale), ts: options.ts });
+}
+
+async function runUsageGraphRefreshJob(job, signal) {
+  let data;
+  let apiIntegrationsHistory = null;
+  let usesArchivedData = false;
+  if (job.provider === 'api-integrations') {
+    const response = await authFetch(`${API_BASE}/api/api-integrations/history?${job.query}`, { signal });
+    if (!response.ok) throw new Error('Failed to fetch API integrations history');
+    usesArchivedData = response.headers.get('X-OnWatch-Archived-Data') === 'true';
+    data = await response.json();
+  } else {
+    const response = await authFetch(`${API_BASE}/api/history?${job.query}&${providerParamFor(job.provider, job.accountKey)}`, { signal });
+    if (!response.ok) throw new Error('Failed to fetch history');
+    usesArchivedData = response.headers.get('X-OnWatch-Archived-Data') === 'true';
+    data = await response.json();
+    if (job.provider === 'both' && State.apiIntegrationsVisibility?.dashboard !== false) {
+      const apiResponse = await authFetch(`${API_BASE}/api/api-integrations/history?${job.query}`, { signal });
+      if (apiResponse.ok) {
+        usesArchivedData = usesArchivedData || apiResponse.headers.get('X-OnWatch-Archived-Data') === 'true';
+        apiIntegrationsHistory = await apiResponse.json();
+      }
+    }
+  }
+  if (signal.aborted) return;
+
+  const chartDatasets = job.provider === 'api-integrations' || job.provider === 'both'
+    ? null
+    : buildProviderHistoryDatasets(job.provider, job.range, data);
+  const payload = { data, apiIntegrationsHistory, chartDatasets, usesArchivedData };
+  setCachedProviderData('history', job.provider, job.selectionKey, payload, job.accountKey);
+  applyUsageGraphJob(job, payload);
+}
+
+function createUsageGraphRefreshJob(range, provider = getCurrentProvider(), accountKey = usageGraphAccountKey(provider)) {
+  range = normalizeChartRange(range);
+  const selectionKey = historySelectionKey(range);
+  const job = {
+    key: `usage:${provider}:${accountKey}:${selectionKey}`,
+    kind: 'usage',
+    scope: 'chart',
+    provider,
+    accountKey,
+    range,
+    selectionKey,
+    query: historyRequestQuery(range),
+    label: `${platformCostRangeLabel(range)} usage`,
+  };
+  job.run = (signal) => runUsageGraphRefreshJob(job, signal);
+  return job;
+}
+
+function scheduleUsageGraphWarmup(provider, accountKey, activeRange) {
+  if (document.hidden) return;
+  const preferredRanges = ['30d', '24h', '6h', '1h', '7d', 'all'];
+  preferredRanges
+    .filter((range) => range !== activeRange)
+    .filter((range) => !getCachedProviderData(
+      'history',
+      provider,
+      historySelectionKey(range),
+      PROVIDER_HISTORY_CACHE_TTL_MS,
+      accountKey,
+    ))
+    .forEach((range) => enqueueGraphRefresh(
+      createUsageGraphRefreshJob(range, provider, accountKey),
+      { foreground: false },
+    ));
+}
+
 async function fetchHistory(range, options = {}) {
+  range = normalizeChartRange(range === undefined ? selectedChartRange() : range);
+  const provider = getCurrentProvider();
+  const accountKey = usageGraphAccountKey(provider);
+  const selectionKey = historySelectionKey(range);
+  State.currentRange = range;
+
+  const cached = getStaleProviderHistory(provider, range, selectionKey, accountKey);
+  const freshCached = getCachedProviderData(
+    'history',
+    provider,
+    selectionKey,
+    PROVIDER_HISTORY_CACHE_TTL_MS,
+    accountKey,
+  );
+  if (cached?.data) {
+    applyUsageGraphJob(
+      createUsageGraphRefreshJob(range, provider, accountKey),
+      cached,
+      { stale: Boolean(options.force || !freshCached), ts: cached.ts },
+    );
+    if (!options.force && freshCached) {
+      scheduleUsageGraphWarmup(provider, accountKey, range);
+      return;
+    }
+  }
+
+  const job = createUsageGraphRefreshJob(range, provider, accountKey);
+  if (range === 'custom') {
+    return runCustomGraphRefresh(job);
+  }
+  const result = enqueueGraphRefresh(job, { foreground: options.background !== true });
+  result.then(() => scheduleUsageGraphWarmup(provider, accountKey, range)).catch(() => {});
+  return result;
+}
+
+async function fetchHistoryLegacy(range, options = {}) {
   if (range === undefined) {
     range = selectedChartRange();
   }
@@ -5394,11 +6254,12 @@ async function fetchHistory(range, options = {}) {
   const requestProvider = getCurrentProvider();
   const requestAccount = requestProvider === 'codex' ? State.codexAccount : null;
   const requestRange = range;
+  const requestRangeKey = historySelectionKey(range);
   const requestSeq = (State.historyRequestSeq || 0) + 1;
   State.historyRequestSeq = requestSeq;
 
-  const cached = getStaleProviderData('history', requestProvider, range);
-  const freshCached = getCachedProviderData('history', requestProvider, range, PROVIDER_HISTORY_CACHE_TTL_MS);
+  const cached = getStaleProviderHistory(requestProvider, range, requestRangeKey);
+  const freshCached = getCachedProviderData('history', requestProvider, requestRangeKey, PROVIDER_HISTORY_CACHE_TTL_MS);
   let servedRenderableCache = false;
   if (cached && cached.data) {
     requestAnimationFrame(() => {
@@ -5413,7 +6274,7 @@ async function fetchHistory(range, options = {}) {
       } else {
         applyProviderHistoryPayload(requestProvider, range, cached.data, cached.apiIntegrationsHistory || null);
       }
-      setDashboardFreshness({ stale: !freshCached, ts: cached.ts });
+      setDashboardFreshness({ stale: Boolean(options.force || !freshCached), ts: cached.ts });
     });
     servedRenderableCache = requestProvider === 'api-integrations' || requestProvider === 'both' || Boolean(cached.chartDatasets);
   }
@@ -5421,7 +6282,8 @@ async function fetchHistory(range, options = {}) {
 
   try {
     if (requestProvider === 'api-integrations') {
-      const res = await authFetch(`${API_BASE}/api/api-integrations/history?range=${range}`);
+      const res = await authFetch(`${API_BASE}/api/api-integrations/history?${historyRequestQuery(range)}`);
+      noteArchivedHistoryResponse(res, range);
       if (!res.ok) throw new Error('Failed to fetch API integrations history');
       const data = await res.json();
 
@@ -5431,14 +6293,14 @@ async function fetchHistory(range, options = {}) {
 
       State.apiIntegrationsHistory = data;
       State.platformCostHistoryRange = range;
-      setCachedProviderData('history', requestProvider, range, { data });
+      setCachedProviderData('history', requestProvider, requestRangeKey, { data });
       setDashboardFreshness({ stale: false });
       renderAPIIntegrationsChart(range);
       renderAPIIntegrationsInsights();
       return;
     }
 
-    const res = await authFetch(`${API_BASE}/api/history?range=${range}&${providerParam()}`);
+    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&${providerParam()}`);
     if (!res.ok) throw new Error('Failed to fetch history');
     const data = await res.json();
 
@@ -5448,7 +6310,7 @@ async function fetchHistory(range, options = {}) {
     if (State.currentRange !== requestRange) return;
 
     const provider = requestProvider;
-    setCachedProviderData('history', requestProvider, range, {
+    setCachedProviderData('history', requestProvider, requestRangeKey, {
       data,
       apiIntegrationsHistory: cached?.apiIntegrationsHistory || null,
     });
@@ -6907,9 +7769,7 @@ function renderPlatformCostPanel(provider = getCurrentProvider()) {
 
   renderPlatformCostBreakdown(provider);
   const breakdownRange = normalizePlatformCostRange(State.platformCostBreakdownRange || DEFAULT_CHART_RANGE);
-  const chartRange = normalizePlatformCostRange(State.platformCostRange || DEFAULT_CHART_RANGE);
-  if (breakdownRange !== chartRange &&
-      State.platformCostBreakdownHistoryRange !== breakdownRange &&
+  if (State.platformCostBreakdownHistoryRange !== breakdownRange &&
       !State.platformCostBreakdownLoading) {
     fetchPlatformCostBreakdownRange(breakdownRange, provider);
   }
@@ -6921,10 +7781,12 @@ function platformCostLoadingLabel(range) {
 }
 
 function setPlatformCostRangeControlsLoading(range, loading) {
+  const selectedRange = selectedPlatformCostRange();
   document.querySelectorAll('.platform-cost-range-btn').forEach((button) => {
-    button.classList.toggle('active', button.dataset.range === range);
-    button.disabled = Boolean(loading);
-    button.setAttribute('aria-busy', loading ? 'true' : 'false');
+    button.classList.toggle('active', button.dataset.range === selectedRange);
+    const isCurrentLoad = Boolean(loading && range === selectedRange);
+    button.disabled = isCurrentLoad;
+    button.setAttribute('aria-busy', isCurrentLoad ? 'true' : 'false');
   });
 }
 
@@ -7026,26 +7888,18 @@ function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
 }
 
 function setPlatformCostBreakdownRangeControlsLoading(range, loading) {
+  const selectedRange = selectedPlatformCostBreakdownRange();
   document.querySelectorAll('.platform-cost-breakdown-range-btn').forEach((button) => {
-    button.classList.toggle('active', button.dataset.range === range);
-    button.disabled = Boolean(loading);
-    button.setAttribute('aria-busy', loading ? 'true' : 'false');
+    button.classList.toggle('active', button.dataset.range === selectedRange);
+    const isCurrentLoad = Boolean(loading && range === selectedRange);
+    button.disabled = isCurrentLoad;
+    button.setAttribute('aria-busy', isCurrentLoad ? 'true' : 'false');
   });
 }
 
 function bindPlatformCostBreakdownRangeControls(range) {
   document.querySelectorAll('.platform-cost-breakdown-range-btn').forEach((button) => {
     button.classList.toggle('active', button.dataset.range === range);
-    if (!button.dataset.bound) {
-      button.addEventListener('click', () => {
-        const nextRange = normalizePlatformCostRange(button.dataset.range || DEFAULT_CHART_RANGE);
-        State.platformCostBreakdownRange = nextRange;
-        savePlatformCostBreakdownRange(nextRange);
-        renderPlatformCostBreakdown(getCurrentProvider());
-        fetchPlatformCostBreakdownRange(nextRange, getCurrentProvider());
-      });
-      button.dataset.bound = 'true';
-    }
   });
 }
 
@@ -7166,7 +8020,7 @@ function renderPlatformCostBreakdownTable(rows, tableHead, tbody) {
   </tr>`).join('');
 }
 
-function renderPlatformCostChart(provider = getCurrentProvider(), range = State.currentRange || DEFAULT_CHART_RANGE) {
+function renderPlatformCostChart(provider = getCurrentProvider(), range = State.platformCostRange || DEFAULT_CHART_RANGE) {
   const canvas = document.getElementById('platform-cost-chart');
   if (!canvas || typeof Chart === 'undefined' || !supportsPlatformCost(provider)) return;
   range = normalizePlatformCostRange(range);
@@ -7191,13 +8045,8 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
       ? 'Token & Cost per Period'
       : 'Token & Cost Growth';
   }
-  if (State.platformCostHistoryLoading && !hasLoadedSelectedRange) {
-    if (State.platformCostChart) {
-      setPlatformCostChartLoading(true, `Loading ${platformCostRangeLabel(range)} cost history`);
-      setPlatformCostRangeControlsLoading(range, true);
-    } else {
-      renderPlatformCostLoadingPanel(range);
-    }
+  if (!hasLoadedSelectedRange) {
+    if (range !== 'custom') setPlatformCostChartLoading(false);
     return;
   }
   const cumulative = buildPlatformCumulativeSeries(rows, range);
@@ -7286,6 +8135,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const chartOptions = {
       responsive: true,
       maintainAspectRatio: false,
+      animation: false,
       interaction: { mode: 'index', intersect: false },
       layout: { padding: { top: 4 } },
       plugins: {
@@ -7352,7 +8202,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     State.platformCostChart.config.type = chartType;
     State.platformCostChart.data = chartData;
     State.platformCostChart.options = chartOptions;
-    State.platformCostChart.update();
+    State.platformCostChart.update('none');
     return;
   }
   State.platformCostChart = new Chart(canvas, {
@@ -7366,21 +8216,12 @@ function bindPlatformCostRangeControls(range) {
   setupPlatformCostChartModeSelector();
   document.querySelectorAll('.platform-cost-range-btn').forEach((button) => {
     button.classList.toggle('active', button.dataset.range === range);
-    if (!button.dataset.bound) {
-      button.addEventListener('click', () => {
-        const nextRange = normalizePlatformCostRange(button.dataset.range || DEFAULT_CHART_RANGE);
-        State.platformCostRange = nextRange;
-        savePlatformCostRange(nextRange);
-        fetchPlatformCostHistory(nextRange, getCurrentProvider());
-      });
-      button.dataset.bound = 'true';
-    }
   });
 }
 
 function normalizePlatformCostRange(range) {
   const value = String(range || '').trim().toLowerCase();
-  return ['1h', '6h', '24h', '7d', '30d', 'all'].includes(value) ? value : DEFAULT_CHART_RANGE;
+  return ['1h', '6h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : DEFAULT_CHART_RANGE;
 }
 
 function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || '6h') {
@@ -7494,6 +8335,9 @@ function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h'
 }
 
 function platformCostRangeStartTime(range) {
+  if (range === 'custom' && State.platformCostWindowStart) {
+    return new Date(State.platformCostWindowStart);
+  }
   const durations = {
     '1h': 60 * 60 * 1000,
     '6h': 6 * 60 * 60 * 1000,
@@ -7506,7 +8350,7 @@ function platformCostRangeStartTime(range) {
 }
 
 function platformCostRangeLabel(range) {
-  const labels = { '1h': '1h', '6h': '6h', '24h': '24h', '7d': '7d', '30d': '30d', all: 'All' };
+  const labels = { '1h': '1h', '6h': '6h', '24h': '24h', '7d': '7d', '30d': '30d', all: 'All', custom: 'Custom' };
   return labels[range] || labels[DEFAULT_CHART_RANGE] || '7d';
 }
 
@@ -7544,8 +8388,10 @@ function updatePlatformCostSummaryForRange(provider, range, rows) {
 function getPlatformCostHistoryRows(integration) {
   const sessionHistory = State.platformCostSessionHistory || {};
   const sessionRows = getPlatformCostIntegrationValue(sessionHistory, integration);
-  if (Array.isArray(sessionRows)) return sessionRows;
   const history = State.apiIntegrationsHistory || {};
+  const archivedRows = getPlatformCostIntegrationValue(history, integration);
+  if (State.platformCostUsesArchivedData && Array.isArray(archivedRows)) return archivedRows;
+  if (Array.isArray(sessionRows)) return sessionRows;
   const rows = getPlatformCostIntegrationValue(history, integration);
   return Array.isArray(rows) ? rows : [];
 }
@@ -7611,123 +8457,121 @@ function buildPlatformCostRowsFromTotals(totals) {
   }];
 }
 
-async function fetchPlatformCostBreakdownRange(range, provider) {
-  range = normalizePlatformCostRange(range);
-  const key = `${provider || ''}:${range}`;
-  if (State.platformCostBreakdownLoading && State.platformCostBreakdownInflightKey === key) return;
+function platformCostRefreshSelectionKey(range, scope) {
+  return normalizePlatformCostRange(range) === 'custom'
+    ? historySelectionKey('custom', scope)
+    : normalizePlatformCostRange(range);
+}
 
-  const cached = getStalePlatformCostHistory(provider, range);
-  const freshCached = getCachedPlatformCostHistory(provider, range);
-  if (cached) {
-    State.platformCostBreakdownSessionModels = cached.sessionModels || {};
-    State.platformCostBreakdownHistoryRange = range;
-    if (getCurrentProvider() === provider) {
-      renderPlatformCostBreakdown(provider);
-    }
-    if (freshCached) return;
-  }
+function platformCostJobIsSelected(job) {
+  if (getCurrentProvider() !== job.provider) return false;
+  const selectedRange = job.scope === 'platformCostBreakdown'
+    ? selectedPlatformCostBreakdownRange()
+    : selectedPlatformCostRange();
+  if (selectedRange !== job.range) return false;
+  return platformCostRefreshSelectionKey(job.range, job.scope) === job.selectionKey;
+}
 
-  const controller = new AbortController();
-  State.platformCostBreakdownLoading = true;
-  State.platformCostBreakdownInflightKey = key;
-  if (getCurrentProvider() === provider) {
-    renderPlatformCostBreakdown(provider);
+async function runPlatformCostRefreshJob(job, signal) {
+  const payload = await fetchPlatformCostPayload(job.provider, job.range, signal, job.scope);
+  if (signal.aborted) return;
+
+  setCachedPlatformCostHistory(job.provider, job.range, payload, job.scope);
+  if (job.range !== 'custom') {
+    const alternateScope = job.scope === 'platformCost' ? 'platformCostBreakdown' : 'platformCost';
+    setCachedPlatformCostHistory(job.provider, job.range, payload, alternateScope);
   }
-  try {
-    const payload = await fetchPlatformCostPayload(provider, range, controller.signal);
-    if (controller.signal.aborted || getCurrentProvider() !== provider) return;
+  if (!platformCostJobIsSelected(job)) return;
+
+  if (payload.usesArchivedData) noteArchivedHistorySelection(job.range, job.scope);
+  if (job.scope === 'platformCostBreakdown') {
     State.platformCostBreakdownSessionModels = payload.sessionModels || {};
-    State.platformCostBreakdownHistoryRange = range;
-    setCachedPlatformCostHistory(provider, range, payload);
-    renderPlatformCostBreakdown(provider);
-  } catch (e) {
-    if (!controller.signal.aborted && getCurrentProvider() === provider) {
-      const tableHead = document.getElementById('platform-cost-models-thead');
-      const tbody = document.getElementById('platform-cost-models-tbody');
-      if (tableHead && tbody) {
-        tableHead.innerHTML = '<tr><th>Token Type</th><th>Tokens</th><th>Effective Rate</th><th>Total Cost</th><th>Cost Share</th></tr>';
-        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Cost breakdown unavailable.</td></tr>';
-      }
-    }
-  } finally {
-    if (State.platformCostBreakdownInflightKey === key) {
-      State.platformCostBreakdownLoading = false;
-      State.platformCostBreakdownInflightKey = null;
-      if (getCurrentProvider() === provider) {
-        setPlatformCostBreakdownRangeControlsLoading(range, false);
-      }
-    }
+    State.platformCostBreakdownHistoryRange = job.range;
+    renderPlatformCostBreakdown(job.provider);
+  } else {
+    applyPlatformCostHistoryPayload(job.range, payload);
+    renderPlatformCostPanel(job.provider);
+    setDashboardFreshness({ stale: false });
   }
 }
 
-async function fetchPlatformCostHistory(range, provider) {
+function createPlatformCostRefreshJob(range, provider, scope = 'platformCost') {
   range = normalizePlatformCostRange(range);
-  const key = `${provider || ''}:${range}`;
-  if (State.platformCostHistoryLoading && State.platformCostHistoryInflightKey === key) {
+  const selectionKey = platformCostRefreshSelectionKey(range, scope);
+  const graphName = scope === 'platformCostBreakdown' ? 'cost breakdown' : 'cost';
+  const job = {
+    key: `cost:${provider || ''}:${scope}:${selectionKey}`,
+    kind: 'cost',
+    scope,
+    provider,
+    range,
+    selectionKey,
+    label: `${platformCostRangeLabel(range)} ${graphName}`,
+  };
+  job.run = (signal) => runPlatformCostRefreshJob(job, signal);
+  return job;
+}
+
+async function fetchPlatformCostBreakdownRange(range, provider, options = {}) {
+  range = normalizePlatformCostRange(range);
+  const cached = getStalePlatformCostHistory(provider, range, 'platformCostBreakdown');
+  const freshCached = getCachedPlatformCostHistory(provider, range, PLATFORM_COST_HISTORY_CACHE_TTL_MS, 'platformCostBreakdown');
+  if (cached) {
+    if (cached.usesArchivedData) noteArchivedHistorySelection(range, 'platformCostBreakdown');
+    State.platformCostBreakdownSessionModels = cached.sessionModels || {};
+    State.platformCostBreakdownHistoryRange = range;
+    if (getCurrentProvider() === provider) renderPlatformCostBreakdown(provider);
+    if (!options.force && freshCached) return;
+  }
+
+  const job = createPlatformCostRefreshJob(range, provider, 'platformCostBreakdown');
+  if (range === 'custom') {
+    setPlatformCostBreakdownRangeControlsLoading(range, true);
+    try {
+      await runCustomGraphRefresh(job);
+    } finally {
+      setPlatformCostBreakdownRangeControlsLoading(range, false);
+    }
     return;
   }
-  const cached = getStalePlatformCostHistory(provider, range);
-  const freshCached = getCachedPlatformCostHistory(provider, range);
+  return enqueueGraphRefresh(job, { foreground: options.background !== true });
+}
+
+async function fetchPlatformCostHistory(range, provider, options = {}) {
+  range = normalizePlatformCostRange(range);
+  const cached = getStalePlatformCostHistory(provider, range, 'platformCost');
+  const freshCached = getCachedPlatformCostHistory(provider, range, PLATFORM_COST_HISTORY_CACHE_TTL_MS, 'platformCost');
   if (cached) {
+    if (cached.usesArchivedData) noteArchivedHistorySelection(range, 'platformCost');
     applyPlatformCostHistoryPayload(range, cached);
     if (getCurrentProvider() === provider) {
       renderPlatformCostPanel(provider);
       setDashboardFreshness({ stale: !freshCached, ts: cached.ts });
     }
-    if (freshCached) return;
+    if (!options.force && freshCached) {
+      schedulePlatformCostWarmup(provider, range);
+      return;
+    }
   }
-  const providerPrefix = `${provider || ''}:`;
-  Object.entries(State.platformCostPrefetchControllers || {}).forEach(([prefetchKey, controller]) => {
-    if (!prefetchKey.startsWith(providerPrefix)) return;
+
+  const job = createPlatformCostRefreshJob(range, provider, 'platformCost');
+  bindPlatformCostRangeControls(range);
+  if (range === 'custom') {
+    setPlatformCostChartLoading(true, `Loading ${platformCostRangeLabel(range)} cost history`);
+    setPlatformCostRangeControlsLoading(range, true);
     try {
-      controller.abort();
-    } catch (e) {
-      // silent - foreground range fetch takes priority
-    }
-    delete State.platformCostPrefetchControllers[prefetchKey];
-  });
-  State.platformCostHistoryLoading = true;
-  State.platformCostHistoryInflightKey = key;
-  if (!cached) State.platformCostHistoryRange = null;
-  if (!cached && getCurrentProvider() === provider) {
-    if (State.platformCostChart) {
-      bindPlatformCostRangeControls(range);
-      setPlatformCostChartLoading(true, `Loading ${platformCostRangeLabel(range)} cost history`);
-      setPlatformCostRangeControlsLoading(range, true);
-    } else {
-      renderPlatformCostLoadingPanel(range);
-    }
-  }
-  const controller = new AbortController();
-  const timeoutID = window.setTimeout(() => controller.abort(), 20000);
-  State.platformCostPrefetchControllers[key] = controller;
-  try {
-    const payload = await fetchPlatformCostPayload(provider, range, controller.signal);
-    if (controller.signal.aborted || getCurrentProvider() !== provider) return;
-    applyPlatformCostHistoryPayload(range, payload);
-    setCachedPlatformCostHistory(provider, range, payload);
-    if (getCurrentProvider() === provider) {
-      renderPlatformCostPanel(provider);
-    }
-  } catch (e) {
-    // Cost history is optional on provider tabs.
-    if (!controller.signal.aborted && getCurrentProvider() === provider) {
-      renderPlatformCostEmptyPanel('Cost history unavailable.');
-    }
-  } finally {
-    if (State.platformCostPrefetchControllers[key] === controller) {
-      delete State.platformCostPrefetchControllers[key];
-    }
-    window.clearTimeout(timeoutID);
-    if (State.platformCostHistoryInflightKey === key) {
-      State.platformCostHistoryLoading = false;
-      State.platformCostHistoryInflightKey = null;
+      await runCustomGraphRefresh(job);
+    } finally {
+      setPlatformCostChartLoading(false);
       setPlatformCostRangeControlsLoading(range, false);
-      if (getCurrentProvider() === provider && normalizePlatformCostRange(State.platformCostRange || DEFAULT_CHART_RANGE) === range) {
-        setPlatformCostChartLoading(false);
-      }
     }
+    return;
   }
+
+  setPlatformCostChartLoading(false);
+  const result = enqueueGraphRefresh(job, { foreground: options.background !== true });
+  result.then(() => schedulePlatformCostWarmup(provider, range)).catch(() => {});
+  return result;
 }
 
 function renderAPIIntegrationsHealth() {
@@ -7914,7 +8758,7 @@ function renderAPIIntegrationsChart(range = State.currentRange || DEFAULT_CHART_
     },
   };
 
-  State.chart.update();
+  State.chart.update('none');
 }
 
 function buildFixedDatasetsForRows(rows, range, configs) {
@@ -9611,7 +10455,7 @@ async function loadModalChart(quotaType, effectiveProvider) {
 
   const provider = effectiveProvider || getCurrentProvider();
   try {
-    const res = await authFetch(`${API_BASE}/api/history?range=${range}&provider=${provider}`);
+    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=${provider}`);
     if (!res.ok) return;
     const data = await res.json();
     if (!Array.isArray(data) || data.length === 0) return;
@@ -9734,19 +10578,126 @@ function closeModal() {
 }
 
 // Event Setup
-function setupRangeSelector() {
-  const buttons = document.querySelectorAll('.range-btn[data-range]');
-  const activeRange = normalizeChartRange(State.currentRange);
-  buttons.forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.range === activeRange);
-    btn.addEventListener('click', () => {
-      const nextRange = normalizeChartRange(btn.dataset.range);
-      buttons.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      State.currentRange = nextRange;
-      saveChartRange(nextRange);
-      fetchHistory(nextRange);
+function graphHistoryControl(scope) {
+  return document.querySelector(`.graph-history-control[data-history-scope="${scope}"]`);
+}
+
+function syncGraphHistoryRangeControl(scope) {
+  const control = graphHistoryControl(scope);
+  if (!control) return;
+  const windowState = historyScopeWindow(scope);
+  control.querySelectorAll('[data-range]').forEach(button => {
+    button.classList.toggle('active', button.dataset.range === normalizeChartRange(windowState.range));
+  });
+  const startInput = control.querySelector('[data-history-start]');
+  const endInput = control.querySelector('[data-history-end]');
+  if (startInput) startInput.value = windowState.startDate || '';
+  if (endInput) endInput.value = windowState.endDate || '';
+}
+
+function setGraphHistoryRangeError(scope, message = '') {
+  const error = graphHistoryControl(scope)?.querySelector('[data-history-error]');
+  if (!error) return;
+  error.textContent = message;
+  error.hidden = !message;
+}
+
+async function reloadGraphHistoryRange(scope) {
+  const range = normalizeChartRange(historyScopeWindow(scope).range);
+  const provider = getCurrentProvider();
+  if (scope === 'platformCost') {
+    await fetchPlatformCostHistory(range, provider);
+    return;
+  }
+  if (scope === 'platformCostBreakdown') {
+    await fetchPlatformCostBreakdownRange(range, provider);
+    return;
+  }
+  await fetchHistory(range, { force: true });
+}
+
+function applyCustomHistoryDates(scope, startDate, endDate) {
+  if (!startDate || !endDate) {
+    setGraphHistoryRangeError(scope, 'Choose both a start date and an end date.');
+    return false;
+  }
+  if (endDate < startDate) {
+    setGraphHistoryRangeError(scope, 'End date must be the same as or later than the start date.');
+    return false;
+  }
+  const start = historyDateStartUTC(startDate);
+  const end = historyDateStartUTC(historyDatePlusDays(endDate, 1));
+  if (!start || !end || !start.getTime() || !end.getTime()) {
+    setGraphHistoryRangeError(scope, 'Choose a valid start and end date.');
+    return false;
+  }
+  if (scope === 'platformCost') {
+    State.platformCostRange = 'custom';
+    State.platformCostStartDate = startDate;
+    State.platformCostEndDate = endDate;
+    State.platformCostWindowStart = start.toISOString();
+    State.platformCostWindowEnd = end.toISOString();
+    savePlatformCostRange('custom');
+  } else if (scope === 'platformCostBreakdown') {
+    State.platformCostBreakdownRange = 'custom';
+    State.platformCostBreakdownStartDate = startDate;
+    State.platformCostBreakdownEndDate = endDate;
+    State.platformCostBreakdownWindowStart = start.toISOString();
+    State.platformCostBreakdownWindowEnd = end.toISOString();
+    savePlatformCostBreakdownRange('custom');
+  } else {
+    State.currentRange = 'custom';
+    State.historyStartDate = startDate;
+    State.historyEndDate = endDate;
+    State.historyWindowStart = start.toISOString();
+    State.historyWindowEnd = end.toISOString();
+    saveChartRange('custom');
+  }
+  persistHistoryWindow(scope);
+  setGraphHistoryRangeError(scope, '');
+  syncGraphHistoryRangeControl(scope);
+  return true;
+}
+
+function setupGraphHistoryRangeControls() {
+  document.querySelectorAll('.graph-history-control[data-history-scope]').forEach(control => {
+    const scope = control.dataset.historyScope || 'chart';
+    const initialWindow = historyScopeWindow(scope);
+    if (initialWindow.range === 'custom' && initialWindow.startDate && initialWindow.endDate) {
+      applyCustomHistoryDates(scope, initialWindow.startDate, initialWindow.endDate);
+    } else {
+      applyPresetHistoryWindow(initialWindow.range || DEFAULT_CHART_RANGE, new Date(), scope);
+    }
+    syncGraphHistoryRangeControl(scope);
+
+    const startInput = control.querySelector('[data-history-start]');
+    const endInput = control.querySelector('[data-history-end]');
+    control.querySelectorAll('[data-range]').forEach(button => {
+      button.addEventListener('click', () => {
+      const nextRange = normalizeChartRange(button.dataset.range);
+      if (nextRange === 'custom') {
+          const windowState = historyScopeWindow(scope);
+          const startDate = startInput?.value || windowState.startDate;
+          const endDate = endInput?.value || windowState.endDate;
+          if (!applyCustomHistoryDates(scope, startDate, endDate)) {
+          startInput?.focus();
+          return;
+        }
+      } else {
+          applyPresetHistoryWindow(nextRange, new Date(), scope);
+          setGraphHistoryRangeError(scope, '');
+          syncGraphHistoryRangeControl(scope);
+      }
+        reloadGraphHistoryRange(scope);
     });
+  });
+
+    const onDateChange = () => {
+      if (!applyCustomHistoryDates(scope, startInput?.value, endInput?.value)) return;
+      reloadGraphHistoryRange(scope);
+    };
+    startInput?.addEventListener('change', onDateChange);
+    endInput?.addEventListener('change', onDateChange);
   });
 }
 
@@ -10373,6 +11324,8 @@ function showDashboardToast(message, type = 'info', timeoutMs = 3000) {
       ? 'var(--status-healthy, #34D399)'
       : type === 'error'
         ? 'var(--status-danger, #F87171)'
+        : type === 'warning'
+          ? 'var(--status-warning, #FBBF24)'
         : 'var(--status-info, #60A5FA)';
     Object.assign(dotEl.style, {
       width: '10px',
@@ -10425,20 +11378,34 @@ function setupHeaderActions() {
         return;
       }
       State.refreshInFlight = true;
+      setDashboardRefreshState(true, 'Refreshing all data...');
       refreshBtn.classList.add('spinning');
       refreshBtn.setAttribute('aria-busy', 'true');
-      showDashboardToast('Refreshing data...', 'info', 0);
+      showDashboardToast('Refreshing data. Saved values remain visible.', 'info', 3200);
       // Ask the server to restart all agents now (immediate poll cycle).
       // Then wait briefly for the agents to complete their polls before fetching.
       try {
         await authFetch(`${API_BASE}/api/poll/force`, { method: 'POST' });
       } catch (_) { /* non-fatal: fall through to stale-data fetch */ }
       await new Promise(resolve => setTimeout(resolve, 3000));
+      ['chart', 'platformCost', 'platformCostBreakdown'].forEach(scope => {
+        const windowState = historyScopeWindow(scope);
+        if (windowState.range === 'custom') return;
+        applyPresetHistoryWindow(windowState.range || DEFAULT_CHART_RANGE, new Date(), scope);
+        syncGraphHistoryRangeControl(scope);
+      });
       const tasks = [
         fetchCurrent({ force: true }),
         fetchDeepInsights({ force: true }),
         fetchHistory(undefined, { force: true }),
       ];
+      const provider = getCurrentProvider();
+      if (supportsPlatformCost(provider)) {
+        tasks.push(fetchPlatformCostHistory(selectedPlatformCostRange(), provider));
+        if (document.getElementById('platform-cost-breakdown-section')) {
+          tasks.push(fetchPlatformCostBreakdownRange(selectedPlatformCostBreakdownRange(), provider));
+        }
+      }
       if (shouldShowCyclesTable()) tasks.push(fetchCycles({ force: true }));
       if (shouldShowSessionsTable()) tasks.push(fetchSessions({ force: true }));
       if (shouldShowOverviewTable()) tasks.push(fetchCycleOverview({ force: true }));
@@ -10448,6 +11415,7 @@ function setupHeaderActions() {
         showDashboardToast('Refresh failed. Showing cached data.', 'error', 4200);
       }).finally(() => {
         State.refreshInFlight = false;
+        setDashboardRefreshState(false);
         refreshBtn.removeAttribute('aria-busy');
         setTimeout(() => refreshBtn.classList.remove('spinning'), 600);
       });
@@ -10489,12 +11457,14 @@ function setupCardModals() {
 function startAutoRefresh() {
   if (State.refreshInterval) clearInterval(State.refreshInterval);
   State.refreshInterval = setInterval(() => {
+    setDashboardRefreshState(true, 'Checking for newer data...');
     // Always refresh above-fold data
-    fetchCurrent(); fetchDeepInsights(); fetchHistory();
+    const tasks = [fetchCurrent(), fetchDeepInsights(), fetchHistory()];
     // Only refresh below-fold sections that have been loaded
-    if (shouldShowCyclesTable() && _lazyLoaded.has('.cycles-section')) fetchCycles();
-    if (shouldShowOverviewTable() && _lazyLoaded.has('.cycle-overview-section')) fetchCycleOverview();
-    if (shouldShowSessionsTable() && _lazyLoaded.has('.sessions-section')) fetchSessions();
+    if (shouldShowCyclesTable() && _lazyLoaded.has('.cycles-section')) tasks.push(fetchCycles());
+    if (shouldShowOverviewTable() && _lazyLoaded.has('.cycle-overview-section')) tasks.push(fetchCycleOverview());
+    if (shouldShowSessionsTable() && _lazyLoaded.has('.sessions-section')) tasks.push(fetchSessions());
+    Promise.allSettled(tasks).finally(() => setDashboardRefreshState(false));
   }, REFRESH_INTERVAL);
 }
 
@@ -12977,7 +13947,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initLayoutToggle();
   initTimezoneBadge();
   setupProviderSelector();
-  setupRangeSelector();
+  setupGraphHistoryRangeControls();
   setupAPIIntegrationsMetricSelector();
   setupChartModeSelector();
   setupPlatformCostChartModeSelector();
@@ -12993,13 +13963,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (document.getElementById('usage-chart') || document.getElementById('both-view') || document.getElementById('all-providers-container')) {
     initChart();
 
-    // Critical path: fetch above-fold data in parallel
-    Promise.all([
+    // Render saved data first, then refresh every visible section in parallel.
+    setDashboardRefreshState(true, 'Updating saved data...');
+    Promise.allSettled([
       loadHiddenInsights(),
-      fetchCurrent(),
-      fetchDeepInsights(),
-      fetchHistory(selectedChartRange()),
-    ]);
+      fetchCurrent({ force: true }),
+      fetchDeepInsights({ force: true }),
+      fetchHistory(selectedChartRange(), { force: true }),
+    ]).finally(() => setDashboardRefreshState(false));
 
     // Preload providers whose history tables should appear immediately.
     const activeProvider = getCurrentProvider();

@@ -715,6 +715,15 @@ func (s *Store) createTables() error {
 			cost_usd REAL,
 			latency_ms INTEGER,
 			metadata_json TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			reasoning_effort TEXT NOT NULL DEFAULT 'unknown',
+			mode TEXT NOT NULL DEFAULT 'unknown',
+			speed_mode TEXT NOT NULL DEFAULT 'unknown',
+			input_tokens INTEGER NOT NULL DEFAULT 0,
+			cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+			cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0,
+			reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
 			source_path TEXT NOT NULL,
 			fingerprint TEXT NOT NULL,
 			created_at TEXT NOT NULL
@@ -723,8 +732,57 @@ func (s *Store) createTables() error {
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_api_integration_usage_events_fingerprint ON api_integration_usage_events(fingerprint);
 		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_captured ON api_integration_usage_events(captured_at);
 		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_integration_provider ON api_integration_usage_events(integration_name, provider, captured_at);
+		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_integration_captured ON api_integration_usage_events(integration_name, captured_at);
 		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_provider_model ON api_integration_usage_events(provider, model, captured_at);
 		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_source ON api_integration_usage_events(source_path);
+
+		CREATE TABLE IF NOT EXISTS api_integration_usage_hourly (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			origin_scope TEXT NOT NULL DEFAULT 'local',
+			hour_start TEXT NOT NULL,
+			integration_name TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			account_name TEXT NOT NULL,
+			model TEXT NOT NULL,
+			reasoning_effort TEXT NOT NULL,
+			mode TEXT NOT NULL,
+			speed_mode TEXT NOT NULL,
+			request_count INTEGER NOT NULL,
+			prompt_tokens INTEGER NOT NULL,
+			completion_tokens INTEGER NOT NULL,
+			total_tokens INTEGER NOT NULL,
+			input_tokens INTEGER NOT NULL,
+			cached_input_tokens INTEGER NOT NULL,
+			cache_creation_input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL,
+			reasoning_output_tokens INTEGER NOT NULL,
+			total_cost_usd REAL NOT NULL,
+			first_captured_at TEXT NOT NULL,
+			last_captured_at TEXT NOT NULL,
+			UNIQUE (
+				origin_scope, hour_start, integration_name, provider, account_name,
+				model, reasoning_effort, mode, speed_mode
+			)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_hourly_range
+			ON api_integration_usage_hourly(hour_start, integration_name);
+
+		CREATE TABLE IF NOT EXISTS api_integration_usage_compacted_fingerprints (
+			fingerprint TEXT PRIMARY KEY,
+			captured_at TEXT NOT NULL
+		) WITHOUT ROWID;
+
+		CREATE TRIGGER IF NOT EXISTS prevent_compacted_api_integration_reinsert
+		BEFORE INSERT ON api_integration_usage_events
+		WHEN EXISTS (
+			SELECT 1
+			FROM api_integration_usage_compacted_fingerprints
+			WHERE fingerprint = NEW.fingerprint
+		)
+		BEGIN
+			SELECT RAISE(IGNORE);
+		END;
 
 		CREATE TABLE IF NOT EXISTS api_integration_ingest_state (
 			source_path TEXT PRIMARY KEY,
@@ -1015,6 +1073,10 @@ func (s *Store) migrateSchema() error {
 		}
 	}
 
+	if err := s.migrateAPIIntegrationNormalizedColumns(); err != nil {
+		return err
+	}
+
 	// Drop raw_line column from api_integration_usage_events - no longer stored.
 	// Ignore "no such column" (new DB or already migrated) and "no such table"
 	// (migrateSchema called directly on a partial DB in tests, or pre-api-integrations DB).
@@ -1028,6 +1090,78 @@ func (s *Store) migrateSchema() error {
 		}
 	}
 
+	return nil
+}
+
+func (s *Store) migrateAPIIntegrationNormalizedColumns() error {
+	columns := []string{
+		"session_id TEXT NOT NULL DEFAULT ''",
+		"reasoning_effort TEXT NOT NULL DEFAULT 'unknown'",
+		"mode TEXT NOT NULL DEFAULT 'unknown'",
+		"speed_mode TEXT NOT NULL DEFAULT 'unknown'",
+		"input_tokens INTEGER NOT NULL DEFAULT 0",
+		"cached_input_tokens INTEGER NOT NULL DEFAULT 0",
+		"cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0",
+		"output_tokens INTEGER NOT NULL DEFAULT 0",
+		"reasoning_output_tokens INTEGER NOT NULL DEFAULT 0",
+	}
+	added := false
+	for _, column := range columns {
+		name := strings.Fields(column)[0]
+		hasColumn, err := s.tableHasColumn("api_integration_usage_events", name)
+		if err != nil {
+			return fmt.Errorf("inspect API integration normalized column %s: %w", name, err)
+		}
+		if hasColumn {
+			continue
+		}
+		if _, err := s.db.Exec(`ALTER TABLE api_integration_usage_events ADD COLUMN ` + column); err != nil {
+			if strings.Contains(err.Error(), "no such table") {
+				return nil
+			}
+			return fmt.Errorf("add API integration normalized column %s: %w", name, err)
+		}
+		added = true
+	}
+	if !added {
+		return nil
+	}
+
+	if _, err := s.db.Exec(`
+		UPDATE api_integration_usage_events
+		SET session_id = CASE WHEN json_valid(metadata_json) THEN COALESCE(NULLIF(json_extract(metadata_json, '$.session_id'), ''), '') ELSE '' END,
+		    reasoning_effort = CASE WHEN json_valid(metadata_json) THEN COALESCE(NULLIF(json_extract(metadata_json, '$.reasoning_effort'), ''), 'unknown') ELSE 'unknown' END,
+		    mode = CASE WHEN json_valid(metadata_json) THEN COALESCE(NULLIF(json_extract(metadata_json, '$.mode'), ''), 'unknown') ELSE 'unknown' END,
+		    speed_mode = CASE
+				WHEN json_valid(metadata_json) AND json_type(metadata_json, '$.fast_mode') IS NOT NULL AND json_extract(metadata_json, '$.fast_mode') = 1 THEN 'fast'
+				WHEN json_valid(metadata_json) AND json_type(metadata_json, '$.fast_mode') IS NOT NULL AND json_extract(metadata_json, '$.fast_mode') = 0 THEN 'standard'
+				WHEN json_valid(metadata_json) THEN COALESCE(NULLIF(json_extract(metadata_json, '$.speed_mode'), ''), 'unknown')
+				ELSE 'unknown'
+			END,
+		    input_tokens = CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.input_tokens'), prompt_tokens) AS INTEGER) ELSE prompt_tokens END,
+		    cached_input_tokens = CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cached_input_tokens'), 0) AS INTEGER) ELSE 0 END,
+		    cache_creation_input_tokens = CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.cache_creation_input_tokens'), 0) AS INTEGER) ELSE 0 END,
+		    output_tokens = CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.output_tokens'), completion_tokens) AS INTEGER) ELSE completion_tokens END,
+		    reasoning_output_tokens = CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json, '$.reasoning_output_tokens'), 0) AS INTEGER) ELSE 0 END,
+		    metadata_json = CASE
+				WHEN json_valid(metadata_json) THEN json_remove(
+					metadata_json,
+					'$.event_key', '$.source_path', '$.source',
+					'$.session_id', '$.reasoning_effort', '$.mode', '$.speed_mode', '$.fast_mode',
+					'$.input_tokens', '$.cached_input_tokens', '$.cache_creation_input_tokens',
+					'$.output_tokens', '$.reasoning_output_tokens'
+				)
+				ELSE metadata_json
+			END
+	`); err != nil {
+		return fmt.Errorf("backfill API integration normalized columns: %w", err)
+	}
+	if _, err := s.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_integration_captured
+		ON api_integration_usage_events(integration_name, captured_at)
+	`); err != nil {
+		return fmt.Errorf("create API integration integration/time index: %w", err)
+	}
 	return nil
 }
 

@@ -380,6 +380,47 @@ func TestImportDataKeepsDifferentOriginsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestTransferPreservesCompactedAPIIntegrationHistory(t *testing.T) {
+	source := newTransferTestStore(t)
+	insertAPIIntegrationUsageEventForTest(t, source,
+		`{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"cost_usd":0.25}`,
+		"/tmp/api-integrations/transfer.jsonl",
+	)
+	if _, err := source.CompactAPIIntegrationUsageEvents(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("CompactAPIIntegrationUsageEvents: %v", err)
+	}
+
+	archive := exportTransferBytes(t, source)
+	destination := newTransferTestStore(t)
+	first, err := destination.ImportData(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatalf("ImportData first: %v", err)
+	}
+	if first.Tables["api_integration_usage_hourly"].Inserted != 1 {
+		t.Fatalf("first summary=%+v", first.Tables["api_integration_usage_hourly"])
+	}
+
+	totals, err := destination.QueryAPIIntegrationUsageTotals(
+		time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 1, 16, 0, 0, 0, 0, time.UTC),
+		"Codex CLI",
+	)
+	if err != nil {
+		t.Fatalf("QueryAPIIntegrationUsageTotals: %v", err)
+	}
+	if len(totals) != 1 || totals[0].RequestCount != 1 || totals[0].TotalTokens != 120 || totals[0].TotalCostUSD != 0.25 {
+		t.Fatalf("totals=%+v", totals)
+	}
+
+	repeat, err := destination.ImportData(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatalf("ImportData repeat: %v", err)
+	}
+	if repeat.Tables["api_integration_usage_hourly"].Skipped != 1 {
+		t.Fatalf("repeat summary=%+v", repeat.Tables["api_integration_usage_hourly"])
+	}
+}
+
 func TestImportDataRecognizesRowsFromSameInstallationWithoutMappings(t *testing.T) {
 	s := newTransferTestStore(t)
 	seedSyntheticTransferSnapshot(t, s, 10)

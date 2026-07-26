@@ -46,7 +46,7 @@ Optional environment variables:
 ```env
 ONWATCH_API_INTEGRATIONS_ENABLED=true
 ONWATCH_API_INTEGRATIONS_DIR=~/.onwatch/api-integrations
-ONWATCH_API_INTEGRATIONS_RETENTION=0
+ONWATCH_API_INTEGRATIONS_RETENTION=720h
 ONWATCH_AGENT_USAGE_PRICING_JSON=
 ONWATCH_CURSOR_USAGE_CSV=
 ```
@@ -55,10 +55,11 @@ If you change `ONWATCH_API_INTEGRATIONS_DIR`, point your scripts and onWatch at 
 
 Retention notes:
 
-- `ONWATCH_API_INTEGRATIONS_RETENTION` controls how long ingested API Integrations events are kept in SQLite
-- default retention is `0`, so history is kept until you delete it
-- set a duration such as `1440h` to prune events older than 60 days
-- pruning applies only to the SQLite table, not to the source `.jsonl` files
+- `ONWATCH_API_INTEGRATIONS_RETENTION` controls how long detailed API Integration events remain in SQLite
+- the default is `720h` (30 days)
+- older events are combined into hourly model, effort, mode, speed, token, and cost totals
+- set `0` only when you intentionally want to disable compaction
+- compaction applies only to SQLite, not to the source `.jsonl` files
 - `ONWATCH_AGENT_USAGE_PRICING_JSON` can point to a LiteLLM-compatible pricing JSON file to override built-in model prices
 - `ONWATCH_CURSOR_USAGE_CSV` can point to a Cursor usage export CSV for local Cursor token/cost ingestion
 
@@ -352,13 +353,15 @@ Notes:
 Custom API Integrations data is stored in separate SQLite tables from the existing subscription/quota tracking tables:
 
 - `api_integration_usage_events`
+- `api_integration_usage_hourly`
 - `api_integration_ingest_state`
 
 This means Custom API Integrations telemetry is identifiable and queryable independently from provider quota snapshots and reset cycles.
 
 Database retention behavior:
 
-- onWatch keeps rows in `api_integration_usage_events` until you delete them by default
-- automatic pruning is enabled only when `ONWATCH_API_INTEGRATIONS_RETENTION` is set to a positive duration
+- onWatch keeps detailed rows in `api_integration_usage_events` for 30 days by default
+- older rows move into hourly aggregates in `api_integration_usage_hourly`
+- automatic compaction is disabled only when `ONWATCH_API_INTEGRATIONS_RETENTION=0`
 - source `.jsonl` files are not pruned or compacted by onWatch
 - if you want smaller source logs, rotate or remove the JSONL files manually

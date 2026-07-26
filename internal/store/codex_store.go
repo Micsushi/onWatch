@@ -247,6 +247,122 @@ func (s *Store) QueryCodexRange(accountID int64, start, end time.Time, limit ...
 	return snapshots, nil
 }
 
+// QueryCodexRangeSampled returns evenly sampled Codex snapshots and their quota
+// values in one query. The first and last snapshots are always retained.
+func (s *Store) QueryCodexRangeSampled(accountID int64, start, end time.Time, maxPoints int) ([]*api.CodexSnapshot, error) {
+	if maxPoints < 2 {
+		return nil, fmt.Errorf("codex sample size must be at least 2")
+	}
+	if accountID == 0 {
+		accountID = DefaultCodexAccountID
+	}
+
+	rows, err := s.db.Query(`
+		WITH ranked AS (
+			SELECT id, captured_at, plan_type, credits_balance, account_id,
+				ROW_NUMBER() OVER (ORDER BY captured_at ASC) AS row_number,
+				COUNT(*) OVER () AS total_rows
+			FROM codex_snapshots
+			WHERE account_id = ? AND captured_at BETWEEN ? AND ?
+		),
+		sampled AS (
+			SELECT id, captured_at, plan_type, credits_balance, account_id
+			FROM ranked
+			WHERE total_rows <= ?
+				OR row_number = 1
+				OR ((row_number - 1) * (? - 1)) / (total_rows - 1)
+					> ((row_number - 2) * (? - 1)) / (total_rows - 1)
+		)
+		SELECT sampled.id, sampled.captured_at, sampled.plan_type, sampled.credits_balance, sampled.account_id,
+			quota.quota_name, quota.utilization, quota.resets_at, quota.status
+		FROM sampled
+		LEFT JOIN codex_quota_values quota ON quota.snapshot_id = sampled.id
+		ORDER BY sampled.captured_at ASC, quota.quota_name ASC`,
+		accountID,
+		start.Format(time.RFC3339Nano),
+		end.Format(time.RFC3339Nano),
+		maxPoints,
+		maxPoints,
+		maxPoints,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sampled codex range: %w", err)
+	}
+	defer rows.Close()
+
+	var snapshots []*api.CodexSnapshot
+	var current *api.CodexSnapshot
+	for rows.Next() {
+		var (
+			id               int64
+			capturedAt       string
+			planType         sql.NullString
+			creditsBalance   sql.NullFloat64
+			snapshotAccount  int64
+			quotaName        sql.NullString
+			quotaUtilization sql.NullFloat64
+			quotaResetsAt    sql.NullString
+			quotaStatus      sql.NullString
+		)
+		if err := rows.Scan(
+			&id,
+			&capturedAt,
+			&planType,
+			&creditsBalance,
+			&snapshotAccount,
+			&quotaName,
+			&quotaUtilization,
+			&quotaResetsAt,
+			&quotaStatus,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan sampled codex range: %w", err)
+		}
+
+		if current == nil || current.ID != id {
+			parsedCapturedAt, err := parseCodexTime(capturedAt, "codex snapshot captured_at")
+			if err != nil {
+				return nil, err
+			}
+			current = &api.CodexSnapshot{
+				ID:         id,
+				CapturedAt: parsedCapturedAt,
+				AccountID:  snapshotAccount,
+			}
+			if planType.Valid {
+				current.PlanType = planType.String
+			}
+			if creditsBalance.Valid {
+				balance := creditsBalance.Float64
+				current.CreditsBalance = &balance
+			}
+			snapshots = append(snapshots, current)
+		}
+
+		if !quotaName.Valid {
+			continue
+		}
+		quota := api.CodexQuota{
+			Name:        quotaName.String,
+			Utilization: quotaUtilization.Float64,
+		}
+		if quotaResetsAt.Valid && quotaResetsAt.String != "" {
+			parsedResetsAt, err := parseCodexTime(quotaResetsAt.String, "codex quota resets_at")
+			if err != nil {
+				return nil, err
+			}
+			quota.ResetsAt = &parsedResetsAt
+		}
+		if quotaStatus.Valid {
+			quota.Status = quotaStatus.String
+		}
+		current.Quotas = append(current.Quotas, quota)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate sampled codex range: %w", err)
+	}
+	return snapshots, nil
+}
+
 // CreateCodexCycle creates a new Codex reset cycle.
 func (s *Store) CreateCodexCycle(accountID int64, quotaName string, cycleStart time.Time, resetsAt *time.Time) (int64, error) {
 	if accountID == 0 {

@@ -183,6 +183,93 @@ func (s *Store) QueryAnthropicRange(start, end time.Time, limit ...int) ([]*api.
 	return snapshots, nil
 }
 
+// QueryAnthropicRangeSampled returns evenly sampled Anthropic snapshots and
+// their quota values in one query. The first and last snapshots are retained.
+func (s *Store) QueryAnthropicRangeSampled(start, end time.Time, maxPoints int) ([]*api.AnthropicSnapshot, error) {
+	if maxPoints < 2 {
+		return nil, fmt.Errorf("anthropic sample size must be at least 2")
+	}
+
+	rows, err := s.db.Query(`
+		WITH ranked AS (
+			SELECT id, captured_at,
+				ROW_NUMBER() OVER (ORDER BY captured_at ASC) AS row_number,
+				COUNT(*) OVER () AS total_rows
+			FROM anthropic_snapshots
+			WHERE captured_at BETWEEN ? AND ?
+		),
+		sampled AS (
+			SELECT id, captured_at
+			FROM ranked
+			WHERE total_rows <= ?
+				OR row_number = 1
+				OR ((row_number - 1) * (? - 1)) / (total_rows - 1)
+					> ((row_number - 2) * (? - 1)) / (total_rows - 1)
+		)
+		SELECT sampled.id, sampled.captured_at,
+			quota.quota_name, quota.utilization, quota.resets_at
+		FROM sampled
+		LEFT JOIN anthropic_quota_values quota ON quota.snapshot_id = sampled.id
+		ORDER BY sampled.captured_at ASC, quota.quota_name ASC`,
+		start.Format(time.RFC3339Nano),
+		end.Format(time.RFC3339Nano),
+		maxPoints,
+		maxPoints,
+		maxPoints,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sampled anthropic range: %w", err)
+	}
+	defer rows.Close()
+
+	var snapshots []*api.AnthropicSnapshot
+	var current *api.AnthropicSnapshot
+	for rows.Next() {
+		var (
+			id               int64
+			capturedAt       string
+			quotaName        sql.NullString
+			quotaUtilization sql.NullFloat64
+			quotaResetsAt    sql.NullString
+		)
+		if err := rows.Scan(&id, &capturedAt, &quotaName, &quotaUtilization, &quotaResetsAt); err != nil {
+			return nil, fmt.Errorf("failed to scan sampled anthropic range: %w", err)
+		}
+
+		if current == nil || current.ID != id {
+			parsedCapturedAt, err := time.Parse(time.RFC3339Nano, capturedAt)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse anthropic snapshot captured_at %q: %w", capturedAt, err)
+			}
+			current = &api.AnthropicSnapshot{
+				ID:         id,
+				CapturedAt: parsedCapturedAt,
+			}
+			snapshots = append(snapshots, current)
+		}
+
+		if !quotaName.Valid || !api.IsKnownAnthropicQuota(quotaName.String) {
+			continue
+		}
+		quota := api.AnthropicQuota{
+			Name:        quotaName.String,
+			Utilization: quotaUtilization.Float64,
+		}
+		if quotaResetsAt.Valid && quotaResetsAt.String != "" {
+			parsedResetsAt, err := time.Parse(time.RFC3339Nano, quotaResetsAt.String)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse anthropic quota resets_at %q: %w", quotaResetsAt.String, err)
+			}
+			quota.ResetsAt = &parsedResetsAt
+		}
+		current.Quotas = append(current.Quotas, quota)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate sampled anthropic range: %w", err)
+	}
+	return snapshots, nil
+}
+
 // CreateAnthropicCycle creates a new Anthropic reset cycle.
 func (s *Store) CreateAnthropicCycle(quotaName string, cycleStart time.Time, resetsAt *time.Time) (int64, error) {
 	var resetsAtVal interface{}

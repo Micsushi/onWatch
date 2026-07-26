@@ -82,17 +82,13 @@ func (h *Handler) historyGemini(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rangeStr := r.URL.Query().Get("range")
-	rangeDur, err := parseTimeRange(rangeStr)
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	now := time.Now().UTC()
-	start := now.Add(-rangeDur)
-
-	snapshots, err := h.store.QueryGeminiRange(start, now)
+	snapshots, err := h.store.QueryGeminiRange(window.Start, window.End)
 	if err != nil {
 		h.logger.Error("failed to query Gemini history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")

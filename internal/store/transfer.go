@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	apiintegrations "github.com/onllm-dev/onwatch/v2/internal/api_integrations"
 )
 
 const TransferFormatVersion = 1
@@ -100,6 +102,7 @@ var transferTables = []transferTable{
 	{name: "cursor_quota_values", id: "id", columns: []string{"snapshot_id", "quota_name", "used", "limit_value", "utilization", "format", "resets_at"}, parentTable: "cursor_snapshots", parentColumn: "snapshot_id"},
 	{name: "cursor_reset_cycles", id: "id", columns: []string{"quota_name", "cycle_start", "cycle_end", "resets_at", "peak_utilization", "total_delta"}, mutable: true},
 	{name: "api_integration_usage_events", id: "id", columns: []string{"captured_at", "integration_name", "provider", "account_name", "model", "request_id", "prompt_tokens", "completion_tokens", "total_tokens", "cost_usd", "latency_ms", "metadata_json", "source_path", "fingerprint", "created_at"}},
+	{name: "api_integration_usage_hourly", id: "id", columns: []string{"origin_scope", "hour_start", "integration_name", "provider", "account_name", "model", "reasoning_effort", "mode", "speed_mode", "request_count", "prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "cached_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens", "total_cost_usd", "first_captured_at", "last_captured_at"}},
 }
 
 var transferSettingKeys = []string{
@@ -389,7 +392,11 @@ func (s *Store) exportTransferTable(dest *sql.Tx, table transferTable, installat
 	dataColumns := append([]string{table.id}, table.columns...)
 	selectColumns := make([]string, 0, len(dataColumns)+6)
 	for _, column := range dataColumns {
-		selectColumns = append(selectColumns, "source."+column)
+		if table.name == "api_integration_usage_events" && column == "metadata_json" {
+			selectColumns = append(selectColumns, apiIntegrationMetadataJSONExpression("source")+" AS metadata_json")
+		} else {
+			selectColumns = append(selectColumns, "source."+column)
+		}
 	}
 	joins := ""
 	args := make([]any, 0, 3)
@@ -742,7 +749,8 @@ func (s *Store) ImportData(r io.Reader) (ImportSummary, error) {
 	if err := tx.Commit(); err != nil {
 		return summary, fmt.Errorf("store.ImportData: commit destination transaction: %w", err)
 	}
-	if summary.Tables["api_integration_usage_events"].Inserted > 0 {
+	if summary.Tables["api_integration_usage_events"].Inserted > 0 ||
+		summary.Tables["api_integration_usage_hourly"].Inserted > 0 {
 		s.apiIntegrationUsageVersion.Add(1)
 	}
 	return summary, nil
@@ -1103,6 +1111,51 @@ func importTransferTable(tx *sql.Tx, source *sql.DB, table transferTable, accoun
 					values[index] = payload[column]
 				}
 			}
+			event := &apiintegrations.UsageEvent{
+				PromptTokens:     transferInteger(payload["prompt_tokens"]),
+				CompletionTokens: transferInteger(payload["completion_tokens"]),
+			}
+			if metadataJSON, ok := payload["metadata_json"].(string); ok {
+				event.MetadataJSON = metadataJSON
+			}
+			metadata, storedMetadataJSON := normalizedAPIIntegrationMetadata(event)
+			for index, column := range columns {
+				if column == "metadata_json" {
+					values[index] = storedMetadataJSON
+				}
+			}
+			columns = append(
+				columns,
+				"session_id",
+				"reasoning_effort",
+				"mode",
+				"speed_mode",
+				"input_tokens",
+				"cached_input_tokens",
+				"cache_creation_input_tokens",
+				"output_tokens",
+				"reasoning_output_tokens",
+			)
+			values = append(
+				values,
+				metadata.SessionID,
+				metadata.ReasoningEffort,
+				metadata.Mode,
+				metadata.SpeedMode,
+				normalizedTokenValue(metadata.InputTokens, event.PromptTokens),
+				normalizedTokenValue(metadata.CachedInputTokens, 0),
+				normalizedTokenValue(metadata.CacheCreationInputTokens, 0),
+				normalizedTokenValue(metadata.OutputTokens, event.CompletionTokens),
+				normalizedTokenValue(metadata.ReasoningOutputTokens, 0),
+			)
+		}
+		if table.name == "api_integration_usage_hourly" {
+			payload["origin_scope"] = origin.OriginID
+			for index, column := range columns {
+				if column == "origin_scope" {
+					values[index] = payload[column]
+				}
+			}
 		}
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(columns)), ",")
 		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table.name, strings.Join(columns, ","), placeholders)
@@ -1281,6 +1334,25 @@ func namespaceAPIIntegrationPayload(payload map[string]any, origin transferOrigi
 		shortOrigin = shortOrigin[:8]
 	}
 	payload["source_path"] = "import:" + shortOrigin + "/" + filepath.Base(sourcePath)
+}
+
+func transferInteger(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		parsed, _ := strconv.Atoi(typed.String())
+		return parsed
+	case string:
+		parsed, _ := strconv.Atoi(typed)
+		return parsed
+	default:
+		return 0
+	}
 }
 
 func importedTextID(origin transferOrigin) string {

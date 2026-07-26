@@ -1,17 +1,23 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/onllm-dev/onwatch/v2/internal/store"
 )
 
 const apiIntegrationResponseCacheTTL = 15 * time.Second
 
 type apiIntegrationResponseCache struct {
-	mu      sync.Mutex
-	entries map[string]apiIntegrationResponseCacheEntry
+	mu         sync.Mutex
+	entries    map[string]apiIntegrationResponseCacheEntry
+	refreshing map[string]bool
 }
 
 type apiIntegrationResponseCacheEntry struct {
@@ -28,9 +34,19 @@ func (c *apiIntegrationResponseCache) get(key string, version uint64, now time.T
 	}
 	entry, ok := c.entries[key]
 	if !ok || entry.version != version || now.After(entry.expiresAt) {
-		if ok {
-			delete(c.entries, key)
-		}
+		return nil, false
+	}
+	return entry.payload, true
+}
+
+func (c *apiIntegrationResponseCache) getStale(key string) (map[string]interface{}, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		return nil, false
+	}
+	entry, ok := c.entries[key]
+	if !ok {
 		return nil, false
 	}
 	return entry.payload, true
@@ -47,6 +63,26 @@ func (c *apiIntegrationResponseCache) set(key string, version uint64, now time.T
 		expiresAt: now.Add(apiIntegrationResponseCacheTTL),
 		payload:   payload,
 	}
+	delete(c.refreshing, key)
+}
+
+func (c *apiIntegrationResponseCache) startRefresh(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.refreshing == nil {
+		c.refreshing = make(map[string]bool)
+	}
+	if c.refreshing[key] {
+		return false
+	}
+	c.refreshing[key] = true
+	return true
+}
+
+func (c *apiIntegrationResponseCache) cancelRefresh(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.refreshing, key)
 }
 
 type apiIntegrationCurrentModelBreakdown struct {
@@ -120,12 +156,34 @@ func (h *Handler) APIIntegrationsCurrent(w http.ResponseWriter, r *http.Request)
 	now := time.Now()
 	const key = "current"
 	if cached, ok := h.apiIntegrationsCache.get(key, version, now); ok {
+		w.Header().Set("X-OnWatch-Data-State", "fresh")
+		respondJSON(w, http.StatusOK, cached)
+		return
+	}
+	if cached, ok := h.apiIntegrationsCache.getStale(key); ok {
+		w.Header().Set("X-OnWatch-Data-State", "stale")
+		w.Header().Set("Retry-After", "1")
+		if h.apiIntegrationsCache.startRefresh(key) {
+			go h.refreshAPIIntegrationsCurrent(key, version)
+		}
 		respondJSON(w, http.StatusOK, cached)
 		return
 	}
 	payload := h.buildAPIIntegrationsCurrent()
 	h.apiIntegrationsCache.set(key, version, now, payload)
+	w.Header().Set("X-OnWatch-Data-State", "fresh")
 	respondJSON(w, http.StatusOK, payload)
+}
+
+func (h *Handler) refreshAPIIntegrationsCurrent(key string, version uint64) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			h.apiIntegrationsCache.cancelRefresh(key)
+			h.logger.Error("API integrations current refresh panicked", "error", recovered)
+		}
+	}()
+	payload := h.buildAPIIntegrationsCurrent()
+	h.apiIntegrationsCache.set(key, version, time.Now(), payload)
 }
 
 func (h *Handler) buildAPIIntegrationsCurrent() map[string]interface{} {
@@ -134,16 +192,12 @@ func (h *Handler) buildAPIIntegrationsCurrent() map[string]interface{} {
 		return response
 	}
 
-	rows, err := h.store.QueryAPIIntegrationUsageSummary()
-	if err != nil {
-		h.logger.Error("failed to query API integrations current", "error", err)
-		return response
-	}
 	effortRows, err := h.store.QueryAPIIntegrationUsageEffortSummary()
 	if err != nil {
 		h.logger.Error("failed to query API integrations effort summary", "error", err)
-		effortRows = nil
+		return response
 	}
+	rows := summarizeAPIIntegrationUsage(effortRows)
 
 	type modelNode struct {
 		row apiIntegrationCurrentModelBreakdown
@@ -353,75 +407,133 @@ func (h *Handler) buildAPIIntegrationsCurrent() map[string]interface{} {
 	return response
 }
 
+func summarizeAPIIntegrationUsage(effortRows []store.APIIntegrationUsageEffortSummaryRow) []store.APIIntegrationUsageSummaryRow {
+	type summaryKey struct {
+		integration string
+		provider    string
+		account     string
+		model       string
+	}
+
+	summaries := make(map[summaryKey]*store.APIIntegrationUsageSummaryRow)
+	for _, effort := range effortRows {
+		key := summaryKey{
+			integration: effort.IntegrationName,
+			provider:    effort.Provider,
+			account:     effort.AccountName,
+			model:       effort.Model,
+		}
+		summary := summaries[key]
+		if summary == nil {
+			summary = &store.APIIntegrationUsageSummaryRow{
+				IntegrationName: effort.IntegrationName,
+				Provider:        effort.Provider,
+				AccountName:     effort.AccountName,
+				Model:           effort.Model,
+			}
+			summaries[key] = summary
+		}
+		summary.RequestCount += effort.RequestCount
+		summary.PromptTokens += effort.PromptTokens
+		summary.CompletionTokens += effort.CompletionTokens
+		summary.TotalTokens += effort.TotalTokens
+		summary.InputTokens += effort.InputTokens
+		summary.CachedTokens += effort.CachedTokens
+		summary.CacheCreateTokens += effort.CacheCreateTokens
+		summary.OutputTokens += effort.OutputTokens
+		summary.ReasoningTokens += effort.ReasoningTokens
+		summary.TotalCostUSD += effort.TotalCostUSD
+		if effort.LastCapturedAt.After(summary.LastCapturedAt) {
+			summary.LastCapturedAt = effort.LastCapturedAt
+		}
+	}
+
+	rows := make([]store.APIIntegrationUsageSummaryRow, 0, len(summaries))
+	for _, summary := range summaries {
+		rows = append(rows, *summary)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		left := rows[i]
+		right := rows[j]
+		if left.IntegrationName != right.IntegrationName {
+			return left.IntegrationName < right.IntegrationName
+		}
+		if left.Provider != right.Provider {
+			return left.Provider < right.Provider
+		}
+		if left.AccountName != right.AccountName {
+			return left.AccountName < right.AccountName
+		}
+		return left.Model < right.Model
+	})
+	return rows
+}
+
 // APIIntegrationsHistory returns chart-ready aggregated history grouped by integration.
 func (h *Handler) APIIntegrationsHistory(w http.ResponseWriter, r *http.Request) {
-	rangeStr := r.URL.Query().Get("range")
-	duration, err := parseTimeRange(rangeStr)
+	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	version := h.apiIntegrationUsageVersion()
 	now := time.Now()
-	key := "history:" + rangeStr
+	h.setAPIIntegrationArchiveHeaders(w, window.Start, window.End)
+	key := "history:" + window.CacheKey
 	if cached, ok := h.apiIntegrationsCache.get(key, version, now); ok {
 		respondJSON(w, http.StatusOK, cached)
 		return
 	}
-	payload := h.buildAPIIntegrationsHistory(duration)
+	payload := h.buildAPIIntegrationsHistory(window.Start, window.End)
 	h.apiIntegrationsCache.set(key, version, now, payload)
 	respondJSON(w, http.StatusOK, payload)
 }
 
 // APIIntegrationsSessions returns chat/session-level usage for cost graphs.
 func (h *Handler) APIIntegrationsSessions(w http.ResponseWriter, r *http.Request) {
-	rangeStr := r.URL.Query().Get("range")
-	duration := 30 * 24 * time.Hour
-	var err error
-	if rangeStr == "all" {
-		duration = 100 * 365 * 24 * time.Hour
-	} else {
-		duration, err = parseTimeRange(rangeStr)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, err.Error())
-			return
-		}
+	window, err := historyWindowForRequest(r, time.Now().UTC())
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	integration := r.URL.Query().Get("integration")
 	version := h.apiIntegrationUsageVersion()
 	now := time.Now()
-	key := "sessions:" + rangeStr + ":" + integration
+	h.setAPIIntegrationArchiveHeaders(w, window.Start, window.End)
+	includeSessions := !strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("includeSessions")), "false")
+	key := "sessions:" + window.CacheKey + ":" + integration + fmt.Sprintf(":%t", includeSessions)
 	if cached, ok := h.apiIntegrationsCache.get(key, version, now); ok {
 		respondJSON(w, http.StatusOK, cached)
 		return
 	}
-	payload := h.buildAPIIntegrationsSessions(duration, integration)
+	payload := h.buildAPIIntegrationsSessions(window.Start, window.End, integration, includeSessions)
 	h.apiIntegrationsCache.set(key, version, now, payload)
 	respondJSON(w, http.StatusOK, payload)
 }
 
-func (h *Handler) buildAPIIntegrationsSessions(duration time.Duration, integration string) map[string]interface{} {
+func (h *Handler) buildAPIIntegrationsSessions(start, end time.Time, integration string, includeSessions bool) map[string]interface{} {
 	response := map[string]interface{}{}
 	if h.store == nil {
 		return response
 	}
 
-	now := time.Now().UTC()
-	start := now.Add(-duration)
-	totals, err := h.store.QueryAPIIntegrationUsageTotals(start, now, integration)
+	totals, err := h.store.QueryAPIIntegrationUsageTotals(start, end, integration)
 	if err != nil {
 		h.logger.Error("failed to query API integrations session totals", "error", err)
 		return response
 	}
-	modelTotals, err := h.store.QueryAPIIntegrationUsageEffortTotals(start, now, integration)
+	modelTotals, err := h.store.QueryAPIIntegrationUsageEffortTotals(start, end, integration)
 	if err != nil {
 		h.logger.Error("failed to query API integrations model totals", "error", err)
 		return response
 	}
-	rows, err := h.store.QueryAPIIntegrationUsageSessions(start, now, integration, maxChartPoints*10)
-	if err != nil {
-		h.logger.Error("failed to query API integrations sessions", "error", err)
-		return response
+	var rows []store.APIIntegrationUsageSessionRow
+	if includeSessions {
+		rows, err = h.store.QueryAPIIntegrationUsageSessions(start, end, integration, maxChartPoints*10)
+		if err != nil {
+			h.logger.Error("failed to query API integrations sessions", "error", err)
+			return response
+		}
 	}
 
 	totalsByIntegration := make(map[string]interface{})
@@ -532,16 +644,15 @@ func (h *Handler) buildAPIIntegrationsSessions(duration time.Duration, integrati
 	return response
 }
 
-func (h *Handler) buildAPIIntegrationsHistory(duration time.Duration) map[string]interface{} {
+func (h *Handler) buildAPIIntegrationsHistory(start, end time.Time) map[string]interface{} {
 	response := map[string]interface{}{}
 	if h.store == nil {
 		return response
 	}
 
-	now := time.Now().UTC()
-	start := now.Add(-duration)
+	duration := end.Sub(start)
 	bucketSize := apiIntegrationHistoryBucketSize(duration)
-	rows, err := h.store.QueryAPIIntegrationUsageBuckets(start, now, bucketSize)
+	rows, err := h.store.QueryAPIIntegrationUsageBuckets(start, end, bucketSize)
 	if err != nil {
 		h.logger.Error("failed to query API integrations history", "error", err)
 		return response
@@ -585,6 +696,24 @@ func (h *Handler) buildAPIIntegrationsHistory(duration time.Duration) map[string
 	}
 
 	return response
+}
+
+func (h *Handler) setAPIIntegrationArchiveHeaders(w http.ResponseWriter, start, end time.Time) {
+	retentionDays := 30
+	if h.config != nil && h.config.APIIntegrationsRetention > 0 {
+		retentionDays = max(1, int(h.config.APIIntegrationsRetention/(24*time.Hour)))
+	}
+	usesArchive := false
+	if h.store != nil {
+		if archived, err := h.store.APIIntegrationUsageUsesArchive(start, end); err == nil {
+			usesArchive = archived
+		} else {
+			h.logger.Error("failed to check API integrations archive range", "error", err)
+		}
+	}
+	w.Header().Set("X-OnWatch-Archived-Data", strconv.FormatBool(usesArchive))
+	w.Header().Set("X-OnWatch-Archive-Resolution", "1h")
+	w.Header().Set("X-OnWatch-Raw-Retention-Days", strconv.Itoa(retentionDays))
 }
 
 func (h *Handler) apiIntegrationUsageVersion() uint64 {

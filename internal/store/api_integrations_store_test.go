@@ -79,6 +79,86 @@ func TestStore_InsertAPIIntegrationUsageEvent_DuplicateUpdatesMetadata(t *testin
 	}
 }
 
+func TestStore_APIIntegrationQueriesUseNormalizedMetadataColumns(t *testing.T) {
+	t.Parallel()
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	line := `{"ts":"2026-07-20T12:00:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6","prompt_tokens":100,"completion_tokens":20,"cost_usd":1.25,"metadata":{"session_id":"session-1","reasoning_effort":"high","mode":"default","fast_mode":true,"input_tokens":40,"cached_input_tokens":60,"cache_creation_input_tokens":5,"output_tokens":15,"reasoning_output_tokens":5}}`
+	insertAPIIntegrationUsageEventForTest(t, s, line, "/tmp/codex-normalized.jsonl")
+
+	var (
+		sessionID, effort, mode, speedMode                        string
+		inputTokens, cachedTokens, cacheCreate, output, reasoning int
+	)
+	err = s.db.QueryRow(`
+		SELECT session_id, reasoning_effort, mode, speed_mode,
+		       input_tokens, cached_input_tokens, cache_creation_input_tokens,
+		       output_tokens, reasoning_output_tokens
+		FROM api_integration_usage_events
+	`).Scan(
+		&sessionID,
+		&effort,
+		&mode,
+		&speedMode,
+		&inputTokens,
+		&cachedTokens,
+		&cacheCreate,
+		&output,
+		&reasoning,
+	)
+	if err != nil {
+		t.Fatalf("query normalized API integration columns: %v", err)
+	}
+	if sessionID != "session-1" || effort != "high" || mode != "default" || speedMode != "fast" {
+		t.Fatalf("normalized dimensions=%q/%q/%q/%q", sessionID, effort, mode, speedMode)
+	}
+	if inputTokens != 40 || cachedTokens != 60 || cacheCreate != 5 || output != 15 || reasoning != 5 {
+		t.Fatalf("normalized tokens=%d/%d/%d/%d/%d", inputTokens, cachedTokens, cacheCreate, output, reasoning)
+	}
+	var storedMetadata string
+	if err := s.db.QueryRow(`SELECT metadata_json FROM api_integration_usage_events`).Scan(&storedMetadata); err != nil {
+		t.Fatalf("query compact metadata: %v", err)
+	}
+	if strings.Contains(storedMetadata, `"session_id"`) || strings.Contains(storedMetadata, `"input_tokens"`) {
+		t.Fatalf("normalized metadata is still duplicated in JSON: %s", storedMetadata)
+	}
+	events, err := s.QueryAPIIntegrationUsageRange(
+		time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("QueryAPIIntegrationUsageRange: %v", err)
+	}
+	if len(events) != 1 || !strings.Contains(events[0].MetadataJSON, `"session_id":"session-1"`) ||
+		!strings.Contains(events[0].MetadataJSON, `"input_tokens":40`) {
+		t.Fatalf("rehydrated metadata=%+v", events)
+	}
+
+	if _, err := s.db.Exec(`UPDATE api_integration_usage_events SET metadata_json = ''`); err != nil {
+		t.Fatalf("clear metadata_json: %v", err)
+	}
+	start := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	sessions, err := s.QueryAPIIntegrationUsageSessions(start, end, "Codex CLI", 100)
+	if err != nil {
+		t.Fatalf("QueryAPIIntegrationUsageSessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].SessionID != "session-1" || sessions[0].InputTokens != 40 || sessions[0].ReasoningTokens != 5 {
+		t.Fatalf("sessions from normalized columns=%+v", sessions)
+	}
+	efforts, err := s.QueryAPIIntegrationUsageEffortTotals(start, end, "Codex CLI")
+	if err != nil {
+		t.Fatalf("QueryAPIIntegrationUsageEffortTotals: %v", err)
+	}
+	if len(efforts) != 1 || efforts[0].ReasoningEffort != "high" || efforts[0].SpeedMode != "fast" {
+		t.Fatalf("efforts from normalized columns=%+v", efforts)
+	}
+}
+
 func TestStore_QueryAPIIntegrationUsageSummary(t *testing.T) {
 	t.Parallel()
 	s, err := New(":memory:")
@@ -347,6 +427,111 @@ func TestStore_DeleteAPIIntegrationUsageEventsOlderThan(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Timestamp.Format(time.RFC3339) != "2026-03-15T12:00:00Z" {
 		t.Fatalf("events=%+v", events)
+	}
+}
+
+func TestStore_CompactAPIIntegrationUsageEventsHourly(t *testing.T) {
+	t.Parallel()
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	sourcePath := "/tmp/api-integrations/compact.jsonl"
+	oldLineA := `{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","account":"work","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"cost_usd":0.25,"metadata":{"input_tokens":80,"cached_input_tokens":20,"output_tokens":15,"reasoning_output_tokens":5,"reasoning_effort":"high","mode":"agent","fast_mode":true}}`
+	oldLineB := `{"ts":"2026-01-15T12:45:00Z","integration":"Codex CLI","provider":"openai","account":"work","model":"gpt-5.6-sol","prompt_tokens":50,"completion_tokens":10,"cost_usd":0.15,"metadata":{"input_tokens":40,"cached_input_tokens":10,"output_tokens":8,"reasoning_output_tokens":2,"reasoning_effort":"high","mode":"agent","fast_mode":true}}`
+	recentLine := `{"ts":"2026-03-20T12:00:00Z","integration":"Codex CLI","provider":"openai","account":"work","model":"gpt-5.6-sol","prompt_tokens":7,"completion_tokens":3,"cost_usd":0.05}`
+	for _, line := range []string{oldLineA, oldLineB, recentLine} {
+		insertAPIIntegrationUsageEventForTest(t, s, line, sourcePath)
+	}
+	if _, err := s.db.Exec(`
+		INSERT INTO data_transfer_records (table_name, local_record_id, origin_id, origin_record_id)
+		SELECT 'api_integration_usage_events', CAST(id AS TEXT), 'imported-test', fingerprint
+		FROM api_integration_usage_events
+	`); err != nil {
+		t.Fatalf("insert transfer provenance: %v", err)
+	}
+
+	result, err := s.CompactAPIIntegrationUsageEvents(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("CompactAPIIntegrationUsageEvents: %v", err)
+	}
+	if result.CompactedEvents != 2 || result.HourlyRows != 1 {
+		t.Fatalf("result=%+v", result)
+	}
+
+	var requests, prompt, completion, total, input, cached, output, reasoning int64
+	var cost float64
+	err = s.db.QueryRow(`
+		SELECT request_count, prompt_tokens, completion_tokens, total_tokens,
+		       input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens, total_cost_usd
+		FROM api_integration_usage_hourly
+		WHERE hour_start = '2026-01-15T12:00:00Z'
+	`).Scan(&requests, &prompt, &completion, &total, &input, &cached, &output, &reasoning, &cost)
+	if err != nil {
+		t.Fatalf("query archive row: %v", err)
+	}
+	if requests != 2 || prompt != 150 || completion != 30 || total != 180 ||
+		input != 120 || cached != 30 || output != 23 || reasoning != 7 || cost != 0.4 {
+		t.Fatalf("archive totals requests=%d prompt=%d completion=%d total=%d input=%d cached=%d output=%d reasoning=%d cost=%v",
+			requests, prompt, completion, total, input, cached, output, reasoning, cost)
+	}
+
+	var rawCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM api_integration_usage_events`).Scan(&rawCount); err != nil {
+		t.Fatalf("count raw events: %v", err)
+	}
+	if rawCount != 1 {
+		t.Fatalf("rawCount=%d want 1", rawCount)
+	}
+	var provenanceCount int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM data_transfer_records
+		WHERE table_name = 'api_integration_usage_events'
+	`).Scan(&provenanceCount); err != nil {
+		t.Fatalf("count API integration provenance: %v", err)
+	}
+	if provenanceCount != 1 {
+		t.Fatalf("provenanceCount=%d want 1", provenanceCount)
+	}
+
+	replayed, err := apiintegrations.ParseUsageEventLine([]byte(oldLineA), sourcePath)
+	if err != nil {
+		t.Fatalf("ParseUsageEventLine(replayed): %v", err)
+	}
+	if _, err := s.InsertAPIIntegrationUsageEvent(replayed); !errors.Is(err, ErrDuplicateAPIIntegrationUsageEvent) {
+		t.Fatalf("replayed compacted event error=%v want duplicate", err)
+	}
+
+	start := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 3, 21, 0, 0, 0, 0, time.UTC)
+	buckets, err := s.QueryAPIIntegrationUsageBuckets(start, end, time.Hour)
+	if err != nil {
+		t.Fatalf("QueryAPIIntegrationUsageBuckets: %v", err)
+	}
+	if len(buckets) != 2 || buckets[0].RequestCount != 2 || buckets[1].RequestCount != 1 {
+		t.Fatalf("mixed buckets=%+v", buckets)
+	}
+
+	totals, err := s.QueryAPIIntegrationUsageTotals(start, end, "Codex CLI")
+	if err != nil {
+		t.Fatalf("QueryAPIIntegrationUsageTotals: %v", err)
+	}
+	if len(totals) != 1 || totals[0].RequestCount != 3 || totals[0].TotalTokens != 190 || totals[0].TotalCostUSD != 0.45 {
+		t.Fatalf("mixed totals=%+v", totals)
+	}
+
+	efforts, err := s.QueryAPIIntegrationUsageEffortTotals(start, end, "Codex CLI")
+	if err != nil {
+		t.Fatalf("QueryAPIIntegrationUsageEffortTotals: %v", err)
+	}
+	var requestTotal int
+	for _, effort := range efforts {
+		requestTotal += effort.RequestCount
+	}
+	if requestTotal != 3 {
+		t.Fatalf("mixed effort totals=%+v", efforts)
 	}
 }
 

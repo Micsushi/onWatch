@@ -290,31 +290,18 @@ func (h *Handler) historyCursor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rangeParam := r.URL.Query().Get("range")
-	if rangeParam == "" {
-		rangeParam = "7d"
+	if r.URL.Query().Get("range") == "" && r.URL.Query().Get("start") == "" && r.URL.Query().Get("end") == "" {
+		query := r.URL.Query()
+		query.Set("range", "7d")
+		r.URL.RawQuery = query.Encode()
+	}
+	window, err := historyWindowForRequest(r, time.Now().UTC())
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
-	now := time.Now().UTC()
-	var start time.Time
-	switch rangeParam {
-	case "1h":
-		start = now.Add(-1 * time.Hour)
-	case "6h":
-		start = now.Add(-6 * time.Hour)
-	case "24h", "1d":
-		start = now.Add(-24 * time.Hour)
-	case "3d":
-		start = now.Add(-3 * 24 * time.Hour)
-	case "30d":
-		start = now.Add(-30 * 24 * time.Hour)
-	case "7d":
-		start = now.Add(-7 * 24 * time.Hour)
-	default:
-		start = now.Add(-7 * 24 * time.Hour)
-	}
-
-	snapshots, err := h.store.QueryCursorRange(start, now, 200)
+	snapshots, err := h.store.QueryCursorRange(window.Start, window.End, 200)
 	if err != nil {
 		h.logger.Error("failed to query Cursor history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")

@@ -224,6 +224,112 @@ func (s *Store) QueryGeminiRange(start, end time.Time, limit ...int) ([]*api.Gem
 	return snapshots, nil
 }
 
+// QueryGeminiRangeSampled returns evenly sampled Gemini snapshots and their
+// quota values in one query. The first and last snapshots are always retained.
+func (s *Store) QueryGeminiRangeSampled(start, end time.Time, maxPoints int) ([]*api.GeminiSnapshot, error) {
+	if maxPoints < 2 {
+		return nil, fmt.Errorf("gemini sample size must be at least 2")
+	}
+
+	rows, err := s.db.Query(`
+		WITH ranked AS (
+			SELECT id, captured_at, tier, project_id,
+				ROW_NUMBER() OVER (ORDER BY captured_at ASC) AS row_number,
+				COUNT(*) OVER () AS total_rows
+			FROM gemini_snapshots
+			WHERE captured_at BETWEEN ? AND ?
+		),
+		sampled AS (
+			SELECT id, captured_at, tier, project_id
+			FROM ranked
+			WHERE total_rows <= ?
+				OR row_number = 1
+				OR ((row_number - 1) * (? - 1)) / (total_rows - 1)
+					> ((row_number - 2) * (? - 1)) / (total_rows - 1)
+		)
+		SELECT sampled.id, sampled.captured_at, sampled.tier, sampled.project_id,
+			quota.model_id, quota.remaining_fraction, quota.usage_percent, quota.reset_time
+		FROM sampled
+		LEFT JOIN gemini_quota_values quota ON quota.snapshot_id = sampled.id
+		ORDER BY sampled.captured_at ASC, quota.model_id ASC`,
+		start.Format(time.RFC3339Nano),
+		end.Format(time.RFC3339Nano),
+		maxPoints,
+		maxPoints,
+		maxPoints,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sampled gemini range: %w", err)
+	}
+	defer rows.Close()
+
+	var snapshots []*api.GeminiSnapshot
+	var current *api.GeminiSnapshot
+	for rows.Next() {
+		var (
+			id                int64
+			capturedAt        string
+			tier              sql.NullString
+			projectID         sql.NullString
+			modelID           sql.NullString
+			remainingFraction sql.NullFloat64
+			usagePercent      sql.NullFloat64
+			resetTime         sql.NullString
+		)
+		if err := rows.Scan(
+			&id,
+			&capturedAt,
+			&tier,
+			&projectID,
+			&modelID,
+			&remainingFraction,
+			&usagePercent,
+			&resetTime,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan sampled gemini range: %w", err)
+		}
+
+		if current == nil || current.ID != id {
+			parsedCapturedAt, err := parseGeminiTime(capturedAt, "gemini snapshot captured_at")
+			if err != nil {
+				return nil, err
+			}
+			current = &api.GeminiSnapshot{
+				ID:         id,
+				CapturedAt: parsedCapturedAt,
+			}
+			if tier.Valid {
+				current.Tier = tier.String
+			}
+			if projectID.Valid {
+				current.ProjectID = projectID.String
+			}
+			snapshots = append(snapshots, current)
+		}
+
+		if !modelID.Valid {
+			continue
+		}
+		quota := api.GeminiQuota{
+			ModelID:           modelID.String,
+			RemainingFraction: remainingFraction.Float64,
+			UsagePercent:      usagePercent.Float64,
+		}
+		if resetTime.Valid && resetTime.String != "" {
+			parsedResetTime, err := parseGeminiTime(resetTime.String, "gemini quota reset_time")
+			if err != nil {
+				return nil, err
+			}
+			quota.ResetTime = &parsedResetTime
+		}
+		current.Quotas = append(current.Quotas, quota)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate sampled gemini range: %w", err)
+	}
+	return snapshots, nil
+}
+
 // CreateGeminiCycle creates a new Gemini reset cycle.
 func (s *Store) CreateGeminiCycle(modelID string, cycleStart time.Time, resetTime *time.Time) (int64, error) {
 	var resetTimeVal interface{}

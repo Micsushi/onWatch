@@ -1200,6 +1200,7 @@ func run() error {
 			agentUsageAg = agent.NewAgentUsageCollectorAgent(cfg.APIIntegrationsDir, pricing, sources, cfg.PollInterval, logger)
 		}
 	}
+	historyMaintenanceAg := agent.NewProviderHistoryMaintenanceAgent(db, cfg.APIIntegrationsRetention, logger)
 
 	// Create notification engine
 	notifier := notify.New(db, logger)
@@ -1514,6 +1515,11 @@ func run() error {
 			serverErr <- fmt.Errorf("server error: %w", err)
 		}
 	}()
+	historyMaintenanceDone := make(chan struct{})
+	go func() {
+		defer close(historyMaintenanceDone)
+		_ = historyMaintenanceAg.Run(ctx)
+	}()
 
 	if runtime.GOOS == "darwin" && menubar.IsSupported() {
 		go func() {
@@ -1561,6 +1567,7 @@ func run() error {
 	// Cancel context to stop agent
 	cancel()
 	agentMgr.StopAll()
+	<-historyMaintenanceDone
 	_ = stopMenubarProcess(cfg.TestMode)
 
 	// Give agent a moment to clean up

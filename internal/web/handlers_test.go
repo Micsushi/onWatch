@@ -861,6 +861,62 @@ func TestHandler_parseTimeRange(t *testing.T) {
 	}
 }
 
+func TestHistoryWindow_ExplicitBoundsOverridePreset(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 25, 18, 0, 0, 0, time.UTC)
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/history?range=1h&start=2026-01-15T07:00:00Z&end=2026-01-21T07:00:00Z",
+		nil,
+	)
+
+	window, err := historyWindowForRequest(req, now)
+	if err != nil {
+		t.Fatalf("historyWindowForRequest: %v", err)
+	}
+	wantStart := time.Date(2026, 1, 15, 7, 0, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 1, 21, 7, 0, 0, 0, time.UTC)
+	if !window.Start.Equal(wantStart) || !window.End.Equal(wantEnd) {
+		t.Fatalf("window=%+v want start=%s end=%s", window, wantStart, wantEnd)
+	}
+	if !window.Explicit || window.Duration != 6*24*time.Hour {
+		t.Fatalf("window=%+v want explicit six-day interval", window)
+	}
+}
+
+func TestHistoryWindow_RejectsInvalidExplicitBounds(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 25, 18, 0, 0, 0, time.UTC)
+	tests := []string{
+		"/api/history?start=2026-01-15T07:00:00Z",
+		"/api/history?end=2026-01-21T07:00:00Z",
+		"/api/history?start=bad&end=2026-01-21T07:00:00Z",
+		"/api/history?start=2026-01-21T07:00:00Z&end=2026-01-15T07:00:00Z",
+	}
+	for _, target := range tests {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		if _, err := historyWindowForRequest(req, now); err == nil {
+			t.Fatalf("historyWindowForRequest(%q) returned nil error", target)
+		}
+	}
+}
+
+func TestHistoryWindow_PresetEndsAtProvidedNow(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 25, 18, 0, 0, 0, time.UTC)
+	req := httptest.NewRequest(http.MethodGet, "/api/history?range=7d", nil)
+
+	window, err := historyWindowForRequest(req, now)
+	if err != nil {
+		t.Fatalf("historyWindowForRequest: %v", err)
+	}
+	if !window.End.Equal(now) || !window.Start.Equal(now.Add(-7*24*time.Hour)) {
+		t.Fatalf("window=%+v", window)
+	}
+	if window.Explicit {
+		t.Fatalf("preset window unexpectedly explicit: %+v", window)
+	}
+}
+
 // Provider Endpoint Tests
 
 func TestHandler_Providers_ReturnsAvailableProviders(t *testing.T) {

@@ -32,6 +32,10 @@
             <ul class="codex-profile-menu" id="minimax-profile-menu" role="listbox" aria-label="Select MiniMax account"></ul>
         </div>
         <div class="header-actions">
+            <div class="dashboard-refresh-status" id="dashboard-refresh-status" role="status" aria-live="polite" aria-atomic="true" hidden>
+                <span class="loading-spinner tiny" aria-hidden="true"></span>
+                <span class="dashboard-refresh-message" id="dashboard-refresh-message">Updating data...</span>
+            </div>
             <div class="header-meta">
                 <span class="last-updated" id="last-updated">Last updated: --:--:--</span>
                 <span class="status-indicator" id="status-dot" aria-label="Connection status"></span>
@@ -472,18 +476,27 @@
                             <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative">Cumulative</button>
                             <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket">Per Period</button>
                         </div>
-                        <div class="range-selector platform-cost-range-selector" role="group" aria-label="Cost graph time range">
-                            <button class="platform-cost-range-btn" type="button" data-range="1h">1h</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="6h">6h</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="24h">24h</button>
-                            <button class="platform-cost-range-btn active" type="button" data-range="7d">7d</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="30d">30d</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="all">All</button>
+                        <div class="graph-history-control" data-history-scope="platformCost">
+                            <div class="range-selector graph-history-presets" role="group" aria-label="Cost graph time range">
+                                <button class="platform-cost-range-btn" type="button" data-range="1h">1h</button>
+                                <button class="platform-cost-range-btn" type="button" data-range="6h">6h</button>
+                                <button class="platform-cost-range-btn" type="button" data-range="24h">24h</button>
+                                <button class="platform-cost-range-btn active" type="button" data-range="7d">7d</button>
+                                <button class="platform-cost-range-btn" type="button" data-range="30d">30d</button>
+                                <button class="platform-cost-range-btn" type="button" data-range="all">All</button>
+                                <button class="platform-cost-range-btn" type="button" data-range="custom">Custom</button>
+                            </div>
+                            <div class="graph-history-dates">
+                                <label for="platform-cost-history-start-date"><span>Start</span><input type="date" id="platform-cost-history-start-date" data-history-start autocomplete="off"></label>
+                                <span class="graph-history-date-separator" aria-hidden="true">to</span>
+                                <label for="platform-cost-history-end-date"><span>End</span><input type="date" id="platform-cost-history-end-date" data-history-end autocomplete="off"></label>
+                            </div>
+                            <p class="graph-history-error" data-history-error role="alert" hidden></p>
                         </div>
                     </div>
                 </div>
                 <div class="platform-cost-chart-wrap">
-                    <div class="chart-loading-overlay" id="platform-cost-chart-loading" aria-live="polite">
+                    <div class="chart-loading-overlay" id="platform-cost-chart-loading" aria-live="polite" hidden>
                         <span class="loading-spinner" aria-hidden="true"></span>
                         <span>Loading cost history</span>
                     </div>
@@ -517,13 +530,22 @@
                         <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative">Cumulative</button>
                         <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket">Per Period</button>
                     </div>
-                    <div class="range-selector" role="group" aria-label="Time range">
-                        <button class="range-btn" data-range="1h">1h</button>
-                        <button class="range-btn" data-range="6h">6h</button>
-                        <button class="range-btn" data-range="24h">24h</button>
-                        <button class="range-btn active" data-range="7d">7d</button>
-                        <button class="range-btn" data-range="30d">30d</button>
-                        <button class="range-btn" data-range="all">All</button>
+                    <div class="graph-history-control" data-history-scope="chart">
+                        <div class="range-selector graph-history-presets" role="group" aria-label="Usage graph time range">
+                            <button class="chart-range-btn" type="button" data-range="1h">1h</button>
+                            <button class="chart-range-btn" type="button" data-range="6h">6h</button>
+                            <button class="chart-range-btn" type="button" data-range="24h">24h</button>
+                            <button class="chart-range-btn active" type="button" data-range="7d">7d</button>
+                            <button class="chart-range-btn" type="button" data-range="30d">30d</button>
+                            <button class="chart-range-btn" type="button" data-range="all">All</button>
+                            <button class="chart-range-btn" type="button" data-range="custom">Custom</button>
+                        </div>
+                        <div class="graph-history-dates">
+                            <label for="chart-history-start-date"><span>Start</span><input type="date" id="chart-history-start-date" data-history-start autocomplete="off"></label>
+                            <span class="graph-history-date-separator" aria-hidden="true">to</span>
+                            <label for="chart-history-end-date"><span>End</span><input type="date" id="chart-history-end-date" data-history-end autocomplete="off"></label>
+                        </div>
+                        <p class="graph-history-error" data-history-error role="alert" hidden></p>
                     </div>
                 </div>
             </header>
@@ -575,13 +597,22 @@
                         <button class="platform-cost-breakdown-tab active" type="button" data-cost-view="types">By Token Type</button>
                         <button class="platform-cost-breakdown-tab" type="button" data-cost-view="models">By Model</button>
                     </div>
-                    <div class="range-selector platform-cost-breakdown-range-selector" role="group" aria-label="Token cost breakdown time range">
-                        <button class="platform-cost-breakdown-range-btn" type="button" data-range="1h">1h</button>
-                        <button class="platform-cost-breakdown-range-btn" type="button" data-range="6h">6h</button>
-                        <button class="platform-cost-breakdown-range-btn" type="button" data-range="24h">24h</button>
-                        <button class="platform-cost-breakdown-range-btn active" type="button" data-range="7d">7d</button>
-                        <button class="platform-cost-breakdown-range-btn" type="button" data-range="30d">30d</button>
-                        <button class="platform-cost-breakdown-range-btn" type="button" data-range="all">All</button>
+                    <div class="graph-history-control" data-history-scope="platformCostBreakdown">
+                        <div class="range-selector graph-history-presets" role="group" aria-label="Token cost breakdown time range">
+                            <button class="platform-cost-breakdown-range-btn" type="button" data-range="1h">1h</button>
+                            <button class="platform-cost-breakdown-range-btn" type="button" data-range="6h">6h</button>
+                            <button class="platform-cost-breakdown-range-btn" type="button" data-range="24h">24h</button>
+                            <button class="platform-cost-breakdown-range-btn active" type="button" data-range="7d">7d</button>
+                            <button class="platform-cost-breakdown-range-btn" type="button" data-range="30d">30d</button>
+                            <button class="platform-cost-breakdown-range-btn" type="button" data-range="all">All</button>
+                            <button class="platform-cost-breakdown-range-btn" type="button" data-range="custom">Custom</button>
+                        </div>
+                        <div class="graph-history-dates">
+                            <label for="platform-cost-breakdown-history-start-date"><span>Start</span><input type="date" id="platform-cost-breakdown-history-start-date" data-history-start autocomplete="off"></label>
+                            <span class="graph-history-date-separator" aria-hidden="true">to</span>
+                            <label for="platform-cost-breakdown-history-end-date"><span>End</span><input type="date" id="platform-cost-breakdown-history-end-date" data-history-end autocomplete="off"></label>
+                        </div>
+                        <p class="graph-history-error" data-history-error role="alert" hidden></p>
                     </div>
                 </div>
             </header>
