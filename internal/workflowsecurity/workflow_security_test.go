@@ -66,3 +66,15 @@ func TestSelfHostedActionsAreCommitPinned(t *testing.T) {
 		}
 	}
 }
+
+func TestCodecovOutagesDoNotFailCI(t *testing.T) {
+	ci := workflow(t, "ci.yml")
+	uploads := regexp.MustCompile(
+		`(?m)^\s+- name: Upload coverage to Codecov\s+`+
+			`continue-on-error: true\s+`+
+			`uses: codecov/codecov-action@[0-9a-f]{40} # v4$`,
+	).FindAllString(ci, -1)
+	if len(uploads) != 2 {
+		t.Fatalf("got %d non-blocking Codecov uploads, want 2", len(uploads))
+	}
+}
