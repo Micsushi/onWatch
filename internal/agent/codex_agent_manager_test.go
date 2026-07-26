@@ -389,6 +389,43 @@ func TestCodexAgentManager_Run_UsesDefaultCredentialsWhenNoProfiles(t *testing.T
 	}
 }
 
+func TestCodexAgentManager_Run_UsesCurrentCredentialsWhenSavedProfilesDoNotMatch(t *testing.T) {
+	fx := newCodexManagerFixture(t)
+
+	stale := CodexProfile{Name: "imported", AccountID: "acct-import", SavedAt: time.Now().UTC()}
+	stale.Tokens.AccessToken = "stale-token"
+	fx.writeProfile(t, stale)
+
+	authDir := filepath.Join(os.Getenv("HOME"), ".codex")
+	if err := os.MkdirAll(authDir, 0o700); err != nil {
+		t.Fatalf("mkdir .codex: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), []byte(`{"tokens":{"access_token":"current-token","account_id":"acct-current"}}`), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- fx.manager.Run(ctx)
+	}()
+
+	waitUntil(t, time.Second, func() bool {
+		return fx.instance("imported") != nil && fx.instance("default") != nil
+	}, "saved profile and current credentials to start")
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not exit after cancellation")
+	}
+}
+
 func TestCodexAgentManager_ProfileScanner_DetectsNewProfiles(t *testing.T) {
 	fx := newCodexManagerFixture(t)
 	fx.manager.scanInterval = 10 * time.Millisecond
@@ -519,6 +556,20 @@ func TestCodexAgentManager_StartAgentForProfile_UsesAuthJSONWhenProfileTokenStal
 	instance := fx.instance("work")
 	if got := instance.Agent.tokenRefresh(); got != "fresh-token" {
 		t.Fatalf("tokenRefresh() = %q, want fresh-token", got)
+	}
+	info, err := os.Stat(profilePath)
+	if err != nil {
+		t.Fatalf("stat updated profile: %v", err)
+	}
+	fx.manager.mu.RLock()
+	trackedModTime, tracked := fx.manager.lastScanProfiles["work"]
+	fx.manager.mu.RUnlock()
+	if !tracked || !trackedModTime.Equal(info.ModTime()) {
+		t.Fatalf("self-written profile mod time = %v, tracked = %v, want scanner state updated", info.ModTime(), trackedModTime)
+	}
+	fx.manager.scanForProfileChanges()
+	if fx.instance("work") != instance {
+		t.Fatal("profile scanner restarted agent after its own credential write")
 	}
 
 	freshCreds := instance.Agent.credsRefresh()

@@ -137,6 +137,7 @@ function getBothViewProviders() {
 // Global State
 const State = {
   chart: null,
+  mainChartRenderSignature: null,
   chartSyn: null,
   chartZai: null,
   chartAnth: null,
@@ -219,6 +220,7 @@ const State = {
   apiIntegrationsActiveWindow: '8d',
   graphMode: 'cumulative',
   platformCostChart: null,
+  platformCostChartRenderSignature: null,
   platformCostMetric: 'totalCostUsd',
   platformCostGraphMode: 'cumulative',
   platformCostBreakdownView: 'types',
@@ -259,6 +261,19 @@ const State = {
   dashboardRefreshMessage: 'Updating data...',
   dashboardToastTimer: null,
 };
+
+function updateChartWhenChanged(signatureKey, renderState, update) {
+  let signature = null;
+  try {
+    signature = JSON.stringify(renderState);
+  } catch (e) {
+    // Fail open: a signature problem must never suppress a visible update.
+  }
+  if (signature !== null && State[signatureKey] === signature) return false;
+  update();
+  State[signatureKey] = signature;
+  return true;
+}
 
 const API_INTEGRATIONS_CURRENT_CACHE_KEY = 'onwatch-api-integrations-current-v1';
 const PLATFORM_COST_HISTORY_CACHE_KEY = 'onwatch-platform-cost-history-v2';
@@ -5718,23 +5733,44 @@ function setMainChartDatasets(datasets, range, options = {}) {
     if (canPreserveExisting) {
       setDashboardFreshness({ stale: true });
       setChartEmptyState('usage-chart', false);
-      State.chart.update('none');
       return;
     }
     renderUsageSummary([], range, mode);
     setChartEmptyState('usage-chart', true, options.emptyMessage || noUsageMessage(range));
-    State.chart.data.datasets = [];
-    State.chart.update('none');
+    updateChartWhenChanged('mainChartRenderSignature', {
+      provider: getCurrentProvider(),
+      range,
+      mode,
+      empty: true,
+      colors: getThemeColors(),
+      theme: document.documentElement.getAttribute('data-theme') || 'dark',
+    }, () => {
+      State.chart.data.datasets = [];
+      State.chart.update('none');
+    });
     return;
   }
   setChartEmptyState('usage-chart', false);
-  State.chart.data.datasets = chartDatasets;
   renderUsageSummary(chartDatasets, range, mode);
-  applyChartGraphMode(State.chart, range, mode);
-  updateTimeScale(State.chart, range);
-  State.chartYMax = computeYMax(State.chart.data.datasets, State.chart, { cap });
-  State.chart.options.scales.y.max = State.chartYMax;
-  State.chart.update('none');
+  const nextYMax = computeYMax(chartDatasets, State.chart, { cap });
+  const renderState = {
+    provider: getCurrentProvider(),
+    range,
+    mode,
+    empty: false,
+    datasets: chartDatasets,
+    yMax: nextYMax,
+    colors: getThemeColors(),
+    theme: document.documentElement.getAttribute('data-theme') || 'dark',
+  };
+  updateChartWhenChanged('mainChartRenderSignature', renderState, () => {
+    State.chart.data.datasets = chartDatasets;
+    applyChartGraphMode(State.chart, range, mode);
+    updateTimeScale(State.chart, range);
+    State.chartYMax = nextYMax;
+    State.chart.options.scales.y.max = State.chartYMax;
+    State.chart.update('none');
+  });
   State.currentChartProvider = getCurrentProvider();
   State.currentChartRange = range;
   if (State.currentChartProvider && State.currentChartProvider !== 'api-integrations' && State.currentChartProvider !== 'both') {
@@ -5794,6 +5830,7 @@ function initChart() {
     : ['subscription', 'search', 'toolCalls'];
 
   const isAPIIntegrations = provider === 'api-integrations';
+  State.mainChartRenderSignature = null;
   State.chart = new Chart(ctx, {
     type: 'line',
     data: {
@@ -5897,11 +5934,14 @@ function initChart() {
 }
 
 function updateChartTheme() {
-  if (getCurrentProvider() === 'api-integrations') {
+  State.mainChartRenderSignature = null;
+  State.platformCostChartRenderSignature = null;
+  const provider = getCurrentProvider();
+  if (provider === 'api-integrations') {
     fetchHistory(selectedChartRange());
     return;
   }
-  if (getCurrentProvider() === 'both') {
+  if (provider === 'both') {
     // Re-render both-mode provider cards so Chart.js picks up updated theme tokens.
     if (State.allProvidersCurrent || State.allProvidersInsights || State.allProvidersHistory) {
       renderAllProvidersView();
@@ -5910,31 +5950,35 @@ function updateChartTheme() {
     }
     return;
   }
-  if (!State.chart) return;
-  const colors = getThemeColors();
-  const style = getComputedStyle(document.documentElement);
+  if (State.chart) {
+    const colors = getThemeColors();
+    const style = getComputedStyle(document.documentElement);
 
-  // Update line colors for theme
-  const chartColors = [
-    style.getPropertyValue('--chart-subscription').trim() || '#0D9488',
-    style.getPropertyValue('--chart-search').trim() || '#F59E0B',
-    style.getPropertyValue('--chart-toolcalls').trim() || '#3B82F6'
-  ];
-  State.chart.data.datasets.forEach((ds, i) => {
-    if (chartColors[i]) ds.borderColor = chartColors[i];
-  });
+    // Update line colors for theme
+    const chartColors = [
+      style.getPropertyValue('--chart-subscription').trim() || '#0D9488',
+      style.getPropertyValue('--chart-search').trim() || '#F59E0B',
+      style.getPropertyValue('--chart-toolcalls').trim() || '#3B82F6'
+    ];
+    State.chart.data.datasets.forEach((ds, i) => {
+      if (chartColors[i]) ds.borderColor = chartColors[i];
+    });
 
-  State.chart.options.scales.x.grid.color = colors.grid;
-  State.chart.options.scales.x.ticks.color = colors.text;
-  State.chart.options.scales.y.grid.color = colors.grid;
-  State.chart.options.scales.y.ticks.color = colors.text;
-  State.chart.options.scales.y.max = State.chartYMax;
-  State.chart.options.plugins.legend.labels.color = colors.text;
-  State.chart.options.plugins.tooltip.backgroundColor = colors.surfaceContainer;
-  State.chart.options.plugins.tooltip.titleColor = colors.onSurface;
-  State.chart.options.plugins.tooltip.bodyColor = colors.text;
-  State.chart.options.plugins.tooltip.borderColor = colors.outline;
-  State.chart.update('none');
+    State.chart.options.scales.x.grid.color = colors.grid;
+    State.chart.options.scales.x.ticks.color = colors.text;
+    State.chart.options.scales.y.grid.color = colors.grid;
+    State.chart.options.scales.y.ticks.color = colors.text;
+    State.chart.options.scales.y.max = State.chartYMax;
+    State.chart.options.plugins.legend.labels.color = colors.text;
+    State.chart.options.plugins.tooltip.backgroundColor = colors.surfaceContainer;
+    State.chart.options.plugins.tooltip.titleColor = colors.onSurface;
+    State.chart.options.plugins.tooltip.bodyColor = colors.text;
+    State.chart.options.plugins.tooltip.borderColor = colors.outline;
+    State.chart.update('none');
+  }
+  if (supportsPlatformCost(provider)) {
+    renderPlatformCostChartForSelectedRange(provider);
+  }
 }
 
 function applyProviderHistoryPayload(provider, range, data, apiIntegrationsHistoryData = null) {
@@ -7873,6 +7917,7 @@ function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
     State.platformCostChart.destroy();
     State.platformCostChart = null;
   }
+  State.platformCostChartRenderSignature = null;
   if (tableHead) {
     tableHead.innerHTML = `<tr>
       <th>Token Type</th>
@@ -8076,8 +8121,16 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   if (!hasUsageInRange && !hasPeriodCostPoints) {
     setChartEmptyState('platform-cost-chart', true, noUsageMessage(range));
     if (State.platformCostChart) {
-      State.platformCostChart.data = { datasets: [] };
-      State.platformCostChart.update('none');
+      updateChartWhenChanged('platformCostChartRenderSignature', {
+        provider,
+        range,
+        graphMode,
+        empty: true,
+        theme: document.documentElement.getAttribute('data-theme') || 'dark',
+      }, () => {
+        State.platformCostChart.data = { datasets: [] };
+        State.platformCostChart.update('none');
+      });
     }
     return;
   }
@@ -8096,6 +8149,18 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const yMaxTokens = niceAxisMax(activeMaxTokens * 1.18);
   const costPoints = periodMode ? bucketed.cost : cumulative.cost;
   const tokenPoints = periodMode ? bucketed.tokens : cumulative.tokens;
+  const renderState = {
+    provider,
+    range,
+    graphMode,
+    empty: false,
+    costPoints,
+    tokenPoints,
+    yMaxCost,
+    yMaxTokens,
+    colors,
+    theme: document.documentElement.getAttribute('data-theme') || 'dark',
+  };
   const chartData = {
     datasets: [
         {
@@ -8198,17 +8263,19 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
         },
       },
     };
-  if (State.platformCostChart) {
-    State.platformCostChart.config.type = chartType;
-    State.platformCostChart.data = chartData;
-    State.platformCostChart.options = chartOptions;
-    State.platformCostChart.update('none');
-    return;
-  }
-  State.platformCostChart = new Chart(canvas, {
-    type: chartType,
-    data: chartData,
-    options: chartOptions,
+  updateChartWhenChanged('platformCostChartRenderSignature', renderState, () => {
+    if (State.platformCostChart) {
+      State.platformCostChart.config.type = chartType;
+      State.platformCostChart.data = chartData;
+      State.platformCostChart.options = chartOptions;
+      State.platformCostChart.update('none');
+      return;
+    }
+    State.platformCostChart = new Chart(canvas, {
+      type: chartType,
+      data: chartData,
+      options: chartOptions,
+    });
   });
 }
 

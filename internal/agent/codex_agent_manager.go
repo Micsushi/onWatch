@@ -112,7 +112,9 @@ func (m *CodexAgentManager) Run(ctx context.Context) error {
 		// Continue anyway - we might have the default credentials
 	}
 
-	// If no profiles found, try to start with default credentials
+	// Start the current Codex credentials when no saved profile represents that
+	// account. A stale or unrelated saved profile must not suppress the live
+	// account from CODEX_HOME/auth.json.
 	m.mu.RLock()
 	hasProfiles := len(m.instances) > 0
 	m.mu.RUnlock()
@@ -121,6 +123,13 @@ func (m *CodexAgentManager) Run(ctx context.Context) error {
 		m.logger.Info("no saved profiles found, using current credentials as default")
 		if err := m.startDefaultAgent(); err != nil {
 			m.logger.Warn("failed to start default agent", "error", err)
+		}
+	} else if currentCreds := api.DetectCodexCredentials(m.logger); currentCreds != nil &&
+		!m.hasRunningProfileForCredentials(currentCreds) {
+		m.logger.Info("current Codex credentials are not represented by a saved profile, starting default agent",
+			"account_id", currentCreds.AccountID)
+		if err := m.startDefaultAgent(); err != nil {
+			m.logger.Warn("failed to start default agent for current credentials", "error", err)
 		}
 	}
 
@@ -147,6 +156,34 @@ func (m *CodexAgentManager) Run(ctx context.Context) error {
 	m.stopAllAgents()
 
 	return nil
+}
+
+func (m *CodexAgentManager) hasRunningProfileForCredentials(current *api.CodexCredentials) bool {
+	if current == nil || strings.TrimSpace(current.AccountID) == "" {
+		return false
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, instance := range m.instances {
+		saved := codexCredentialsFromProfile(instance.Profile)
+		if saved == nil || strings.TrimSpace(saved.AccountID) != strings.TrimSpace(current.AccountID) {
+			continue
+		}
+
+		savedUserID := strings.TrimSpace(saved.UserID)
+		if savedUserID == "" {
+			savedUserID = api.ParseIDTokenUserID(saved.IDToken)
+		}
+		currentUserID := strings.TrimSpace(current.UserID)
+		if currentUserID == "" {
+			currentUserID = api.ParseIDTokenUserID(current.IDToken)
+		}
+		if savedUserID == "" || currentUserID == "" || savedUserID == currentUserID {
+			return true
+		}
+	}
+	return false
 }
 
 // loadAndStartProfiles loads all profiles from disk and starts agents for each.
@@ -480,6 +517,8 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 		if shouldUseSystemCredsForProfile(profileCreds, systemCreds, profile.AccountID, profile.UserID) {
 			if err := updateProfileFromSystemCreds(profilePath, systemCreds, m.logger); err != nil {
 				m.logger.Warn("failed to persist Codex profile token refresh from auth.json", "error", err, "profile", profile.Name)
+			} else {
+				m.recordProfileModTime(profile.Name, profilePath)
 			}
 			if systemCreds.AccessToken != "" {
 				return systemCreds.AccessToken
@@ -508,6 +547,8 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 		if shouldUseSystemCredsForProfile(profileCreds, systemCreds, profile.AccountID, profile.UserID) {
 			if err := updateProfileFromSystemCreds(profilePath, systemCreds, m.logger); err != nil {
 				m.logger.Warn("failed to update Codex profile from auth.json", "error", err, "profile", profile.Name)
+			} else {
+				m.recordProfileModTime(profile.Name, profilePath)
 			}
 			return systemCreds
 		}
@@ -528,12 +569,7 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 			return err
 		}
 
-		// Update scanner's last-known mod time so it doesn't restart this agent
-		if info, statErr := os.Stat(profilePath); statErr == nil {
-			m.mu.Lock()
-			m.lastScanProfiles[profile.Name] = info.ModTime()
-			m.mu.Unlock()
-		}
+		m.recordProfileModTime(profile.Name, profilePath)
 		return nil
 	})
 
@@ -589,6 +625,18 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 	}()
 
 	return nil
+}
+
+func (m *CodexAgentManager) recordProfileModTime(profileName, profilePath string) {
+	info, err := os.Stat(profilePath)
+	if err != nil {
+		m.logger.Warn("failed to record Codex profile modification time",
+			"profile", profileName, "error", err)
+		return
+	}
+	m.mu.Lock()
+	m.lastScanProfiles[profileName] = info.ModTime()
+	m.mu.Unlock()
 }
 
 // startDefaultAgent starts an agent using current system credentials (no saved profile).

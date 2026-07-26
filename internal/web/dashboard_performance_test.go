@@ -12,7 +12,7 @@ func dashboardAppSource(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read dashboard app: %v", err)
 	}
-	return string(data)
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }
 
 func dashboardTemplateSource(t *testing.T) string {
@@ -89,6 +89,22 @@ func TestDashboardCombinedHistoryRendersBeforeSecondaryHistory(t *testing.T) {
 	secondaryAt := strings.Index(source[renderAt:], secondaryMarker)
 	if secondaryAt < 0 {
 		t.Fatalf("secondary API Integrations refresh is not scheduled after combined render")
+	}
+}
+
+func TestDashboardHistoryChartsSkipIdenticalConsecutiveRenders(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+
+	for _, marker := range []string{
+		"function updateChartWhenChanged(signatureKey, renderState, update)",
+		"State[signatureKey] === signature",
+		"updateChartWhenChanged('mainChartRenderSignature'",
+		"updateChartWhenChanged('platformCostChartRenderSignature'",
+	} {
+		if !strings.Contains(source, marker) {
+			t.Errorf("history chart render deduplication missing %q", marker)
+		}
 	}
 }
 

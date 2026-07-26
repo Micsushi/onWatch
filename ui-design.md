@@ -19,6 +19,8 @@ dashboard.
 - Swap history graph datasets and axis scales atomically without transition
   animation. Cached and refreshed payloads may arrive close together, so range
   changes must not interpolate from the old graph or restart an animation.
+- Do not repaint a visible history chart when startup or refresh paths produce
+  an identical render state. Cards and freshness may update independently.
 - Keep the sticky header height stable while refresh status appears. The active
   refresh message replaces the timestamp and truncates before it can wrap.
 - Preset graph refreshes share one bounded, non-preemptive queue. A newly
