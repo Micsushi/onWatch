@@ -19,7 +19,7 @@ type CopilotAgent struct {
 	interval     time.Duration
 	logger       *slog.Logger
 	sm           *SessionManager
-	notifier     *notify.NotificationEngine
+	notifier     agentNotifier
 	pollingCheck func() bool
 }
 
@@ -32,6 +32,24 @@ func (a *CopilotAgent) SetPollingCheck(fn func() bool) {
 // SetNotifier sets the notification engine for sending alerts.
 func (a *CopilotAgent) SetNotifier(n *notify.NotificationEngine) {
 	a.notifier = n
+}
+
+func (a *CopilotAgent) recordPollFailure(category, message string) {
+	if a.notifier != nil {
+		a.notifier.RecordPollFailure("copilot", "default", category, message)
+	}
+}
+
+func (a *CopilotAgent) recordPollSuccess() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSuccess("copilot", "default")
+	}
+}
+
+func (a *CopilotAgent) recordPollSkipped() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSkipped("copilot", "default")
+	}
 }
 
 // NewCopilotAgent creates a new CopilotAgent with the given dependencies.
@@ -53,8 +71,14 @@ func NewCopilotAgent(client *api.CopilotClient, store *store.Store, tracker *tra
 // then continues at the configured interval until the context is cancelled.
 func (a *CopilotAgent) Run(ctx context.Context) error {
 	a.logger.Info("Copilot agent started", "interval", a.interval)
+	if a.notifier != nil {
+		a.notifier.RegisterPoller("copilot", "default", a.interval)
+	}
 
 	defer func() {
+		if a.notifier != nil {
+			a.notifier.UnregisterPoller("copilot", "default")
+		}
 		if a.sm != nil {
 			a.sm.Close()
 		}
@@ -79,16 +103,24 @@ func (a *CopilotAgent) Run(ctx context.Context) error {
 
 // poll performs a single poll cycle: fetch quotas, store snapshot, update tracker.
 func (a *CopilotAgent) poll(ctx context.Context) {
+	if ctx.Err() != nil {
+		a.recordPollSkipped()
+		return
+	}
 	if a.pollingCheck != nil && !a.pollingCheck() {
+		a.recordPollSkipped()
 		return
 	}
 
 	resp, err := a.client.FetchQuotas(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
+			a.recordPollSkipped()
 			return
 		}
 		a.logger.Error("Failed to fetch Copilot quotas", "error", err)
+		a.recordPollFailure("provider_request",
+			"Copilot quotas could not be fetched. Check connectivity, credentials, and provider availability.")
 		return
 	}
 
@@ -99,6 +131,10 @@ func (a *CopilotAgent) poll(ctx context.Context) {
 	// Store snapshot
 	if _, err := a.store.InsertCopilotSnapshot(snapshot); err != nil {
 		a.logger.Error("Failed to insert Copilot snapshot", "error", err)
+		a.recordPollFailure("storage",
+			"Copilot usage was fetched but could not be saved. Check onWatch database access.")
+	} else {
+		a.recordPollSuccess()
 	}
 
 	// Process with tracker

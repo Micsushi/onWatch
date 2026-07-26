@@ -459,6 +459,24 @@ func TestDashboardHistoryRangeChangesSwapChartsWithoutAnimation(t *testing.T) {
 	}
 }
 
+func TestDashboardUsageChartKeepsSelectedPresetOnTimeAxis(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+
+	for _, marker := range []string{
+		"function usageChartTimeBounds(range)",
+		"const windowState = historyScopeWindow('chart');",
+		"chart.options.scales.x.min = bounds.min;",
+		"chart.options.scales.x.max = bounds.max;",
+		"const xBounds = usageChartTimeBounds(range);",
+		"xBounds,",
+	} {
+		if !strings.Contains(source, marker) {
+			t.Errorf("usage chart can auto-fit a preset to only the available samples: missing %q", marker)
+		}
+	}
+}
+
 func TestDashboardRefreshStatusDoesNotResizeTheStickyHeader(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
@@ -475,5 +493,66 @@ func TestDashboardRefreshStatusDoesNotResizeTheStickyHeader(t *testing.T) {
 		if !strings.Contains(styles, marker) {
 			t.Errorf("refresh status can still wrap and resize the header: missing %q", marker)
 		}
+	}
+}
+
+func TestDashboardPollHealthAlertsToastOnceAndRefreshQuickly(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	handlerSource := dashboardHandlerSource(t)
+
+	for _, marker := range []string{
+		"const POLL_HEALTH_SEEN_ALERTS_KEY = 'onwatch-seen-poll-health-alerts-v1';",
+		"const POLL_HEALTH_SEEN_ALERT_LIMIT = 100;",
+		"const POLL_HEALTH_TOAST_QUEUE_LIMIT = 10;",
+		"const POLL_HEALTH_TOAST_DURATION_MS = 6500;",
+		"const DEFERRED_DASHBOARD_TOAST_QUEUE_LIMIT = 10;",
+		"let _seenPollHealthAlertIDs = null;",
+		"const _queuedPollHealthAlertIDs = new Set();",
+		"const _pollHealthToastQueue = [];",
+		"const _deferredDashboardToastQueue = [];",
+		"function deferDashboardToast(message, type, timeoutMs)",
+		"function drainDeferredDashboardToastQueue()",
+		"function rememberDisplayedPollHealthAlertID(alertID)",
+		"writeJSONStorage(localStorage, POLL_HEALTH_SEEN_ALERTS_KEY, [...seenIDs]);",
+		"function drainPollHealthToastQueue()",
+		"rememberDisplayedPollHealthAlertID(alertID);",
+		"window.setTimeout(() =>",
+		"[...alerts].reverse().forEach(alert =>",
+		"['poll_failure', 'poll_recovered'].includes(alert.type)",
+		"seenIDs.has(alertID) || _queuedPollHealthAlertIDs.has(alertID)",
+		"outstandingToasts >= POLL_HEALTH_TOAST_QUEUE_LIMIT",
+		"_pollHealthToastQueue.push(alert);",
+		"alert.type === 'poll_recovered' ? 'success'",
+		"alert.severity === 'error' ? 'error' : 'warning'",
+		"renderDashboardToast(message, toastType, POLL_HEALTH_TOAST_DURATION_MS);",
+		"if (deferDashboardToast(message, type, timeoutMs)) return;",
+		"showNewPollHealthAlertToasts(alerts);",
+		"setInterval(updateNotificationCenter, 10000);",
+	} {
+		if !strings.Contains(source, marker) {
+			t.Errorf("poll-health toast behavior missing %q", marker)
+		}
+	}
+
+	if strings.Contains(source, "setInterval(updateNotificationCenter, 60000);") {
+		t.Error("notification center still waits sixty seconds between poll-health checks")
+	}
+
+	for _, marker := range []string{
+		"_notificationAlerts = alerts;",
+		"list.innerHTML = alerts.map(renderNotificationItem).join('');",
+		"await dismissAlert(id);",
+	} {
+		if !strings.Contains(source, marker) {
+			t.Errorf("notification-center behavior changed while adding poll-health toasts: missing %q", marker)
+		}
+	}
+
+	if !strings.Contains(handlerSource, `"type":      alert.AlertType,`) {
+		t.Fatal("dashboard test no longer matches the /api/alerts response field for alert type")
+	}
+	if strings.Contains(source, "alert.alert_type") {
+		t.Fatal("dashboard reads the store field name instead of the /api/alerts type field")
 	}
 }

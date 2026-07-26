@@ -21,7 +21,7 @@ type Agent struct {
 	interval     time.Duration
 	logger       *slog.Logger
 	sm           *SessionManager
-	notifier     *notify.NotificationEngine
+	notifier     agentNotifier
 	pollingCheck func() bool
 	metrics      *metrics.Metrics
 }
@@ -35,6 +35,24 @@ func (a *Agent) SetPollingCheck(fn func() bool) {
 // SetNotifier sets the notification engine for sending alerts.
 func (a *Agent) SetNotifier(n *notify.NotificationEngine) {
 	a.notifier = n
+}
+
+func (a *Agent) recordPollFailure(category, message string) {
+	if a.notifier != nil {
+		a.notifier.RecordPollFailure("synthetic", "default", category, message)
+	}
+}
+
+func (a *Agent) recordPollSuccess() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSuccess("synthetic", "default")
+	}
+}
+
+func (a *Agent) recordPollSkipped() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSkipped("synthetic", "default")
+	}
 }
 
 // SetMetrics wires the Prometheus metrics recorder for cycle counters.
@@ -63,9 +81,15 @@ func New(client *api.Client, store *store.Store, tracker *tracker.Tracker, inter
 // Sessions are managed by the SessionManager based on usage changes.
 func (a *Agent) Run(ctx context.Context) error {
 	a.logger.Info("Agent started", "interval", a.interval)
+	if a.notifier != nil {
+		a.notifier.RegisterPoller("synthetic", "default", a.interval)
+	}
 
 	// Ensure any active session is closed on exit
 	defer func() {
+		if a.notifier != nil {
+			a.notifier.UnregisterPoller("synthetic", "default")
+		}
 		if a.sm != nil {
 			a.sm.Close()
 		}
@@ -92,7 +116,12 @@ func (a *Agent) Run(ctx context.Context) error {
 
 // poll performs a single poll cycle: fetch quotas, store snapshot, update tracker.
 func (a *Agent) poll(ctx context.Context) {
+	if ctx.Err() != nil {
+		a.recordPollSkipped()
+		return
+	}
 	if a.pollingCheck != nil && !a.pollingCheck() {
+		a.recordPollSkipped()
 		return // polling disabled for this provider
 	}
 
@@ -101,10 +130,13 @@ func (a *Agent) poll(ctx context.Context) {
 	if err != nil {
 		if ctx.Err() != nil {
 			// Context cancelled during request - this is expected during shutdown
+			a.recordPollSkipped()
 			return
 		}
 		a.logger.Error("Failed to fetch quotas", "error", err)
 		a.metrics.RecordCycleFailed("synthetic", "", "fetch_failed")
+		a.recordPollFailure("provider_request",
+			"Quota usage could not be fetched. Check connectivity and provider availability.")
 		return
 	}
 
@@ -120,9 +152,12 @@ func (a *Agent) poll(ctx context.Context) {
 	if _, err := a.store.InsertSnapshot(snapshot); err != nil {
 		a.logger.Error("Failed to insert snapshot", "error", err)
 		a.metrics.RecordCycleFailed("synthetic", "", "store_failed")
+		a.recordPollFailure("storage",
+			"Quota usage was fetched but could not be saved. Check onWatch database access.")
 		return
 	}
 	a.metrics.RecordCycleCompleted("synthetic", "")
+	a.recordPollSuccess()
 
 	// Process with tracker (log error but don't stop)
 	if err := a.tracker.Process(snapshot); err != nil {

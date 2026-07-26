@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -9,10 +10,91 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/config"
 	"github.com/onllm-dev/onwatch/v2/internal/web"
 )
+
+type testPollHealthMonitor struct {
+	started chan context.Context
+	stopped chan struct{}
+}
+
+func (m *testPollHealthMonitor) RunPollHealthMonitor(ctx context.Context) {
+	m.started <- ctx
+	<-ctx.Done()
+	close(m.stopped)
+}
+
+func TestPollHealthMonitorUsesApplicationContextAndJoinsBeforeShutdown(t *testing.T) {
+	type contextKey struct{}
+	const marker = "application-context"
+
+	baseCtx := context.WithValue(context.Background(), contextKey{}, marker)
+	ctx, cancel := context.WithCancel(baseCtx)
+	monitor := &testPollHealthMonitor{
+		started: make(chan context.Context, 1),
+		stopped: make(chan struct{}),
+	}
+
+	done := startPollHealthMonitor(ctx, monitor)
+
+	select {
+	case monitorCtx := <-monitor.started:
+		if got := monitorCtx.Value(contextKey{}); got != marker {
+			t.Fatalf("monitor context marker = %v, want %q", got, marker)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("poll-health monitor did not start")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("poll-health monitor did not join after application cancellation")
+	}
+	select {
+	case <-monitor.stopped:
+	default:
+		t.Fatal("monitor completion was reported before RunPollHealthMonitor returned")
+	}
+}
+
+func TestPollHealthMonitorWiringStartsOnceBeforeAgentsAndJoinsBeforeStoreClose(t *testing.T) {
+	sourceBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(sourceBytes)
+	startCall := "pollHealthMonitorDone := startPollHealthMonitor(ctx, notifier)"
+	if got := strings.Count(source, startCall); got != 1 {
+		t.Fatalf("poll-health monitor start count = %d, want 1", got)
+	}
+
+	startAt := strings.Index(source, startCall)
+	agentStartAt := strings.Index(source, "agentMgr.Start(providerKey)")
+	cancelAt := strings.LastIndex(source, "\n\tcancel()")
+	joinAt := strings.Index(source, "<-pollHealthMonitorDone")
+	storeCloseAt := strings.LastIndex(source, "if err := db.Close()")
+	if startAt < 0 || agentStartAt < 0 || cancelAt < 0 || joinAt < 0 || storeCloseAt < 0 {
+		t.Fatalf(
+			"missing lifecycle marker: start=%d agent=%d cancel=%d join=%d close=%d",
+			startAt,
+			agentStartAt,
+			cancelAt,
+			joinAt,
+			storeCloseAt,
+		)
+	}
+	if startAt >= agentStartAt {
+		t.Fatalf("poll-health monitor starts after provider agents: start=%d agent=%d", startAt, agentStartAt)
+	}
+	if !(cancelAt < joinAt && joinAt < storeCloseAt) {
+		t.Fatalf("shutdown order must be cancel, monitor join, store close: cancel=%d join=%d close=%d", cancelAt, joinAt, storeCloseAt)
+	}
+}
 
 func TestConfigLoad_WithOnlyCodexAuthFile_AllowsEmptyProviderConfig(t *testing.T) {
 	homeDir := t.TempDir()

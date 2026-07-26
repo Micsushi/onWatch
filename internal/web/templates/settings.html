@@ -213,11 +213,24 @@
                         <span>5-hour reset notifications</span>
                     </label>
                     <label class="settings-checkbox-row">
-                        <input type="checkbox" id="notify-auth-error">
-                        <span>Auth error alerts (token refresh failures)</span>
+                        <input type="checkbox" id="notify-poll-failure" checked>
+                        <span>Poller failure alerts (after sustained failures or missed polls)</span>
+                    </label>
+                    <label class="settings-checkbox-row">
+                        <input type="checkbox" id="notify-poll-recovery" checked>
+                        <span>Poller recovery alerts</span>
                     </label>
                 </div>
                 <div class="settings-fields">
+                    <div class="settings-field settings-field-half">
+                        <label for="poll-failure-threshold">Failures before external alert</label>
+                        <input type="number" id="poll-failure-threshold" class="settings-input" min="2" step="1" value="3">
+                        <span class="settings-field-hint">The first failure still appears in onWatch.</span>
+                    </div>
+                    <div class="settings-field settings-field-half">
+                        <label for="poll-failure-repeat-hours">Repeat active failure every (hours)</label>
+                        <input type="number" id="poll-failure-repeat-hours" class="settings-input" min="1" step="1" value="6">
+                    </div>
                     <div class="settings-field settings-field-half">
                         <label for="notify-overuse-repeat-percent">Red alert repeat step (%)</label>
                         <input type="number" id="notify-overuse-repeat-percent" class="settings-input" min="1" max="100" step="0.5" value="10">

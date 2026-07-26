@@ -4,7 +4,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os/exec"
 	"runtime"
@@ -69,7 +68,7 @@ type AnthropicAgent struct {
 	tokenRefresh TokenRefreshFunc
 	credsRefresh CredentialsRefreshFunc
 	lastToken    string
-	notifier     *notify.NotificationEngine
+	notifier     agentNotifier
 	pollingCheck func() bool
 
 	// Auth failure rate limiting
@@ -109,17 +108,23 @@ func (a *AnthropicAgent) SetNotifier(n *notify.NotificationEngine) {
 	a.notifier = n
 }
 
-// sendAuthErrorNotification sends an auth error notification via the notifier.
-func (a *AnthropicAgent) sendAuthErrorNotification(title, message string, isRecoverable bool) {
+func (a *AnthropicAgent) recordPollFailure(category, message string) {
 	if a.notifier == nil {
 		return
 	}
-	a.notifier.SendAuthErrorNotification(notify.AuthErrorAlert{
-		Provider:    "anthropic",
-		Title:       title,
-		Message:     message,
-		IsRecovable: isRecoverable,
-	})
+	a.notifier.RecordPollFailure("anthropic", "default", category, message)
+}
+
+func (a *AnthropicAgent) recordPollSuccess() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSuccess("anthropic", "default")
+	}
+}
+
+func (a *AnthropicAgent) recordPollSkipped() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSkipped("anthropic", "default")
+	}
 }
 
 // NewAnthropicAgent creates a new AnthropicAgent with the given dependencies.
@@ -188,9 +193,15 @@ func (a *AnthropicAgent) SetCCDetectionEnabled(enabled bool) {
 // then continues at the configured interval until the context is cancelled.
 func (a *AnthropicAgent) Run(ctx context.Context) error {
 	a.logger.Info("Anthropic agent started", "interval", a.interval)
+	if a.notifier != nil {
+		a.notifier.RegisterPoller("anthropic", "default", a.interval)
+	}
 
 	// Ensure any active session is closed on exit
 	defer func() {
+		if a.notifier != nil {
+			a.notifier.UnregisterPoller("anthropic", "default")
+		}
 		if a.sm != nil {
 			a.sm.Close()
 		}
@@ -325,7 +336,44 @@ func (a *AnthropicAgent) proactiveRefresh(ctx context.Context, creds *api.Anthro
 
 // poll performs a single Anthropic poll cycle: fetch quotas, store snapshot, process with tracker.
 func (a *AnthropicAgent) poll(ctx context.Context) {
+	outcomeReported := false
+	usableSnapshot := false
+	reportSuccess := func() {
+		if outcomeReported {
+			return
+		}
+		a.recordPollSuccess()
+		outcomeReported = true
+	}
+	reportFailure := func(category, message string) {
+		if outcomeReported {
+			return
+		}
+		if usableSnapshot {
+			reportSuccess()
+			return
+		}
+		a.recordPollFailure(category, message)
+		outcomeReported = true
+	}
+	reportSkipped := func() {
+		if outcomeReported {
+			return
+		}
+		if usableSnapshot {
+			reportSuccess()
+			return
+		}
+		a.recordPollSkipped()
+		outcomeReported = true
+	}
+
+	if ctx.Err() != nil {
+		reportSkipped()
+		return
+	}
 	if a.pollingCheck != nil && !a.pollingCheck() {
+		reportSkipped()
 		return // polling disabled for this provider
 	}
 
@@ -343,8 +391,11 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 			snapshot := statuslineToSnapshot(rl, now)
 			if _, err := a.store.InsertAnthropicSnapshot(snapshot); err != nil {
 				a.logger.Error("Failed to insert statusline snapshot", "error", err)
+				reportFailure("storage",
+					"Claude usage was read but could not be saved. Check onWatch database access.")
 				return // don't fall through to API polling on DB error
 			}
+			usableSnapshot = true
 			if a.tracker != nil {
 				if err := a.tracker.Process(snapshot); err != nil {
 					a.logger.Error("Anthropic tracker processing failed", "error", err)
@@ -366,10 +417,13 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 					"interval", a.apiPollCycleInterval)
 				// Fall through to the API polling path below
 			} else {
+				reportSuccess()
 				return // Statusline only - skip API polling this cycle
 			}
 		}
 	}
+
+	wasAuthPaused := a.authPaused
 
 	// Proactive OAuth refresh
 	if a.credsRefresh != nil {
@@ -411,17 +465,24 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 	// If auth is paused, skip polling until credentials change
 	if a.authPaused {
 		// Only log periodically to avoid spamming logs
+		if !wasAuthPaused {
+			reportFailure("authentication",
+				"Claude authentication is paused. Re-authenticate with 'claude auth' to resume polling.")
+		}
 		return
 	}
 
 	// Statusline-only mode has no token; never hit the API without one.
 	if !a.client.HasToken() {
+		reportFailure("missing_credentials",
+			"No Claude credentials are available. Re-authenticate with 'claude auth' to resume polling.")
 		return
 	}
 
 	resp, err := a.client.FetchQuotas(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
+			reportSkipped()
 			return
 		}
 		// Rate limited (429) - attempt token refresh to get fresh rate limit window.
@@ -446,6 +507,8 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 					a.logger.Warn("OAuth refresh in backoff, skipping token refresh attempt",
 						"resume_at", a.rateLimitResumeAt,
 						"fail_count", a.rateLimitFailCount)
+					reportFailure("rate_limit",
+						"Claude quota polling is rate limited and waiting for the configured retry window.")
 					return
 				}
 				// Backoff expired - decay failCount so retries don't escalate forever.
@@ -467,6 +530,8 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 			}
 			if checkFn() {
 				a.logger.Debug("Claude Code running, skipping 429 bypass refresh")
+				reportFailure("rate_limit",
+					"Claude quota polling is rate limited. onWatch will retry without competing with Claude Code.")
 				return
 			}
 			if a.credsRefresh != nil {
@@ -511,11 +576,6 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 							a.logger.Error("OAuth refresh token invalid (invalid_grant) - polling PAUSED",
 								"error", refreshErr,
 								"action", "Re-authenticate with 'claude auth' to resume polling")
-							a.sendAuthErrorNotification(
-								"OAuth refresh token expired",
-								"Refresh token is invalid or revoked. Re-authenticate with 'claude auth' to resume polling.",
-								false,
-							)
 						} else {
 							// Transient OAuth error - apply mild backoff
 							a.rateLimitFailCount++
@@ -532,6 +592,13 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 									"error", refreshErr,
 									"fail_count", a.rateLimitFailCount)
 							}
+						}
+						if errors.Is(refreshErr, api.ErrOAuthInvalidGrant) {
+							reportFailure("authentication",
+								"Claude refresh credentials are invalid. Re-authenticate with 'claude auth' to resume polling.")
+						} else {
+							reportFailure("rate_limit",
+								"Claude quota polling is rate limited and token refresh did not restore access.")
 						}
 						return
 					}
@@ -556,6 +623,7 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 					resp, err = a.client.FetchQuotas(ctx)
 					if err != nil {
 						if ctx.Err() != nil {
+							reportSkipped()
 							return
 						}
 						if errors.Is(err, api.ErrAnthropicRateLimited) {
@@ -563,16 +631,30 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 						} else {
 							a.logger.Error("Retry after token refresh failed", "error", err)
 						}
+						if errors.Is(err, api.ErrAnthropicRateLimited) {
+							reportFailure("rate_limit",
+								"Claude quota polling remains rate limited after token refresh.")
+						} else if isAuthError(err) {
+							reportFailure("authentication",
+								"Claude authentication failed after token refresh. Re-authenticate with 'claude auth' to resume polling.")
+						} else {
+							reportFailure("provider_request",
+								"Claude quotas could not be fetched. Check connectivity and provider availability.")
+						}
 						return
 					}
 					// Success! Fall through to process the response
 					a.logger.Info("Rate limit bypassed successfully with refreshed token")
 				} else {
 					a.logger.Warn("Rate limit bypass unavailable - no refresh token")
+					reportFailure("rate_limit",
+						"Claude quota polling is rate limited and no refresh credential is available.")
 					return
 				}
 			} else {
 				a.logger.Warn("Rate limit bypass unavailable - no credentials refresh configured")
+				reportFailure("rate_limit",
+					"Claude quota polling is rate limited and no refresh credential is configured.")
 				return
 			}
 		}
@@ -593,6 +675,7 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 				resp, err = a.client.FetchQuotas(ctx)
 				if err != nil {
 					if ctx.Err() != nil {
+						reportSkipped()
 						return
 					}
 					// Retry also failed - count this as an auth failure
@@ -609,14 +692,13 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 							a.logger.Error("Anthropic polling PAUSED due to repeated auth failures",
 								"failure_count", a.authFailCount,
 								"action", "Re-authenticate with 'claude auth' to resume polling")
-							a.sendAuthErrorNotification(
-								"Anthropic polling paused",
-								fmt.Sprintf("Repeated auth failures (%d). Re-authenticate with 'claude auth' to resume.", a.authFailCount),
-								false,
-							)
 						}
+						reportFailure("authentication",
+							"Claude authentication failed. Re-authenticate with 'claude auth' if the problem continues.")
 					} else {
 						a.logger.Error("Anthropic retry failed with non-auth error", "error", err)
+						reportFailure("provider_request",
+							"Claude quotas could not be fetched. Check connectivity and provider availability.")
 					}
 					return
 				}
@@ -624,10 +706,19 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 				a.authFailCount = 0
 			} else {
 				a.logger.Error("No Anthropic token available after re-read")
+				reportFailure("missing_credentials",
+					"No Claude credentials are available. Re-authenticate with 'claude auth' to resume polling.")
 				return
 			}
 		} else {
 			a.logger.Error("Failed to fetch Anthropic quotas", "error", err)
+			if isAuthError(err) {
+				reportFailure("authentication",
+					"Claude authentication failed. Re-authenticate with 'claude auth' to resume polling.")
+			} else {
+				reportFailure("provider_request",
+					"Claude quotas could not be fetched. Check connectivity and provider availability.")
+			}
 			return
 		}
 	} else {
@@ -645,8 +736,12 @@ processResponse:
 
 	if _, err := a.store.InsertAnthropicSnapshot(snapshot); err != nil {
 		a.logger.Error("Failed to insert Anthropic snapshot", "error", err)
+		reportFailure("storage",
+			"Claude usage was fetched but could not be saved. Check onWatch database access.")
 		return
 	}
+	usableSnapshot = true
+	reportSuccess()
 
 	// Process with tracker (log error but don't stop)
 	if a.tracker != nil {

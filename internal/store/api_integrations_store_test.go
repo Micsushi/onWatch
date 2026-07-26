@@ -452,6 +452,12 @@ func TestStore_CompactAPIIntegrationUsageEventsHourly(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("insert transfer provenance: %v", err)
 	}
+	if _, err := s.db.Exec(`
+		INSERT INTO data_transfer_records (table_name, local_record_id, origin_id, origin_record_id)
+		VALUES ('api_integration_usage_events', 'unrelated-orphan', 'other-import', 'other-record')
+	`); err != nil {
+		t.Fatalf("insert unrelated transfer provenance: %v", err)
+	}
 
 	result, err := s.CompactAPIIntegrationUsageEvents(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -492,8 +498,8 @@ func TestStore_CompactAPIIntegrationUsageEventsHourly(t *testing.T) {
 	`).Scan(&provenanceCount); err != nil {
 		t.Fatalf("count API integration provenance: %v", err)
 	}
-	if provenanceCount != 1 {
-		t.Fatalf("provenanceCount=%d want 1", provenanceCount)
+	if provenanceCount != 2 {
+		t.Fatalf("provenanceCount=%d want 2 (recent event plus unrelated orphan)", provenanceCount)
 	}
 
 	replayed, err := apiintegrations.ParseUsageEventLine([]byte(oldLineA), sourcePath)

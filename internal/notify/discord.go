@@ -34,6 +34,12 @@ func NewDiscordSender(webhookURL string) (*DiscordSender, error) {
 
 // Send posts a compact notification message to Discord.
 func (d *DiscordSender) Send(subject, body string) error {
+	return d.SendContext(context.Background(), subject, body)
+}
+
+// SendContext posts a compact notification message and stops promptly when
+// the caller's lifecycle is canceled.
+func (d *DiscordSender) SendContext(ctx context.Context, subject, body string) error {
 	if d == nil {
 		return fmt.Errorf("discord sender is nil")
 	}
@@ -55,7 +61,7 @@ func (d *DiscordSender) Send(subject, body string) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.webhookURL, bytes.NewReader(data))
 	if err != nil {

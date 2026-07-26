@@ -31,6 +31,18 @@ type CodexCredentialsRefreshFunc func() *api.CodexCredentials
 // profile it writes to the global CODEX_HOME/auth.json.
 type CodexTokenSaveFunc func(accessToken, refreshToken, idToken string, expiresIn int) error
 
+// agentNotifier is the notification surface used by quota agents. Keeping this
+// small interface lets agents report one final poll outcome after their own
+// retry logic without coupling tests to configured delivery channels.
+type agentNotifier interface {
+	Check(notify.QuotaStatus)
+	RegisterPoller(provider, accountID string, interval time.Duration)
+	UnregisterPoller(provider, accountID string)
+	RecordPollFailure(provider, accountID, category, message string)
+	RecordPollSuccess(provider, accountID string)
+	RecordPollSkipped(provider, accountID string)
+}
+
 // isCodexAuthError returns true if the error is an authentication/authorization error.
 func isCodexAuthError(err error) bool {
 	return errors.Is(err, api.ErrCodexUnauthorized) || errors.Is(err, api.ErrCodexForbidden)
@@ -44,7 +56,7 @@ type CodexAgent struct {
 	interval     time.Duration
 	logger       *slog.Logger
 	sm           *SessionManager
-	notifier     *notify.NotificationEngine
+	notifier     agentNotifier
 	pollingCheck func() bool
 	tokenRefresh CodexTokenRefreshFunc
 	credsRefresh CodexCredentialsRefreshFunc
@@ -115,25 +127,40 @@ func (a *CodexAgent) SetTokenSave(fn CodexTokenSaveFunc) {
 	a.tokenSave = fn
 }
 
-// sendAuthErrorNotification sends an auth error notification via the notifier.
-func (a *CodexAgent) sendAuthErrorNotification(title, message string, isRecoverable bool) {
+func (a *CodexAgent) pollHealthAccountID() string {
+	return fmt.Sprintf("%d", a.accountID)
+}
+
+func (a *CodexAgent) recordPollFailure(category, message string) {
 	if a.notifier == nil {
 		return
 	}
-	a.notifier.SendAuthErrorNotification(notify.AuthErrorAlert{
-		Provider:    "codex",
-		Title:       title,
-		Message:     message,
-		AccountID:   fmt.Sprintf("%d", a.accountID),
-		IsRecovable: isRecoverable,
-	})
+	a.notifier.RecordPollFailure("codex", a.pollHealthAccountID(), category, message)
+}
+
+func (a *CodexAgent) recordPollSuccess() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSuccess("codex", a.pollHealthAccountID())
+	}
+}
+
+func (a *CodexAgent) recordPollSkipped() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSkipped("codex", a.pollHealthAccountID())
+	}
 }
 
 // Run starts the agent polling loop.
 func (a *CodexAgent) Run(ctx context.Context) error {
 	a.logger.Info("Codex agent started", "interval", a.interval)
+	if a.notifier != nil {
+		a.notifier.RegisterPoller("codex", a.pollHealthAccountID(), a.interval)
+	}
 
 	defer func() {
+		if a.notifier != nil {
+			a.notifier.UnregisterPoller("codex", a.pollHealthAccountID())
+		}
 		if a.sm != nil {
 			a.sm.Close()
 		}
@@ -156,9 +183,17 @@ func (a *CodexAgent) Run(ctx context.Context) error {
 }
 
 func (a *CodexAgent) poll(ctx context.Context) {
-	if a.pollingCheck != nil && !a.pollingCheck() {
+	if ctx.Err() != nil {
+		a.recordPollSkipped()
 		return
 	}
+	if a.pollingCheck != nil && !a.pollingCheck() {
+		a.recordPollSkipped()
+		return
+	}
+
+	wasAuthPaused := a.authPaused
+	authPauseMessage := ""
 
 	// Proactive OAuth refresh: check if token expires soon and refresh via OAuth API
 	if a.credsRefresh != nil {
@@ -176,12 +211,7 @@ func (a *CodexAgent) poll(ctx context.Context) {
 							"error", err)
 						a.authPaused = true
 						a.lastFailedToken = creds.AccessToken
-						// Send auth error notification
-						a.sendAuthErrorNotification(
-							"Token Refresh Failed",
-							"Codex refresh token has been reused. Please re-authenticate via 'codex auth' to resume quota tracking.",
-							false, // not recoverable
-						)
+						authPauseMessage = "Codex refresh credentials are invalid. Re-authenticate with 'codex auth' to resume polling."
 					} else {
 						a.proactiveRefreshFailures++
 						a.logger.Error("Proactive Codex OAuth refresh failed",
@@ -193,11 +223,7 @@ func (a *CodexAgent) poll(ctx context.Context) {
 							a.logger.Error("Codex proactive refresh PAUSED - too many consecutive failures",
 								"failure_count", a.proactiveRefreshFailures,
 								"action", "Re-authenticate via 'codex auth' to resume polling")
-							a.sendAuthErrorNotification(
-								"Token Refresh Failed",
-								fmt.Sprintf("Codex proactive OAuth refresh failed %d times. Please re-authenticate via 'codex auth' to resume.", a.proactiveRefreshFailures),
-								false,
-							)
+							authPauseMessage = "Codex token refresh failed repeatedly. Re-authenticate with 'codex auth' to resume polling."
 						}
 					}
 				} else {
@@ -250,12 +276,19 @@ func (a *CodexAgent) poll(ctx context.Context) {
 
 	// If auth is paused, skip polling until credentials change.
 	if a.authPaused {
+		if !wasAuthPaused || authPauseMessage != "" {
+			if authPauseMessage == "" {
+				authPauseMessage = "Codex authentication is paused. Re-authenticate with 'codex auth' to resume polling."
+			}
+			a.recordPollFailure("authentication", authPauseMessage)
+		}
 		return
 	}
 
 	resp, err := a.client.FetchUsage(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
+			a.recordPollSkipped()
 			return
 		}
 
@@ -270,6 +303,7 @@ func (a *CodexAgent) poll(ctx context.Context) {
 				resp, err = a.client.FetchUsage(ctx)
 				if err != nil {
 					if ctx.Err() != nil {
+						a.recordPollSkipped()
 						return
 					}
 					if isCodexAuthError(err) {
@@ -285,15 +319,13 @@ func (a *CodexAgent) poll(ctx context.Context) {
 							a.logger.Error("Codex polling PAUSED due to repeated auth failures",
 								"failure_count", a.authFailCount,
 								"action", "Re-authenticate Codex to resume polling")
-							// Send auth error notification
-							a.sendAuthErrorNotification(
-								"Authentication Failed",
-								"Codex polling has been paused due to repeated authentication failures. Please re-authenticate via 'codex auth' to resume.",
-								false, // not recoverable without re-auth
-							)
 						}
+						a.recordPollFailure("authentication",
+							"Codex authentication failed. Re-authenticate with 'codex auth' if the problem continues.")
 					} else {
 						a.logger.Error("Codex retry failed with non-auth error", "error", err)
+						a.recordPollFailure("provider_request",
+							"Codex usage could not be fetched. Check connectivity and provider availability.")
 					}
 					return
 				}
@@ -301,10 +333,19 @@ func (a *CodexAgent) poll(ctx context.Context) {
 				a.authFailCount = 0
 			} else {
 				a.logger.Error("No Codex token available after re-read")
+				a.recordPollFailure("missing_credentials",
+					"No Codex credentials are available. Re-authenticate with 'codex auth' to resume polling.")
 				return
 			}
 		} else {
 			a.logger.Error("Failed to fetch Codex usage", "error", err)
+			if isCodexAuthError(err) {
+				a.recordPollFailure("authentication",
+					"Codex authentication failed. Re-authenticate with 'codex auth' to resume polling.")
+			} else {
+				a.recordPollFailure("provider_request",
+					"Codex usage could not be fetched. Check connectivity and provider availability.")
+			}
 			return
 		}
 	} else {
@@ -318,8 +359,11 @@ func (a *CodexAgent) poll(ctx context.Context) {
 
 	if _, err := a.store.InsertCodexSnapshot(snapshot); err != nil {
 		a.logger.Error("Failed to insert Codex snapshot", "error", err, "account_id", a.accountID)
+		a.recordPollFailure("storage",
+			"Codex usage was fetched but could not be saved. Check onWatch database access.")
 		return
 	}
+	a.recordPollSuccess()
 
 	if a.tracker != nil {
 		if err := a.tracker.Process(snapshot); err != nil {

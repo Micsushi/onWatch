@@ -20,7 +20,7 @@ type MiniMaxAgent struct {
 	interval     time.Duration
 	logger       *slog.Logger
 	sm           *SessionManager
-	notifier     *notify.NotificationEngine
+	notifier     agentNotifier
 	pollingCheck func() bool
 	accountID    int64
 }
@@ -57,10 +57,38 @@ func (a *MiniMaxAgent) SetNotifier(n *notify.NotificationEngine) {
 	a.notifier = n
 }
 
+func (a *MiniMaxAgent) pollHealthAccountID() string {
+	return strconv.FormatInt(a.accountID, 10)
+}
+
+func (a *MiniMaxAgent) recordPollFailure(category, message string) {
+	if a.notifier != nil {
+		a.notifier.RecordPollFailure("minimax", a.pollHealthAccountID(), category, message)
+	}
+}
+
+func (a *MiniMaxAgent) recordPollSuccess() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSuccess("minimax", a.pollHealthAccountID())
+	}
+}
+
+func (a *MiniMaxAgent) recordPollSkipped() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSkipped("minimax", a.pollHealthAccountID())
+	}
+}
+
 // Run starts the polling loop until context cancellation.
 func (a *MiniMaxAgent) Run(ctx context.Context) error {
 	a.logger.Info("MiniMax agent started", "interval", a.interval)
+	if a.notifier != nil {
+		a.notifier.RegisterPoller("minimax", a.pollHealthAccountID(), a.interval)
+	}
 	defer func() {
+		if a.notifier != nil {
+			a.notifier.UnregisterPoller("minimax", a.pollHealthAccountID())
+		}
 		if a.sm != nil {
 			a.sm.Close()
 		}
@@ -82,16 +110,24 @@ func (a *MiniMaxAgent) Run(ctx context.Context) error {
 }
 
 func (a *MiniMaxAgent) poll(ctx context.Context) {
+	if ctx.Err() != nil {
+		a.recordPollSkipped()
+		return
+	}
 	if a.pollingCheck != nil && !a.pollingCheck() {
+		a.recordPollSkipped()
 		return
 	}
 
 	resp, err := a.client.FetchRemains(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
+			a.recordPollSkipped()
 			return
 		}
 		a.logger.Error("Failed to fetch MiniMax remains", "error", err)
+		a.recordPollFailure("provider_request",
+			"MiniMax quotas could not be fetched. Check connectivity, credentials, and provider availability.")
 		return
 	}
 
@@ -100,6 +136,10 @@ func (a *MiniMaxAgent) poll(ctx context.Context) {
 
 	if _, err := a.store.InsertMiniMaxSnapshot(snapshot, a.accountID); err != nil {
 		a.logger.Error("Failed to insert MiniMax snapshot", "error", err)
+		a.recordPollFailure("storage",
+			"MiniMax usage was fetched but could not be saved. Check onWatch database access.")
+	} else {
+		a.recordPollSuccess()
 	}
 
 	if err := a.tracker.Process(snapshot, a.accountID); err != nil {

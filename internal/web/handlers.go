@@ -6405,7 +6405,11 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			UnderuseTimes        []string                     `json:"underuse_times"`
 			NotifyReset          bool                         `json:"notify_reset"`
 			NotifyReset5Hour     bool                         `json:"notify_reset_five_hour"`
-			NotifyAuthError      bool                         `json:"notify_auth_error"`
+			NotifyAuthError      *bool                        `json:"notify_auth_error"`
+			NotifyPollFailure    *bool                        `json:"notify_poll_failure"`
+			PollFailureThreshold *int                         `json:"poll_failure_threshold"`
+			PollFailureRepeatHrs *int                         `json:"poll_failure_repeat_hours"`
+			NotifyPollRecovery   *bool                        `json:"notify_poll_recovery"`
 			CooldownMinutes      int                          `json:"cooldown_minutes"`
 			Channels             *notify.NotificationChannels `json:"channels,omitempty"`
 			Overrides            []struct {
@@ -6438,6 +6442,33 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if notif.CooldownMinutes < 1 {
 			notif.CooldownMinutes = 1
+		}
+		notifyPollFailure := true
+		if notif.NotifyPollFailure != nil {
+			notifyPollFailure = *notif.NotifyPollFailure
+		} else if notif.NotifyAuthError != nil {
+			notifyPollFailure = *notif.NotifyAuthError
+		}
+		notif.NotifyPollFailure = &notifyPollFailure
+		// Keep the legacy value in sync for older onWatch clients and binaries.
+		notif.NotifyAuthError = &notifyPollFailure
+		if notif.PollFailureThreshold == nil {
+			value := 3
+			notif.PollFailureThreshold = &value
+		} else if *notif.PollFailureThreshold < 2 {
+			respondError(w, http.StatusBadRequest, "poll failure threshold must be at least 2")
+			return
+		}
+		if notif.PollFailureRepeatHrs == nil {
+			value := 6
+			notif.PollFailureRepeatHrs = &value
+		} else if *notif.PollFailureRepeatHrs < 1 {
+			respondError(w, http.StatusBadRequest, "poll failure repeat hours must be at least 1")
+			return
+		}
+		if notif.NotifyPollRecovery == nil {
+			enabled := true
+			notif.NotifyPollRecovery = &enabled
 		}
 		if notif.NotifyUnderuse == nil {
 			enabled := true

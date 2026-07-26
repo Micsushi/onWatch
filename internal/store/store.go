@@ -291,6 +291,27 @@ func (s *Store) createTables() error {
 		CREATE INDEX IF NOT EXISTS idx_system_alerts_dismissed ON system_alerts(dismissed_at);
 		CREATE INDEX IF NOT EXISTS idx_system_alerts_created ON system_alerts(created_at);
 
+		CREATE TABLE IF NOT EXISTS poll_health_state (
+			provider TEXT NOT NULL,
+			account_id TEXT NOT NULL,
+			interval_seconds INTEGER NOT NULL DEFAULT 0,
+			state TEXT NOT NULL DEFAULT 'healthy',
+			consecutive_failures INTEGER NOT NULL DEFAULT 0,
+			first_failure_at TEXT,
+			last_failure_at TEXT,
+			last_success_at TEXT,
+			last_completed_poll_at TEXT,
+			last_error_category TEXT NOT NULL DEFAULT '',
+			last_error_message TEXT NOT NULL DEFAULT '',
+			first_external_alert_at TEXT,
+			last_external_attempt_at TEXT,
+			last_external_success_at TEXT,
+			external_failure_delivered INTEGER NOT NULL DEFAULT 0,
+			active_system_alert_id INTEGER,
+			PRIMARY KEY (provider, account_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_poll_health_state_state ON poll_health_state(state);
+
 		CREATE TABLE IF NOT EXISTS auth_tokens (
 			token      TEXT PRIMARY KEY,
 			expires_at TEXT NOT NULL
@@ -2368,6 +2389,200 @@ type SystemAlert struct {
 	Metadata    string     `json:"metadata,omitempty"`
 }
 
+// PollHealthState stores the persistent health and notification state for one poller.
+type PollHealthState struct {
+	Provider                 string
+	AccountID                string
+	IntervalSeconds          int64
+	State                    string
+	ConsecutiveFailures      int
+	FirstFailureAt           *time.Time
+	LastFailureAt            *time.Time
+	LastSuccessAt            *time.Time
+	LastCompletedPollAt      *time.Time
+	LastErrorCategory        string
+	LastErrorMessage         string
+	FirstExternalAlertAt     *time.Time
+	LastExternalAttemptAt    *time.Time
+	LastExternalSuccessAt    *time.Time
+	ExternalFailureDelivered bool
+	ActiveSystemAlertID      *int64
+}
+
+// GetPollHealthState returns one provider/account health row, or nil if none exists.
+func (s *Store) GetPollHealthState(provider, accountID string) (*PollHealthState, error) {
+	row := s.db.QueryRow(`
+		SELECT provider, account_id, interval_seconds, state, consecutive_failures,
+			first_failure_at, last_failure_at, last_success_at, last_completed_poll_at,
+			last_error_category, last_error_message, first_external_alert_at,
+			last_external_attempt_at, last_external_success_at,
+			external_failure_delivered, active_system_alert_id
+		FROM poll_health_state
+		WHERE provider = ? AND account_id = ?
+	`, provider, accountID)
+
+	state, err := scanPollHealthState(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store.GetPollHealthState: %w", err)
+	}
+	return state, nil
+}
+
+// UpsertPollHealthState creates or fully replaces one provider/account health row.
+func (s *Store) UpsertPollHealthState(state *PollHealthState) error {
+	_, err := s.db.Exec(`
+		INSERT INTO poll_health_state (
+			provider, account_id, interval_seconds, state, consecutive_failures,
+			first_failure_at, last_failure_at, last_success_at, last_completed_poll_at,
+			last_error_category, last_error_message, first_external_alert_at,
+			last_external_attempt_at, last_external_success_at,
+			external_failure_delivered, active_system_alert_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider, account_id) DO UPDATE SET
+			interval_seconds = excluded.interval_seconds,
+			state = excluded.state,
+			consecutive_failures = excluded.consecutive_failures,
+			first_failure_at = excluded.first_failure_at,
+			last_failure_at = excluded.last_failure_at,
+			last_success_at = excluded.last_success_at,
+			last_completed_poll_at = excluded.last_completed_poll_at,
+			last_error_category = excluded.last_error_category,
+			last_error_message = excluded.last_error_message,
+			first_external_alert_at = excluded.first_external_alert_at,
+			last_external_attempt_at = excluded.last_external_attempt_at,
+			last_external_success_at = excluded.last_external_success_at,
+			external_failure_delivered = excluded.external_failure_delivered,
+			active_system_alert_id = excluded.active_system_alert_id
+	`,
+		state.Provider,
+		state.AccountID,
+		state.IntervalSeconds,
+		state.State,
+		state.ConsecutiveFailures,
+		formatPollHealthTime(state.FirstFailureAt),
+		formatPollHealthTime(state.LastFailureAt),
+		formatPollHealthTime(state.LastSuccessAt),
+		formatPollHealthTime(state.LastCompletedPollAt),
+		state.LastErrorCategory,
+		state.LastErrorMessage,
+		formatPollHealthTime(state.FirstExternalAlertAt),
+		formatPollHealthTime(state.LastExternalAttemptAt),
+		formatPollHealthTime(state.LastExternalSuccessAt),
+		state.ExternalFailureDelivered,
+		state.ActiveSystemAlertID,
+	)
+	if err != nil {
+		return fmt.Errorf("store.UpsertPollHealthState: %w", err)
+	}
+	return nil
+}
+
+// ListUnhealthyPollHealthStates returns all failing or stalled pollers.
+func (s *Store) ListUnhealthyPollHealthStates() ([]PollHealthState, error) {
+	rows, err := s.db.Query(`
+		SELECT provider, account_id, interval_seconds, state, consecutive_failures,
+			first_failure_at, last_failure_at, last_success_at, last_completed_poll_at,
+			last_error_category, last_error_message, first_external_alert_at,
+			last_external_attempt_at, last_external_success_at,
+			external_failure_delivered, active_system_alert_id
+		FROM poll_health_state
+		WHERE state <> 'healthy'
+		ORDER BY provider, account_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("store.ListUnhealthyPollHealthStates: %w", err)
+	}
+	defer rows.Close()
+
+	var states []PollHealthState
+	for rows.Next() {
+		state, err := scanPollHealthState(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("store.ListUnhealthyPollHealthStates: scan: %w", err)
+		}
+		states = append(states, *state)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store.ListUnhealthyPollHealthStates: rows: %w", err)
+	}
+	return states, nil
+}
+
+func scanPollHealthState(scan func(dest ...any) error) (*PollHealthState, error) {
+	var state PollHealthState
+	var firstFailureAt, lastFailureAt, lastSuccessAt, lastCompletedPollAt sql.NullString
+	var firstExternalAlertAt, lastExternalAttemptAt, lastExternalSuccessAt sql.NullString
+	var activeSystemAlertID sql.NullInt64
+	if err := scan(
+		&state.Provider,
+		&state.AccountID,
+		&state.IntervalSeconds,
+		&state.State,
+		&state.ConsecutiveFailures,
+		&firstFailureAt,
+		&lastFailureAt,
+		&lastSuccessAt,
+		&lastCompletedPollAt,
+		&state.LastErrorCategory,
+		&state.LastErrorMessage,
+		&firstExternalAlertAt,
+		&lastExternalAttemptAt,
+		&lastExternalSuccessAt,
+		&state.ExternalFailureDelivered,
+		&activeSystemAlertID,
+	); err != nil {
+		return nil, err
+	}
+
+	var err error
+	if state.FirstFailureAt, err = parsePollHealthTime(firstFailureAt); err != nil {
+		return nil, fmt.Errorf("parse first_failure_at: %w", err)
+	}
+	if state.LastFailureAt, err = parsePollHealthTime(lastFailureAt); err != nil {
+		return nil, fmt.Errorf("parse last_failure_at: %w", err)
+	}
+	if state.LastSuccessAt, err = parsePollHealthTime(lastSuccessAt); err != nil {
+		return nil, fmt.Errorf("parse last_success_at: %w", err)
+	}
+	if state.LastCompletedPollAt, err = parsePollHealthTime(lastCompletedPollAt); err != nil {
+		return nil, fmt.Errorf("parse last_completed_poll_at: %w", err)
+	}
+	if state.FirstExternalAlertAt, err = parsePollHealthTime(firstExternalAlertAt); err != nil {
+		return nil, fmt.Errorf("parse first_external_alert_at: %w", err)
+	}
+	if state.LastExternalAttemptAt, err = parsePollHealthTime(lastExternalAttemptAt); err != nil {
+		return nil, fmt.Errorf("parse last_external_attempt_at: %w", err)
+	}
+	if state.LastExternalSuccessAt, err = parsePollHealthTime(lastExternalSuccessAt); err != nil {
+		return nil, fmt.Errorf("parse last_external_success_at: %w", err)
+	}
+	if activeSystemAlertID.Valid {
+		state.ActiveSystemAlertID = &activeSystemAlertID.Int64
+	}
+	return &state, nil
+}
+
+func formatPollHealthTime(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func parsePollHealthTime(value sql.NullString) (*time.Time, error) {
+	if !value.Valid {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value.String)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
 // CreateSystemAlert creates a new system alert for in-dashboard notifications.
 // Alert types: "auth_error", "token_refresh_failed", "polling_paused"
 // Severity: "info", "warning", "error"
@@ -2381,6 +2596,26 @@ func (s *Store) CreateSystemAlert(provider, alertType, title, message, severity 
 		return 0, fmt.Errorf("store.CreateSystemAlert: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// UpdateSystemAlert updates an existing alert without changing its ID.
+func (s *Store) UpdateSystemAlert(id int64, title, message, severity, metadata string) error {
+	res, err := s.db.Exec(`
+		UPDATE system_alerts
+		SET title = ?, message = ?, severity = ?, metadata = ?
+		WHERE id = ?
+	`, title, message, severity, metadata, id)
+	if err != nil {
+		return fmt.Errorf("store.UpdateSystemAlert: %w", err)
+	}
+	updated, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store.UpdateSystemAlert: rows affected: %w", err)
+	}
+	if updated == 0 {
+		return fmt.Errorf("store.UpdateSystemAlert: alert %d not found", id)
+	}
+	return nil
 }
 
 // HasActiveSystemAlert checks if an equivalent non-dismissed system alert exists.

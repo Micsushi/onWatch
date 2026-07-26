@@ -22,6 +22,7 @@ const geminiTokenRefreshThreshold = 15 * time.Minute
 
 // GeminiCredentialsRefreshFunc returns fresh credentials from disk.
 type GeminiCredentialsRefreshFunc func() *api.GeminiCredentials
+type GeminiRefreshRequestFunc func(context.Context, string, string, string) (*api.GeminiOAuthTokenResponse, error)
 
 // isGeminiAuthError returns true if the error is an authentication/authorization error.
 func isGeminiAuthError(err error) bool {
@@ -30,17 +31,18 @@ func isGeminiAuthError(err error) bool {
 
 // GeminiAgent manages the background polling loop for Gemini quota tracking.
 type GeminiAgent struct {
-	client       *api.GeminiClient
-	store        *store.Store
-	tracker      *tracker.GeminiTracker
-	interval     time.Duration
-	logger       *slog.Logger
-	sm           *SessionManager
-	notifier     *notify.NotificationEngine
-	pollingCheck func() bool
-	credsRefresh GeminiCredentialsRefreshFunc
-	clientCreds  *api.GeminiClientCredentials
-	lastToken    string
+	client         *api.GeminiClient
+	store          *store.Store
+	tracker        *tracker.GeminiTracker
+	interval       time.Duration
+	logger         *slog.Logger
+	sm             *SessionManager
+	notifier       agentNotifier
+	pollingCheck   func() bool
+	credsRefresh   GeminiCredentialsRefreshFunc
+	clientCreds    *api.GeminiClientCredentials
+	refreshRequest GeminiRefreshRequestFunc
+	lastToken      string
 
 	// Auth failure rate limiting
 	authFailCount   int
@@ -57,12 +59,13 @@ func NewGeminiAgent(client *api.GeminiClient, st *store.Store, tracker *tracker.
 		logger = slog.Default()
 	}
 	return &GeminiAgent{
-		client:   client,
-		store:    st,
-		tracker:  tracker,
-		interval: interval,
-		logger:   logger,
-		sm:       sm,
+		client:         client,
+		store:          st,
+		tracker:        tracker,
+		interval:       interval,
+		logger:         logger,
+		sm:             sm,
+		refreshRequest: api.RefreshGeminiToken,
 	}
 }
 
@@ -76,6 +79,34 @@ func (a *GeminiAgent) SetNotifier(n *notify.NotificationEngine) {
 	a.notifier = n
 }
 
+func (a *GeminiAgent) recordPollFailure(category, message string) {
+	if a.notifier != nil {
+		a.notifier.RecordPollFailure("gemini", "default", category, message)
+	}
+}
+
+func (a *GeminiAgent) recordPollSuccess() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSuccess("gemini", "default")
+	}
+}
+
+func (a *GeminiAgent) recordPollSkipped() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSkipped("gemini", "default")
+	}
+}
+
+func (a *GeminiAgent) recordRequestFailure(err error) {
+	if isGeminiAuthError(err) {
+		a.recordPollFailure("authentication",
+			"Gemini authentication failed. Re-authenticate with 'gemini auth' to resume polling.")
+		return
+	}
+	a.recordPollFailure("provider_request",
+		"Gemini quotas could not be fetched. Check connectivity and provider availability.")
+}
+
 // SetCredentialsRefresh sets a function that returns fresh credentials for proactive OAuth refresh.
 func (a *GeminiAgent) SetCredentialsRefresh(fn GeminiCredentialsRefreshFunc) {
 	a.credsRefresh = fn
@@ -86,24 +117,17 @@ func (a *GeminiAgent) SetClientCredentials(creds *api.GeminiClientCredentials) {
 	a.clientCreds = creds
 }
 
-// sendAuthErrorNotification sends an auth error notification via the notifier.
-func (a *GeminiAgent) sendAuthErrorNotification(title, message string, isRecoverable bool) {
-	if a.notifier == nil {
-		return
-	}
-	a.notifier.SendAuthErrorNotification(notify.AuthErrorAlert{
-		Provider:    "gemini",
-		Title:       title,
-		Message:     message,
-		IsRecovable: isRecoverable,
-	})
-}
-
 // Run starts the agent polling loop.
 func (a *GeminiAgent) Run(ctx context.Context) error {
 	a.logger.Info("Gemini agent started", "interval", a.interval)
+	if a.notifier != nil {
+		a.notifier.RegisterPoller("gemini", "default", a.interval)
+	}
 
 	defer func() {
+		if a.notifier != nil {
+			a.notifier.UnregisterPoller("gemini", "default")
+		}
 		if a.sm != nil {
 			a.sm.Close()
 		}
@@ -126,7 +150,12 @@ func (a *GeminiAgent) Run(ctx context.Context) error {
 }
 
 func (a *GeminiAgent) poll(ctx context.Context) {
+	if ctx.Err() != nil {
+		a.recordPollSkipped()
+		return
+	}
 	if a.pollingCheck != nil && !a.pollingCheck() {
+		a.recordPollSkipped()
 		return
 	}
 
@@ -137,7 +166,7 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 				a.logger.Info("Gemini token expiring soon, attempting proactive OAuth refresh",
 					"expires_in", creds.ExpiresIn.Round(time.Second))
 
-				newTokens, err := api.RefreshGeminiToken(ctx,
+				newTokens, err := a.refreshGeminiToken(ctx,
 					creds.RefreshToken,
 					a.clientCreds.ClientID,
 					a.clientCreds.ClientSecret,
@@ -183,6 +212,7 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 	}
 
 	if a.authPaused {
+		// No outcome: missed-interval supervision advances the active incident.
 		return
 	}
 
@@ -191,6 +221,7 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 		tierResp, err := a.client.FetchTier(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
+				a.recordPollSkipped()
 				return
 			}
 			a.logger.Warn("Failed to fetch Gemini tier", "error", err)
@@ -208,6 +239,7 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 	resp, err := a.client.FetchQuotas(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
+			a.recordPollSkipped()
 			return
 		}
 
@@ -215,7 +247,7 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 			a.logger.Warn("Gemini auth error, attempting token refresh", "error", err)
 
 			if creds := a.credsRefresh(); creds != nil && creds.RefreshToken != "" {
-				newTokens, refreshErr := api.RefreshGeminiToken(ctx,
+				newTokens, refreshErr := a.refreshGeminiToken(ctx,
 					creds.RefreshToken,
 					a.clientCreds.ClientID,
 					a.clientCreds.ClientSecret,
@@ -232,6 +264,7 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 					resp, err = a.client.FetchQuotas(ctx)
 					if err != nil {
 						if ctx.Err() != nil {
+							a.recordPollSkipped()
 							return
 						}
 						if isGeminiAuthError(err) {
@@ -245,38 +278,38 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 								a.authPaused = true
 								a.lastFailedToken = newTokens.AccessToken
 								a.logger.Error("Gemini polling PAUSED due to repeated auth failures")
-								a.sendAuthErrorNotification(
-									"Authentication Failed",
-									"Gemini polling has been paused due to repeated authentication failures. Please re-authenticate via 'gemini auth' to resume.",
-									false,
-								)
 							}
 						} else {
 							a.logger.Error("Gemini retry failed with non-auth error", "error", err)
 						}
+						a.recordRequestFailure(err)
 						return
 					}
 					a.authFailCount = 0
 				} else {
+					if ctx.Err() != nil {
+						a.recordPollSkipped()
+						return
+					}
 					a.logger.Error("Gemini OAuth refresh failed on auth error", "error", refreshErr)
 					a.authFailCount++
 					if a.authFailCount >= maxGeminiAuthFailures {
 						a.authPaused = true
 						a.logger.Error("Gemini polling PAUSED due to repeated auth failures")
-						a.sendAuthErrorNotification(
-							"Authentication Failed",
-							"Gemini polling has been paused. Please re-authenticate via 'gemini auth' to resume.",
-							false,
-						)
 					}
+					a.recordPollFailure("authentication",
+						"Gemini authentication refresh failed. Re-authenticate with 'gemini auth' to resume polling.")
 					return
 				}
 			} else {
 				a.logger.Error("No Gemini refresh token available for retry")
+				a.recordPollFailure("missing_credentials",
+					"No Gemini refresh credentials are available. Re-authenticate with 'gemini auth' to resume polling.")
 				return
 			}
 		} else {
 			a.logger.Error("Failed to fetch Gemini quotas", "error", err)
+			a.recordRequestFailure(err)
 			return
 		}
 	} else {
@@ -288,8 +321,11 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 
 	if _, err := a.store.InsertGeminiSnapshot(snapshot); err != nil {
 		a.logger.Error("Failed to insert Gemini snapshot", "error", err)
+		a.recordPollFailure("storage",
+			"Gemini usage was fetched but could not be saved. Check onWatch database access.")
 		return
 	}
+	a.recordPollSuccess()
 
 	if a.tracker != nil {
 		if err := a.tracker.Process(snapshot); err != nil {
@@ -322,6 +358,14 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 			"remaining", fmt.Sprintf("%.1f%%", q.RemainingFraction*100),
 			"usage", fmt.Sprintf("%.1f%%", q.UsagePercent))
 	}
+}
+
+func (a *GeminiAgent) refreshGeminiToken(ctx context.Context, refreshToken, clientID, clientSecret string) (*api.GeminiOAuthTokenResponse, error) {
+	refreshRequest := a.refreshRequest
+	if refreshRequest == nil {
+		refreshRequest = api.RefreshGeminiToken
+	}
+	return refreshRequest(ctx, refreshToken, clientID, clientSecret)
 }
 
 // saveTokensToDB persists tokens to the DB so they survive Docker restarts.

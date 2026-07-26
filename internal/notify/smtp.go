@@ -31,6 +31,8 @@ type SMTPMailer struct {
 	tlsConfig *tls.Config
 }
 
+const smtpIOTimeout = 10 * time.Second
+
 // NewSMTPMailer creates a new SMTP mailer with the given config.
 func NewSMTPMailer(cfg SMTPConfig, logger *slog.Logger) *SMTPMailer {
 	if normalizedSMTPProtocol(cfg.Protocol) == "none" && logger != nil {
@@ -213,7 +215,7 @@ func (m *SMTPMailer) TestConnectionDiag() TestConnectionResult {
 // connect establishes an SMTP connection using the configured protocol.
 func (m *SMTPMailer) connect() (*smtp.Client, bool, error) {
 	addr := net.JoinHostPort(m.config.Host, fmt.Sprintf("%d", m.config.Port))
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	dialer := &net.Dialer{Timeout: smtpIOTimeout}
 
 	switch normalizedSMTPProtocol(m.config.Protocol) {
 	case "auto":
@@ -281,6 +283,10 @@ func (m *SMTPMailer) connectTLS(addr string, dialer *net.Dialer) (*smtp.Client, 
 	if err != nil {
 		return nil, false, err
 	}
+	if err := tlsConn.SetDeadline(time.Now().Add(smtpIOTimeout)); err != nil {
+		tlsConn.Close()
+		return nil, false, fmt.Errorf("set deadline: %w", err)
+	}
 	client, err := smtp.NewClient(tlsConn, m.config.Host)
 	if err != nil {
 		tlsConn.Close()
@@ -294,6 +300,10 @@ func (m *SMTPMailer) connectSTARTTLS(addr string, dialer *net.Dialer) (*smtp.Cli
 	conn, err := dialer.Dial("tcp", addr)
 	if err != nil {
 		return nil, false, fmt.Errorf("dial: %w", err)
+	}
+	if err := conn.SetDeadline(time.Now().Add(smtpIOTimeout)); err != nil {
+		conn.Close()
+		return nil, false, fmt.Errorf("set deadline: %w", err)
 	}
 	client, err := smtp.NewClient(conn, m.config.Host)
 	if err != nil {
@@ -327,6 +337,10 @@ func (m *SMTPMailer) connectPlain(addr string, dialer *net.Dialer) (*smtp.Client
 	conn, err := dialer.Dial("tcp", addr)
 	if err != nil {
 		return nil, false, fmt.Errorf("dial: %w", err)
+	}
+	if err := conn.SetDeadline(time.Now().Add(smtpIOTimeout)); err != nil {
+		conn.Close()
+		return nil, false, fmt.Errorf("set deadline: %w", err)
 	}
 	client, err := smtp.NewClient(conn, m.config.Host)
 	if err != nil {

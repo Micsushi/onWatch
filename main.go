@@ -1478,6 +1478,7 @@ func run() error {
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	pollHealthMonitorDone := startPollHealthMonitor(ctx, notifier)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -1568,6 +1569,7 @@ func run() error {
 	cancel()
 	agentMgr.StopAll()
 	<-historyMaintenanceDone
+	<-pollHealthMonitorDone
 	_ = stopMenubarProcess(cfg.TestMode)
 
 	// Give agent a moment to clean up
@@ -1588,6 +1590,19 @@ func run() error {
 
 	logger.Info("Shutdown complete")
 	return nil
+}
+
+type pollHealthMonitor interface {
+	RunPollHealthMonitor(context.Context)
+}
+
+func startPollHealthMonitor(ctx context.Context, monitor pollHealthMonitor) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		monitor.RunPollHealthMonitor(ctx)
+	}()
+	return done
 }
 
 // runStop stops any running onwatch instance.

@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
@@ -105,6 +106,12 @@ func NewPushSender(publicKeyB64, privateKeyB64, subject string) (*PushSender, er
 
 // Send encrypts and sends a push notification to a subscription endpoint.
 func (p *PushSender) Send(sub PushSubscription, title, body string) error {
+	return p.SendContext(context.Background(), sub, title, body)
+}
+
+// SendContext encrypts and sends a push notification using the caller's
+// lifecycle context.
+func (p *PushSender) SendContext(ctx context.Context, sub PushSubscription, title, body string) error {
 	payload, err := json.Marshal(map[string]string{
 		"title": title,
 		"body":  body,
@@ -138,7 +145,7 @@ func (p *PushSender) Send(sub PushSubscription, title, body string) error {
 	vapidPubB64 := base64.RawURLEncoding.EncodeToString(p.vapidPublic)
 	authHeader := fmt.Sprintf("vapid t=%s, k=%s", jwt, vapidPubB64)
 
-	req, err := http.NewRequest(http.MethodPost, sub.Endpoint, bytes.NewReader(encrypted))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sub.Endpoint, bytes.NewReader(encrypted))
 	if err != nil {
 		return fmt.Errorf("notify.PushSender.Send: create request: %w", err)
 	}

@@ -433,6 +433,17 @@ func (s *Store) CompactAPIIntegrationUsageEvents(cutoff time.Time) (APIIntegrati
 	`, cutoffRaw); err != nil {
 		return result, fmt.Errorf("store compacted API integration fingerprints: %w", err)
 	}
+	if _, err := tx.Exec(`
+		DELETE FROM data_transfer_records
+		WHERE table_name = 'api_integration_usage_events'
+		  AND local_record_id IN (
+			SELECT CAST(id AS TEXT)
+			FROM api_integration_usage_events
+			WHERE captured_at < ?
+		  )
+	`, cutoffRaw); err != nil {
+		return result, fmt.Errorf("clean compacted API integration transfer records: %w", err)
+	}
 	deleteResult, err := tx.Exec(`
 		DELETE FROM api_integration_usage_events
 		WHERE captured_at < ?
@@ -446,17 +457,6 @@ func (s *Store) CompactAPIIntegrationUsageEvents(cutoff time.Time) (APIIntegrati
 	}
 	if deleted != rawCount {
 		return result, fmt.Errorf("API integration compaction deleted %d events, expected %d", deleted, rawCount)
-	}
-	if _, err := tx.Exec(`
-		DELETE FROM data_transfer_records
-		WHERE table_name = 'api_integration_usage_events'
-		  AND NOT EXISTS (
-			SELECT 1
-			FROM api_integration_usage_events
-			WHERE CAST(api_integration_usage_events.id AS TEXT) = data_transfer_records.local_record_id
-		  )
-	`); err != nil {
-		return result, fmt.Errorf("clean compacted API integration transfer records: %w", err)
 	}
 	if _, err := tx.Exec(`DROP TABLE temp_api_integration_usage_compaction`); err != nil {
 		return result, fmt.Errorf("clear API integration compaction workspace: %w", err)

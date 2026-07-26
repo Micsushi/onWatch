@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -25,6 +26,12 @@ type NotificationEngine struct {
 	legacyEncryptionKey string // fallback hex-encoded key for legacy SMTP password migration
 	now                 func() time.Time
 	paceStates          map[string]paceAlertState
+	pollHealthMu        sync.Mutex
+	pollHealthPollers   map[PollIdentity]pollRegistration
+	pollHealthAttempts  map[PollIdentity]pollDeliveryAttempt
+	pollHealthAttemptID uint64
+	pollHealthGrace     time.Duration
+	pollHealthTick      time.Duration
 }
 
 // NotificationConfig holds threshold and delivery settings.
@@ -37,6 +44,10 @@ type NotificationConfig struct {
 	Channels             NotificationChannels         // which delivery channels are enabled
 	UnderuseTimes        []string                     // local times for severe under-usage checks
 	OveruseRepeatPercent float64                      // extra utilization before repeating a red pace alert
+	PollFailureThreshold int                          // failures before external escalation
+	PollFailureRepeat    time.Duration                // repeat interval for active externally announced failures
+	NotifyPollFailure    bool                         // external poll failure notifications enabled
+	NotifyPollRecovery   bool                         // external poll recovery notifications enabled
 }
 
 // NotificationChannels controls which delivery channels are active.
@@ -137,9 +148,17 @@ func New(s *store.Store, logger *slog.Logger) *NotificationEngine {
 			Channels:             NotificationChannels{Email: true, Push: true, Discord: false},
 			UnderuseTimes:        []string{"10:00", "22:00"},
 			OveruseRepeatPercent: 10,
+			PollFailureThreshold: 3,
+			PollFailureRepeat:    6 * time.Hour,
+			NotifyPollFailure:    true,
+			NotifyPollRecovery:   true,
 		},
-		now:        time.Now,
-		paceStates: make(map[string]paceAlertState),
+		now:                time.Now,
+		paceStates:         make(map[string]paceAlertState),
+		pollHealthPollers:  make(map[PollIdentity]pollRegistration),
+		pollHealthAttempts: make(map[PollIdentity]pollDeliveryAttempt),
+		pollHealthGrace:    10 * time.Second,
+		pollHealthTick:     30 * time.Second,
 	}
 }
 
@@ -186,7 +205,11 @@ type notificationSettingsJSON struct {
 	UnderuseTimes        []string              `json:"underuse_times,omitempty"`
 	NotifyReset          bool                  `json:"notify_reset"`
 	NotifyReset5Hour     bool                  `json:"notify_reset_five_hour"`
-	NotifyAuthError      bool                  `json:"notify_auth_error"`
+	NotifyAuthError      *bool                 `json:"notify_auth_error,omitempty"`
+	NotifyPollFailure    *bool                 `json:"notify_poll_failure,omitempty"`
+	PollFailureThreshold int                   `json:"poll_failure_threshold,omitempty"`
+	PollFailureRepeatHrs int                   `json:"poll_failure_repeat_hours,omitempty"`
+	NotifyPollRecovery   *bool                 `json:"notify_poll_recovery,omitempty"`
 	CooldownMinutes      int                   `json:"cooldown_minutes"`
 	Channels             *NotificationChannels `json:"channels,omitempty"`
 	Overrides            []struct {
@@ -238,6 +261,28 @@ func (e *NotificationEngine) Reload() error {
 	if notif.OveruseRepeatPercent != nil && *notif.OveruseRepeatPercent > 0 {
 		overuseRepeatPercent = *notif.OveruseRepeatPercent
 	}
+	authError := false
+	if notif.NotifyAuthError != nil {
+		authError = *notif.NotifyAuthError
+	}
+	notifyPollFailure := true
+	if notif.NotifyPollFailure != nil {
+		notifyPollFailure = *notif.NotifyPollFailure
+	} else if notif.NotifyAuthError != nil {
+		notifyPollFailure = *notif.NotifyAuthError
+	}
+	notifyPollRecovery := true
+	if notif.NotifyPollRecovery != nil {
+		notifyPollRecovery = *notif.NotifyPollRecovery
+	}
+	pollFailureThreshold := 3
+	if notif.PollFailureThreshold >= 2 {
+		pollFailureThreshold = notif.PollFailureThreshold
+	}
+	pollFailureRepeat := 6 * time.Hour
+	if notif.PollFailureRepeatHrs >= 1 {
+		pollFailureRepeat = time.Duration(notif.PollFailureRepeatHrs) * time.Hour
+	}
 	e.cfg.Types = NotificationTypes{
 		Warning:       notif.NotifyWarning,
 		Critical:      notif.NotifyCritical,
@@ -245,10 +290,14 @@ func (e *NotificationEngine) Reload() error {
 		Underuse:      notifyUnderuse,
 		Reset:         notif.NotifyReset,
 		ResetFiveHour: notif.NotifyReset5Hour,
-		AuthError:     notif.NotifyAuthError,
+		AuthError:     authError,
 	}
 	e.cfg.UnderuseTimes = normalizedUnderuseTimes(notif.UnderuseTimes)
 	e.cfg.OveruseRepeatPercent = overuseRepeatPercent
+	e.cfg.NotifyPollFailure = notifyPollFailure
+	e.cfg.PollFailureThreshold = pollFailureThreshold
+	e.cfg.PollFailureRepeat = pollFailureRepeat
+	e.cfg.NotifyPollRecovery = notifyPollRecovery
 
 	overrides := make(map[string]ThresholdOverride, len(notif.Overrides))
 	for _, o := range notif.Overrides {
@@ -912,37 +961,70 @@ func (e *NotificationEngine) sendNotification(mailer *SMTPMailer, pushSender *Pu
 
 	subject := e.buildSubject(status, notifType)
 	body := e.buildBody(status, notifType)
-	sent := false
 	e.mu.RLock()
 	discord := e.discord
 	e.mu.RUnlock()
+	sent := e.sendViaChannels(mailer, pushSender, discord, channels, subject, body, "quota", quotaKey, "type", notifType)
 
-	// Send via email if enabled and configured
-	if channels.Email && mailer != nil {
+	// Log the notification only if at least one channel succeeded
+	if sent {
+		if err := e.store.UpsertNotificationLog(provider, quotaKey, notifType, status.Utilization); err != nil {
+			e.logger.Error("failed to log notification", "error", err)
+		}
+	}
+}
+
+// sendViaChannels delivers one message through every enabled and configured
+// channel. It returns true when at least one channel accepts the message.
+func (e *NotificationEngine) sendViaChannels(
+	mailer *SMTPMailer,
+	pushSender *PushSender,
+	discord *DiscordSender,
+	channels NotificationChannels,
+	subject, body string,
+	logAttrs ...any,
+) bool {
+	return e.sendViaChannelsContext(context.Background(), mailer, pushSender, discord, channels, subject, body, logAttrs...)
+}
+
+func (e *NotificationEngine) sendViaChannelsContext(
+	ctx context.Context,
+	mailer *SMTPMailer,
+	pushSender *PushSender,
+	discord *DiscordSender,
+	channels NotificationChannels,
+	subject, body string,
+	logAttrs ...any,
+) bool {
+	sent := false
+
+	if ctx.Err() == nil && channels.Email && mailer != nil {
 		if err := mailer.Send(subject, body); err != nil {
-			e.logger.Error("failed to send email notification", "error", err,
-				"quota", quotaKey, "type", notifType)
+			e.logger.Error("failed to send email notification", append([]any{"error", err}, logAttrs...)...)
 		} else {
 			sent = true
 		}
 	}
 
-	// Send via push if enabled and configured
-	if channels.Push && pushSender != nil {
+	if ctx.Err() == nil && channels.Push && pushSender != nil {
 		subs, err := e.store.GetPushSubscriptions()
 		if err != nil {
 			e.logger.Error("failed to get push subscriptions", "error", err)
 		} else {
 			for _, sub := range subs {
+				if ctx.Err() != nil {
+					break
+				}
 				ps := PushSubscription{Endpoint: sub.Endpoint}
 				ps.Keys.P256dh = sub.P256dh
 				ps.Keys.Auth = sub.Auth
-				if err := pushSender.Send(ps, subject, body); err != nil {
-					e.logger.Error("failed to send push notification", "error", err,
-						"endpoint", sub.Endpoint)
-					// If subscription is gone (410), remove it
+				if err := pushSender.SendContext(ctx, ps, subject, body); err != nil {
+					e.logger.Error("failed to send push notification",
+						append([]any{"error", err, "endpoint", sub.Endpoint}, logAttrs...)...)
 					if strings.Contains(err.Error(), "410") {
-						e.store.DeletePushSubscription(sub.Endpoint)
+						if err := e.store.DeletePushSubscription(sub.Endpoint); err != nil {
+							e.logger.Error("failed to delete expired push subscription", "error", err, "endpoint", sub.Endpoint)
+						}
 					}
 				} else {
 					sent = true
@@ -951,21 +1033,14 @@ func (e *NotificationEngine) sendNotification(mailer *SMTPMailer, pushSender *Pu
 		}
 	}
 
-	if channels.Discord && discord != nil {
-		if err := discord.Send(subject, body); err != nil {
-			e.logger.Error("failed to send Discord notification", "error", err,
-				"quota", quotaKey, "type", notifType)
+	if ctx.Err() == nil && channels.Discord && discord != nil {
+		if err := discord.SendContext(ctx, subject, body); err != nil {
+			e.logger.Error("failed to send Discord notification", append([]any{"error", err}, logAttrs...)...)
 		} else {
 			sent = true
 		}
 	}
-
-	// Log the notification only if at least one channel succeeded
-	if sent {
-		if err := e.store.UpsertNotificationLog(provider, quotaKey, notifType, status.Utilization); err != nil {
-			e.logger.Error("failed to log notification", "error", err)
-		}
-	}
+	return sent
 }
 
 func normalizeNotificationProvider(provider string) string {

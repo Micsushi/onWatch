@@ -19,7 +19,7 @@ type OpenRouterAgent struct {
 	interval     time.Duration
 	logger       *slog.Logger
 	sm           *SessionManager
-	notifier     *notify.NotificationEngine
+	notifier     agentNotifier
 	pollingCheck func() bool
 }
 
@@ -32,6 +32,24 @@ func (a *OpenRouterAgent) SetPollingCheck(fn func() bool) {
 // SetNotifier sets the notification engine for sending alerts.
 func (a *OpenRouterAgent) SetNotifier(n *notify.NotificationEngine) {
 	a.notifier = n
+}
+
+func (a *OpenRouterAgent) recordPollFailure(category, message string) {
+	if a.notifier != nil {
+		a.notifier.RecordPollFailure("openrouter", "default", category, message)
+	}
+}
+
+func (a *OpenRouterAgent) recordPollSuccess() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSuccess("openrouter", "default")
+	}
+}
+
+func (a *OpenRouterAgent) recordPollSkipped() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSkipped("openrouter", "default")
+	}
 }
 
 // NewOpenRouterAgent creates a new OpenRouterAgent with the given dependencies.
@@ -53,9 +71,15 @@ func NewOpenRouterAgent(client *api.OpenRouterClient, store *store.Store, tr *tr
 // then continues at the configured interval until the context is cancelled.
 func (a *OpenRouterAgent) Run(ctx context.Context) error {
 	a.logger.Info("OpenRouter agent started", "interval", a.interval)
+	if a.notifier != nil {
+		a.notifier.RegisterPoller("openrouter", "default", a.interval)
+	}
 
 	// Ensure any active session is closed on exit
 	defer func() {
+		if a.notifier != nil {
+			a.notifier.UnregisterPoller("openrouter", "default")
+		}
 		if a.sm != nil {
 			a.sm.Close()
 		}
@@ -82,16 +106,24 @@ func (a *OpenRouterAgent) Run(ctx context.Context) error {
 
 // poll performs a single OpenRouter poll cycle: fetch usage, store snapshot.
 func (a *OpenRouterAgent) poll(ctx context.Context) {
+	if ctx.Err() != nil {
+		a.recordPollSkipped()
+		return
+	}
 	if a.pollingCheck != nil && !a.pollingCheck() {
+		a.recordPollSkipped()
 		return // polling disabled for this provider
 	}
 
 	resp, err := a.client.FetchUsage(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
+			a.recordPollSkipped()
 			return
 		}
 		a.logger.Error("Failed to fetch OpenRouter usage", "error", err)
+		a.recordPollFailure("provider_request",
+			"OpenRouter usage could not be fetched. Check connectivity, credentials, and provider availability.")
 		return
 	}
 
@@ -101,8 +133,11 @@ func (a *OpenRouterAgent) poll(ctx context.Context) {
 
 	if _, err := a.store.InsertOpenRouterSnapshot(snapshot); err != nil {
 		a.logger.Error("Failed to insert OpenRouter snapshot", "error", err)
+		a.recordPollFailure("storage",
+			"OpenRouter usage was fetched but could not be saved. Check onWatch database access.")
 		return
 	}
+	a.recordPollSuccess()
 
 	// Process with tracker (log error but don't stop)
 	if a.tracker != nil {

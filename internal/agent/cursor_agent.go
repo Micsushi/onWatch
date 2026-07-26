@@ -15,6 +15,7 @@ import (
 type CursorTokenRefreshFunc func() string
 type CursorCredentialsRefreshFunc func() *api.CursorCredentials
 type CursorTokenSaveFunc func(accessToken, refreshToken string) error
+type CursorRefreshRequestFunc func(context.Context, string) (*api.CursorOAuthResponse, error)
 
 const cursorMaxAuthFailures = 3
 const cursorRefreshBuffer = 5 * time.Minute
@@ -29,8 +30,9 @@ type CursorAgent struct {
 	tokenRefresh       CursorTokenRefreshFunc
 	credentialsRefresh CursorCredentialsRefreshFunc
 	tokenSave          CursorTokenSaveFunc
+	refreshRequest     CursorRefreshRequestFunc
 	lastToken          string
-	notifier           *notify.NotificationEngine
+	notifier           agentNotifier
 	pollingCheck       func() bool
 
 	authFailCount   int
@@ -44,6 +46,24 @@ func (a *CursorAgent) SetPollingCheck(fn func() bool) {
 
 func (a *CursorAgent) SetNotifier(n *notify.NotificationEngine) {
 	a.notifier = n
+}
+
+func (a *CursorAgent) recordPollFailure(category, message string) {
+	if a.notifier != nil {
+		a.notifier.RecordPollFailure("cursor", "default", category, message)
+	}
+}
+
+func (a *CursorAgent) recordPollSuccess() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSuccess("cursor", "default")
+	}
+}
+
+func (a *CursorAgent) recordPollSkipped() {
+	if a.notifier != nil {
+		a.notifier.RecordPollSkipped("cursor", "default")
+	}
 }
 
 func (a *CursorAgent) SetTokenRefresh(fn CursorTokenRefreshFunc) {
@@ -63,19 +83,26 @@ func NewCursorAgent(client *api.CursorClient, store *store.Store, tracker *track
 		logger = slog.Default()
 	}
 	return &CursorAgent{
-		client:   client,
-		store:    store,
-		tracker:  tracker,
-		interval: interval,
-		logger:   logger,
-		sm:       sm,
+		client:         client,
+		store:          store,
+		tracker:        tracker,
+		interval:       interval,
+		logger:         logger,
+		sm:             sm,
+		refreshRequest: api.RefreshCursorToken,
 	}
 }
 
 func (a *CursorAgent) Run(ctx context.Context) error {
 	a.logger.Info("Cursor agent started", "interval", a.interval)
+	if a.notifier != nil {
+		a.notifier.RegisterPoller("cursor", "default", a.interval)
+	}
 
 	defer func() {
+		if a.notifier != nil {
+			a.notifier.UnregisterPoller("cursor", "default")
+		}
 		if a.sm != nil {
 			a.sm.Close()
 		}
@@ -98,7 +125,12 @@ func (a *CursorAgent) Run(ctx context.Context) error {
 }
 
 func (a *CursorAgent) poll(ctx context.Context) {
+	if ctx.Err() != nil {
+		a.recordPollSkipped()
+		return
+	}
 	if a.pollingCheck != nil && !a.pollingCheck() {
+		a.recordPollSkipped()
 		return
 	}
 
@@ -113,6 +145,7 @@ func (a *CursorAgent) poll(ctx context.Context) {
 			}
 		}
 		if a.authPaused {
+			// No outcome: missed-interval supervision advances the active incident.
 			return
 		}
 	}
@@ -137,6 +170,7 @@ func (a *CursorAgent) poll(ctx context.Context) {
 	snapshot, err := a.client.FetchQuotas(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
+			a.recordPollSkipped()
 			return
 		}
 
@@ -160,24 +194,44 @@ func (a *CursorAgent) poll(ctx context.Context) {
 								a.authPaused = false
 								goto processSnapshot
 							}
+							if ctx.Err() != nil {
+								a.recordPollSkipped()
+								return
+							}
+							if !api.IsCursorAuthError(err) && !api.IsCursorSessionExpired(err) {
+								a.logger.Error("Cursor retry failed with non-auth error", "error", err)
+								a.recordPollFailure("provider_request",
+									"Cursor quotas could not be fetched. Check connectivity and provider availability.")
+								return
+							}
 						}
 					}
+				}
+				if ctx.Err() != nil {
+					a.recordPollSkipped()
+					return
 				}
 				a.authPaused = true
 				a.logger.Warn("Cursor polling paused due to auth failures",
 					"fail_count", a.authFailCount,
 				)
 			}
+			a.recordPollFailure("authentication",
+				"Cursor authentication failed. Re-authenticate in Cursor to resume polling.")
 			return
 		}
 
 		if api.IsCursorSessionExpired(err) {
 			a.logger.Error("Cursor session expired - user must re-authenticate", "error", err)
 			a.authPaused = true
+			a.recordPollFailure("authentication",
+				"Cursor session expired. Re-authenticate in Cursor to resume polling.")
 			return
 		}
 
 		a.logger.Error("Failed to fetch Cursor quotas", "error", err)
+		a.recordPollFailure("provider_request",
+			"Cursor quotas could not be fetched. Check connectivity and provider availability.")
 		return
 	}
 
@@ -187,6 +241,10 @@ func (a *CursorAgent) poll(ctx context.Context) {
 processSnapshot:
 	if _, err := a.store.InsertCursorSnapshot(snapshot); err != nil {
 		a.logger.Error("Failed to insert Cursor snapshot", "error", err)
+		a.recordPollFailure("storage",
+			"Cursor usage was fetched but could not be saved. Check onWatch database access.")
+	} else {
+		a.recordPollSuccess()
 	}
 
 	if err := a.tracker.Process(snapshot); err != nil {
@@ -222,7 +280,11 @@ processSnapshot:
 func (a *CursorAgent) refreshToken(ctx context.Context, refreshToken string) bool {
 	a.logger.Info("Cursor: refreshing OAuth token")
 
-	oauthResp, err := api.RefreshCursorToken(ctx, refreshToken)
+	refreshRequest := a.refreshRequest
+	if refreshRequest == nil {
+		refreshRequest = api.RefreshCursorToken
+	}
+	oauthResp, err := refreshRequest(ctx, refreshToken)
 	if err != nil {
 		if errors.Is(err, api.ErrCursorSessionExpired) {
 			a.logger.Error("Cursor session expired during refresh - user must re-authenticate")

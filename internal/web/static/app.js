@@ -295,6 +295,11 @@ const PLATFORM_COST_BREAKDOWN_DATE_RANGE_STORAGE_KEY = 'onwatch-platform-cost-br
 const DASHBOARD_FOREGROUND_FETCH_TIMEOUT_MS = 15000;
 const GRAPH_PRESET_FALLBACK_DELAY_MS = 1000;
 const ARCHIVED_HISTORY_NOTICE = 'Older data is shown at hourly resolution because detailed records are kept for 30 days.';
+const POLL_HEALTH_SEEN_ALERTS_KEY = 'onwatch-seen-poll-health-alerts-v1';
+const POLL_HEALTH_SEEN_ALERT_LIMIT = 100;
+const POLL_HEALTH_TOAST_QUEUE_LIMIT = 10;
+const POLL_HEALTH_TOAST_DURATION_MS = 6500;
+const DEFERRED_DASHBOARD_TOAST_QUEUE_LIMIT = 10;
 
 // Persistence
 function loadHiddenQuotas() {
@@ -5697,13 +5702,26 @@ function renderUsageSummary(datasets, range, mode = State.graphMode) {
   `;
 }
 
-function applyChartGraphMode(chart, range, mode = State.graphMode) {
+function usageChartTimeBounds(range) {
+  const normalized = normalizeChartRange(range);
+  if (normalized === 'all') return null;
+  const windowState = historyScopeWindow('chart');
+  if (normalizeChartRange(windowState.range) !== normalized) return null;
+  const min = Date.parse(windowState.start || '');
+  const max = Date.parse(windowState.end || '');
+  return Number.isFinite(min) && Number.isFinite(max) && min < max ? { min, max } : null;
+}
+
+function applyChartGraphMode(chart, range, mode = State.graphMode, bounds = usageChartTimeBounds(range)) {
   if (!chart) return;
   const graphMode = normalizeGraphMode(mode);
   chart.config.type = 'line';
   if (chart.options?.scales?.x) {
     chart.options.scales.x.offset = false;
-    if (isPeriodGraphMode(graphMode)) {
+    if (bounds) {
+      chart.options.scales.x.min = bounds.min;
+      chart.options.scales.x.max = bounds.max;
+    } else if (isPeriodGraphMode(graphMode)) {
       const datasets = chart.data?.datasets || [];
       const firstDataset = datasets.find(dataset => Array.isArray(dataset.data) && dataset.data.length > 0);
       const first = firstDataset?.data?.[0];
@@ -5753,6 +5771,7 @@ function setMainChartDatasets(datasets, range, options = {}) {
   setChartEmptyState('usage-chart', false);
   renderUsageSummary(chartDatasets, range, mode);
   const nextYMax = computeYMax(chartDatasets, State.chart, { cap });
+  const xBounds = usageChartTimeBounds(range);
   const renderState = {
     provider: getCurrentProvider(),
     range,
@@ -5760,12 +5779,13 @@ function setMainChartDatasets(datasets, range, options = {}) {
     empty: false,
     datasets: chartDatasets,
     yMax: nextYMax,
+    xBounds,
     colors: getThemeColors(),
     theme: document.documentElement.getAttribute('data-theme') || 'dark',
   };
   updateChartWhenChanged('mainChartRenderSignature', renderState, () => {
     State.chart.data.datasets = chartDatasets;
-    applyChartGraphMode(State.chart, range, mode);
+    applyChartGraphMode(State.chart, range, mode, xBounds);
     updateTimeScale(State.chart, range);
     State.chartYMax = nextYMax;
     State.chart.options.scales.y.max = State.chartYMax;
@@ -11347,7 +11367,7 @@ function setupProviderSelector() {
   });
 }
 
-function showDashboardToast(message, type = 'info', timeoutMs = 3000) {
+function renderDashboardToast(message, type = 'info', timeoutMs = 3000) {
   let toast = document.getElementById('dashboard-toast');
   if (!toast) {
     toast = document.createElement('div');
@@ -11425,6 +11445,13 @@ function showDashboardToast(message, type = 'info', timeoutMs = 3000) {
     }, timeoutMs);
   }
 }
+
+// DASHBOARD TOAST DISPATCH
+function showDashboardToast(message, type = 'info', timeoutMs = 3000) {
+  if (deferDashboardToast(message, type, timeoutMs)) return;
+  renderDashboardToast(message, type, timeoutMs);
+}
+// END DASHBOARD TOAST DISPATCH
 
 function setupHeaderActions() {
   // Scroll to top
@@ -11781,8 +11808,15 @@ async function loadSettings() {
       setVal('notify-underuse-evening', underuseTimes[1] || '22:00');
       if (resetCheck) resetCheck.checked = n.notify_reset !== false;
       if (resetFiveHourCheck) resetFiveHourCheck.checked = n.notify_reset_five_hour === true;
-      const authErrorCheck = document.getElementById('notify-auth-error');
-      if (authErrorCheck) authErrorCheck.checked = !!n.notify_auth_error;
+      const pollFailureCheck = document.getElementById('notify-poll-failure');
+      const pollFailureEnabled = n.notify_poll_failure !== undefined
+        ? n.notify_poll_failure !== false
+        : (n.notify_auth_error !== undefined ? !!n.notify_auth_error : true);
+      if (pollFailureCheck) pollFailureCheck.checked = pollFailureEnabled;
+      setVal('poll-failure-threshold', n.poll_failure_threshold || 3);
+      setVal('poll-failure-repeat-hours', n.poll_failure_repeat_hours || 6);
+      const pollRecoveryCheck = document.getElementById('notify-poll-recovery');
+      if (pollRecoveryCheck) pollRecoveryCheck.checked = n.notify_poll_recovery !== false;
       setVal('notify-cooldown', n.cooldown_minutes || 30);
       // Load channel preferences
       if (n.channels) {
@@ -13102,6 +13136,7 @@ function gatherSettings() {
       }
     });
 
+    const notifyPollFailure = document.getElementById('notify-poll-failure')?.checked ?? true;
     settings.notifications = {
       warning_threshold: parseFloat(warningInput.value) || 80,
       critical_threshold: parseFloat(document.getElementById('threshold-critical')?.value) || 95,
@@ -13116,7 +13151,11 @@ function gatherSettings() {
       ],
       notify_reset: document.getElementById('notify-reset')?.checked ?? true,
       notify_reset_five_hour: document.getElementById('notify-reset-five-hour')?.checked ?? false,
-      notify_auth_error: document.getElementById('notify-auth-error')?.checked ?? false,
+      notify_poll_failure: notifyPollFailure,
+      notify_auth_error: notifyPollFailure,
+      poll_failure_threshold: parseInt(document.getElementById('poll-failure-threshold')?.value) || 3,
+      poll_failure_repeat_hours: parseInt(document.getElementById('poll-failure-repeat-hours')?.value) || 6,
+      notify_poll_recovery: document.getElementById('notify-poll-recovery')?.checked ?? true,
       cooldown_minutes: parseInt(document.getElementById('notify-cooldown')?.value) || 30,
       channels: {
         email: document.getElementById('channel-email')?.checked ?? true,
@@ -13782,6 +13821,115 @@ function addOverrideRow(quotaKey, provider, warning, critical, isAbsolute, disab
 // NOTIFICATION CENTER
 let _notificationAlerts = [];
 
+// POLL HEALTH TOAST QUEUE
+let _seenPollHealthAlertIDs = null;
+const _queuedPollHealthAlertIDs = new Set();
+const _pollHealthToastQueue = [];
+let _pollHealthToastActive = false;
+const _deferredDashboardToastQueue = [];
+let _deferredDashboardToastActive = false;
+
+function deferDashboardToast(message, type, timeoutMs) {
+  const shouldDefer = _pollHealthToastActive
+    || _pollHealthToastQueue.length > 0
+    || _deferredDashboardToastActive
+    || _deferredDashboardToastQueue.length > 0;
+  if (!shouldDefer) return false;
+
+  if (_deferredDashboardToastQueue.length < DEFERRED_DASHBOARD_TOAST_QUEUE_LIMIT) {
+    _deferredDashboardToastQueue.push({ message, type, timeoutMs });
+  }
+  return true;
+}
+
+function drainDeferredDashboardToastQueue() {
+  if (_pollHealthToastActive
+      || _pollHealthToastQueue.length > 0
+      || _deferredDashboardToastActive
+      || _deferredDashboardToastQueue.length === 0) {
+    return;
+  }
+
+  const item = _deferredDashboardToastQueue.shift();
+  _deferredDashboardToastActive = true;
+  renderDashboardToast(item.message, item.type, item.timeoutMs);
+  if (item.timeoutMs <= 0) {
+    _deferredDashboardToastActive = false;
+    return;
+  }
+  window.setTimeout(() => {
+    _deferredDashboardToastActive = false;
+    drainDeferredDashboardToastQueue();
+  }, item.timeoutMs);
+}
+
+function loadSeenPollHealthAlertIDs() {
+  if (_seenPollHealthAlertIDs !== null) return _seenPollHealthAlertIDs;
+
+  const stored = readJSONStorage(localStorage, POLL_HEALTH_SEEN_ALERTS_KEY);
+  const storedIDs = Array.isArray(stored) ? stored.map(String) : [];
+  _seenPollHealthAlertIDs = new Set(storedIDs.slice(-POLL_HEALTH_SEEN_ALERT_LIMIT));
+  if (storedIDs.length !== _seenPollHealthAlertIDs.size
+      || storedIDs.length > POLL_HEALTH_SEEN_ALERT_LIMIT) {
+    writeJSONStorage(localStorage, POLL_HEALTH_SEEN_ALERTS_KEY, [..._seenPollHealthAlertIDs]);
+  }
+  return _seenPollHealthAlertIDs;
+}
+
+function rememberDisplayedPollHealthAlertID(alertID) {
+  const seenIDs = loadSeenPollHealthAlertIDs();
+  if (seenIDs.has(alertID)) return;
+
+  seenIDs.add(alertID);
+  const orderedIDs = [...seenIDs];
+  while (orderedIDs.length > POLL_HEALTH_SEEN_ALERT_LIMIT) {
+    seenIDs.delete(orderedIDs.shift());
+  }
+  writeJSONStorage(localStorage, POLL_HEALTH_SEEN_ALERTS_KEY, [...seenIDs]);
+}
+
+function drainPollHealthToastQueue() {
+  if (_pollHealthToastActive || _pollHealthToastQueue.length === 0) return;
+
+  const alert = _pollHealthToastQueue.shift();
+  const alertID = String(alert.id);
+  _pollHealthToastActive = true;
+
+  const message = alert.message || alert.title || 'Poller status changed.';
+  const toastType = alert.type === 'poll_recovered' ? 'success'
+    : alert.severity === 'error' ? 'error' : 'warning';
+  renderDashboardToast(message, toastType, POLL_HEALTH_TOAST_DURATION_MS);
+
+  window.setTimeout(() => {
+    rememberDisplayedPollHealthAlertID(alertID);
+    _queuedPollHealthAlertIDs.delete(alertID);
+    _pollHealthToastActive = false;
+    if (_pollHealthToastQueue.length > 0) {
+      drainPollHealthToastQueue();
+    } else {
+      drainDeferredDashboardToastQueue();
+    }
+  }, POLL_HEALTH_TOAST_DURATION_MS);
+}
+
+function showNewPollHealthAlertToasts(alerts) {
+  const seenIDs = loadSeenPollHealthAlertIDs();
+  [...alerts].reverse().forEach(alert => {
+    if (!alert || !['poll_failure', 'poll_recovered'].includes(alert.type) || alert.id == null) return;
+
+    const alertID = String(alert.id);
+    if (seenIDs.has(alertID) || _queuedPollHealthAlertIDs.has(alertID)) return;
+
+    const outstandingToasts = _pollHealthToastQueue.length + (_pollHealthToastActive ? 1 : 0);
+    if (outstandingToasts >= POLL_HEALTH_TOAST_QUEUE_LIMIT) return;
+
+    _queuedPollHealthAlertIDs.add(alertID);
+    _pollHealthToastQueue.push(alert);
+  });
+  drainPollHealthToastQueue();
+}
+// END POLL HEALTH TOAST QUEUE
+
 async function fetchSystemAlerts() {
   try {
     const res = await authFetch('/api/alerts');
@@ -13847,6 +13995,7 @@ function escapeHtml(str) {
 
 async function updateNotificationCenter() {
   const alerts = await fetchSystemAlerts();
+  showNewPollHealthAlertToasts(alerts);
   _notificationAlerts = alerts;
 
   const badge = document.getElementById('notification-badge');
@@ -13950,8 +14099,8 @@ function initNotificationCenter() {
   // Initial fetch
   updateNotificationCenter();
 
-  // Refresh notifications periodically (every 60 seconds)
-  setInterval(updateNotificationCenter, 60000);
+  // Refresh notifications periodically so poll-health changes surface promptly.
+  setInterval(updateNotificationCenter, 10000);
 }
 
 // Init
