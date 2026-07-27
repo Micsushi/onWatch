@@ -170,8 +170,9 @@ func TestMiniMaxAgentManager_RunAndStop(t *testing.T) {
 		done <- mgr.Run(ctx)
 	}()
 
-	// Give it time to start
-	time.Sleep(100 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		return len(mgr.GetRunningAccounts()) >= 1
+	}, "MiniMax account agent to start")
 
 	running := mgr.GetRunningAccounts()
 	if len(running) == 0 {
@@ -200,12 +201,16 @@ func TestMiniMaxAgentManager_Reload(t *testing.T) {
 	defer cancel()
 
 	go mgr.Run(ctx)
-	time.Sleep(100 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		return len(mgr.GetRunningAccounts()) >= 1
+	}, "initial MiniMax account agent to start")
 
 	// Add a second account and reload
 	createMiniMaxTestAccount(t, s, "added", "sk_added", "cn")
 	mgr.Reload()
-	time.Sleep(100 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		return len(mgr.GetRunningAccounts()) >= 2
+	}, "both MiniMax account agents to start after reload")
 
 	running := mgr.GetRunningAccounts()
 	if len(running) < 2 {
@@ -240,7 +245,9 @@ func TestMiniMaxAgentManager_PerAccountPollingCheck(t *testing.T) {
 	defer cancel()
 
 	go mgr.Run(ctx)
-	time.Sleep(100 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		return len(mgr.GetRunningAccounts()) >= 2
+	}, "both MiniMax account agents to start")
 
 	// Both agents should be running (polling check only affects poll(), not start)
 	running := mgr.GetRunningAccounts()
@@ -261,7 +268,9 @@ func TestMiniMaxAgentManager_StopAllWaitsForGoroutines(t *testing.T) {
 	defer cancel()
 
 	go mgr.Run(ctx)
-	time.Sleep(100 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		return len(mgr.GetRunningAccounts()) >= 1
+	}, "MiniMax account agent to start")
 
 	// stopAllAgents should wait for goroutines and not panic
 	mgr.stopAllAgents()

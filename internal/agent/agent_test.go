@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -103,7 +102,7 @@ func TestAgent_PollsAtInterval(t *testing.T) {
 	interval := 50 * time.Millisecond
 	agent := New(client, str, tr, interval, logger, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 230*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Run agent - it will poll immediately (1), then every 50ms (4 more in 200ms)
@@ -112,8 +111,11 @@ func TestAgent_PollsAtInterval(t *testing.T) {
 		errChan <- agent.Run(ctx)
 	}()
 
-	<-ctx.Done()
-	time.Sleep(10 * time.Millisecond) // Give time for cleanup
+	waitUntil(t, 5*time.Second, func() bool {
+		return callCount.Load() >= 4
+	}, "four scheduled polls")
+	cancel()
+	waitForAgentStop(t, errChan, 2*time.Second)
 
 	// Should have at least 4-5 polls (1 immediate + ~4 interval polls)
 	count := callCount.Load()
@@ -124,14 +126,6 @@ func TestAgent_PollsAtInterval(t *testing.T) {
 		t.Errorf("Expected at most 6 API calls, got %d (too many polls)", count)
 	}
 
-	select {
-	case err := <-errChan:
-		if err != nil && err != context.DeadlineExceeded {
-			t.Errorf("Expected nil or DeadlineExceeded error, got: %v", err)
-		}
-	case <-time.After(1 * time.Second):
-		t.Error("Agent.Run() did not return within 1s")
-	}
 }
 
 // TestAgent_StoresEverySnapshot verifies DB has N rows after N polls
@@ -156,12 +150,18 @@ func TestAgent_StoresEverySnapshot(t *testing.T) {
 
 	agent := New(client, str, tr, 50*time.Millisecond, logger, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 175*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go agent.Run(ctx)
-	<-ctx.Done()
-	time.Sleep(10 * time.Millisecond)
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- agent.Run(ctx)
+	}()
+	waitUntil(t, 5*time.Second, func() bool {
+		return pollCount.Load() >= 3
+	}, "three stored snapshots")
+	cancel()
+	waitForAgentStop(t, errChan, 2*time.Second)
 
 	// Should have 4 snapshots (1 immediate + 3 at 50ms intervals)
 	// Or 5 depending on timing, so check range
@@ -235,12 +235,17 @@ func TestAgent_APIError_Continues(t *testing.T) {
 
 	agent := New(client, str, tr, 50*time.Millisecond, logger, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 130*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- agent.Run(ctx)
+	}()
 
-	go agent.Run(ctx)
-	<-ctx.Done()
-	time.Sleep(10 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		return callCount.Load() >= 2
+	}, "agent to continue polling after an API error")
+	cancel()
+	waitForAgentStop(t, errCh, 2*time.Second)
 
 	// Should have continued polling despite first error
 	if count := callCount.Load(); count < 2 {
@@ -270,12 +275,17 @@ func TestAgent_StoreError_Continues(t *testing.T) {
 
 	agent := New(client, str, tr, 50*time.Millisecond, logger, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- agent.Run(ctx)
+	}()
 
-	go agent.Run(ctx)
-	<-ctx.Done()
-	time.Sleep(10 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		return callCount.Load() >= 1
+	}, "agent to poll successfully")
+	cancel()
+	waitForAgentStop(t, errCh, 2*time.Second)
 
 	// Agent should have polled at least once successfully
 	if count := callCount.Load(); count < 1 {
@@ -429,14 +439,12 @@ func TestAgent_GracefulShutdown_MidPoll(t *testing.T) {
 // TestAgent_FirstPollImmediate verifies first poll happens immediately, not after interval
 func TestAgent_FirstPollImmediate(t *testing.T) {
 	t.Parallel()
-	var callCount atomic.Int32
-	var mu sync.Mutex
-	callTimes := make([]time.Time, 0)
+	firstCall := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount.Add(1)
-		mu.Lock()
-		callTimes = append(callTimes, time.Now())
-		mu.Unlock()
+		select {
+		case firstCall <- struct{}{}:
+		default:
+		}
 		resp := testResponse()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -451,32 +459,22 @@ func TestAgent_FirstPollImmediate(t *testing.T) {
 	client := api.NewClient("test-key", logger, api.WithBaseURL(server.URL))
 	tr := tracker.New(str, logger)
 
-	startTime := time.Now()
-	agent := New(client, str, tr, 500*time.Millisecond, logger, nil) // Long interval
+	agent := New(client, str, tr, 5*time.Second, logger, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go agent.Run(ctx)
-	<-ctx.Done()
-	time.Sleep(10 * time.Millisecond)
-
-	// Should have at least 1 call immediately
-	if count := callCount.Load(); count < 1 {
-		t.Fatal("Expected at least 1 immediate API call")
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- agent.Run(ctx)
+	}()
+	select {
+	case <-firstCall:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first poll waited for the 5-second interval")
 	}
-
-	// First call should be within 50ms of start (immediate)
-	mu.Lock()
-	times := make([]time.Time, len(callTimes))
-	copy(times, callTimes)
-	mu.Unlock()
-	if len(times) > 0 {
-		timeToFirstCall := times[0].Sub(startTime)
-		if timeToFirstCall > 50*time.Millisecond {
-			t.Errorf("First poll should be immediate (<50ms), took %v", timeToFirstCall)
-		}
-	}
+	cancel()
+	waitForAgentStop(t, errCh, 2*time.Second)
 }
 
 // TestAgent_LogsEachPoll verifies structured log entry per poll with key metrics
