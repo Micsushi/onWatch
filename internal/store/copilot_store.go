@@ -132,14 +132,14 @@ func (s *Store) QueryLatestCopilot() (*api.CopilotSnapshot, error) {
 // QueryCopilotRange returns Copilot snapshots within a time range.
 func (s *Store) QueryCopilotRange(start, end time.Time, limit ...int) ([]*api.CopilotSnapshot, error) {
 	query := `SELECT id, captured_at, copilot_plan, reset_date, quota_count FROM copilot_snapshots
-		WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at ASC`
+		WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, copilot_plan, reset_date, quota_count
 			FROM (
 				SELECT id, captured_at, copilot_plan, reset_date, quota_count
 				FROM copilot_snapshots
-				WHERE captured_at BETWEEN ? AND ?
+				WHERE captured_at >= ? AND captured_at < ?
 				ORDER BY captured_at DESC
 				LIMIT ?
 			) recent

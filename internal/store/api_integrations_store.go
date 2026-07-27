@@ -611,7 +611,7 @@ func (s *Store) QueryAPIIntegrationUsageRange(start, end time.Time, limit ...int
 		       source.total_tokens, source.cost_usd, source.latency_ms, %s,
 		       source.source_path, source.fingerprint
 		FROM api_integration_usage_events AS source
-		WHERE source.captured_at BETWEEN ? AND ?
+		WHERE source.captured_at >= ? AND source.captured_at < ?
 		ORDER BY source.captured_at ASC
 	`, apiIntegrationMetadataJSONExpression("source"))
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
@@ -1063,7 +1063,7 @@ func (s *Store) QueryAPIIntegrationUsageSessions(start, end time.Time, integrati
 		       COALESCE(SUM(reasoning_output_tokens), 0),
 		       COALESCE(SUM(cost_usd), 0)
 		FROM api_integration_usage_events
-		WHERE captured_at BETWEEN ? AND ?
+		WHERE captured_at >= ? AND captured_at < ?
 	`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if integrationName != "" {

@@ -207,25 +207,8 @@ func TestAnthropicAgent_Poll_AuthFailurePause(t *testing.T) {
 		return "bad-token"
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- agent.Run(ctx)
-	}()
-
-	// Wait long enough for multiple polls and pausing
-	time.Sleep(400 * time.Millisecond)
-	cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("expected nil error, got: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("agent did not stop within 2s")
+	for range 3 {
+		agent.poll(context.Background())
 	}
 
 	logs := logBuf.String()

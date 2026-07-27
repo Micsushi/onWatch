@@ -448,7 +448,7 @@ func TestHandler_History_ReturnsPercentages(t *testing.T) {
 	defer s.Close()
 
 	snapshot := &api.Snapshot{
-		CapturedAt: time.Now().UTC(),
+		CapturedAt: time.Now().UTC().Add(-time.Minute),
 		Sub:        api.QuotaInfo{Limit: 1000, Requests: 500, RenewsAt: time.Now().Add(5 * time.Hour)},
 		Search:     api.QuotaInfo{Limit: 250, Requests: 125, RenewsAt: time.Now().Add(1 * time.Hour)},
 		ToolCall:   api.QuotaInfo{Limit: 2000, Requests: 1000, RenewsAt: time.Now().Add(3 * time.Hour)},
@@ -1063,7 +1063,7 @@ func TestHandler_History_WithSyntheticProvider(t *testing.T) {
 	defer s.Close()
 
 	snapshot := &api.Snapshot{
-		CapturedAt: time.Now().UTC(),
+		CapturedAt: time.Now().UTC().Add(-time.Minute),
 		Sub:        api.QuotaInfo{Limit: 1350, Requests: 100, RenewsAt: time.Now().Add(5 * time.Hour)},
 		Search:     api.QuotaInfo{Limit: 250, Requests: 10, RenewsAt: time.Now().Add(1 * time.Hour)},
 		ToolCall:   api.QuotaInfo{Limit: 16200, Requests: 500, RenewsAt: time.Now().Add(3 * time.Hour)},
@@ -2025,7 +2025,7 @@ func TestHandler_History_SyntheticMultipleSnapshots(t *testing.T) {
 	cfg := createTestConfigWithSynthetic()
 	h := NewHandler(s, nil, nil, nil, cfg)
 
-	baseTime := time.Now().UTC().Add(-2 * time.Hour)
+	baseTime := time.Now().UTC().Add(-2*time.Hour - time.Minute)
 	for i := 0; i < 5; i++ {
 		snapshot := &api.Snapshot{
 			CapturedAt: baseTime.Add(time.Duration(i) * 30 * time.Minute),
@@ -2063,7 +2063,7 @@ func TestHandler_History_ZaiMultipleSnapshots(t *testing.T) {
 	h := NewHandler(s, nil, nil, nil, cfg)
 
 	resetTime := time.Now().Add(24 * time.Hour)
-	baseTime := time.Now().UTC().Add(-2 * time.Hour)
+	baseTime := time.Now().UTC().Add(-2*time.Hour - time.Minute)
 	for i := 0; i < 5; i++ {
 		zaiSnapshot := &api.ZaiSnapshot{
 			CapturedAt:          baseTime.Add(time.Duration(i) * 30 * time.Minute),
@@ -2356,7 +2356,7 @@ func TestHandler_Current_WithAnthropicProvider(t *testing.T) {
 
 	resetsAt := time.Now().Add(5 * time.Hour)
 	snapshot := &api.AnthropicSnapshot{
-		CapturedAt: time.Now().UTC(),
+		CapturedAt: time.Now().UTC().Add(-time.Minute),
 		Quotas: []api.AnthropicQuota{
 			{Name: "five_hour", Utilization: 45.0, ResetsAt: &resetsAt},
 			{Name: "seven_day", Utilization: 20.0, ResetsAt: &resetsAt},
@@ -2476,7 +2476,7 @@ func TestHandler_History_WithAnthropicProvider(t *testing.T) {
 	}
 
 	if len(response) != 1 {
-		t.Errorf("expected 1 history entry, got %d", len(response))
+		t.Fatalf("expected 1 history entry, got %d", len(response))
 	}
 
 	if _, ok := response[0]["capturedAt"]; !ok {
@@ -2722,7 +2722,7 @@ func TestHandler_History_WithCodexProvider(t *testing.T) {
 	s, _ := store.New(":memory:")
 	defer s.Close()
 
-	capturedAt := time.Now().UTC()
+	capturedAt := time.Now().UTC().Add(-time.Minute)
 	snap := &api.CodexSnapshot{
 		CapturedAt: capturedAt,
 		Quotas: []api.CodexQuota{

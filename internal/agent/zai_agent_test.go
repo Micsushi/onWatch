@@ -164,25 +164,18 @@ func TestZaiAgent_Run_AuthError_ContinuesPolling(t *testing.T) {
 
 	agent := NewZaiAgent(client, str, tr, 50*time.Millisecond, logger, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- agent.Run(ctx)
 	}()
 
-	<-ctx.Done()
-
-	// Wait for agent goroutine to fully stop before reading shared logBuf
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Errorf("Expected nil error, got: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Agent.Run() did not return within 2s")
-	}
+	waitUntil(t, 5*time.Second, func() bool {
+		return callCount.Load() >= 2
+	}, "Z.ai agent to continue polling after an authentication error")
+	cancel()
+	waitForAgentStop(t, errCh, 2*time.Second)
 
 	// Agent should have continued polling after 401
 	if count := callCount.Load(); count < 2 {

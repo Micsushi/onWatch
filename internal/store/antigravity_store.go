@@ -192,14 +192,14 @@ func (s *Store) QueryAntigravityRange(start, end time.Time, limit ...int) ([]*ap
 	// Order by ASC for chronological chart display (oldest to newest, left to right)
 	query := `SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
 		FROM antigravity_snapshots
-		WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at ASC`
+		WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
 			FROM (
 				SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
 				FROM antigravity_snapshots
-				WHERE captured_at BETWEEN ? AND ?
+				WHERE captured_at >= ? AND captured_at < ?
 				ORDER BY captured_at DESC
 				LIMIT ?
 			) recent

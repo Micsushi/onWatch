@@ -115,14 +115,14 @@ func (s *Store) QueryLatestAnthropic() (*api.AnthropicSnapshot, error) {
 // QueryAnthropicRange returns Anthropic snapshots within a time range with optional limit.
 func (s *Store) QueryAnthropicRange(start, end time.Time, limit ...int) ([]*api.AnthropicSnapshot, error) {
 	query := `SELECT id, captured_at, quota_count FROM anthropic_snapshots
-		WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at ASC`
+		WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, quota_count
 			FROM (
 				SELECT id, captured_at, quota_count
 				FROM anthropic_snapshots
-				WHERE captured_at BETWEEN ? AND ?
+				WHERE captured_at >= ? AND captured_at < ?
 				ORDER BY captured_at DESC
 				LIMIT ?
 			) recent
@@ -196,7 +196,7 @@ func (s *Store) QueryAnthropicRangeSampled(start, end time.Time, maxPoints int) 
 				ROW_NUMBER() OVER (ORDER BY captured_at ASC) AS row_number,
 				COUNT(*) OVER () AS total_rows
 			FROM anthropic_snapshots
-			WHERE captured_at BETWEEN ? AND ?
+			WHERE captured_at >= ? AND captured_at < ?
 		),
 		sampled AS (
 			SELECT id, captured_at

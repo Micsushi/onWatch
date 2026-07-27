@@ -123,14 +123,14 @@ func (s *Store) QueryLatestCursor() (*api.CursorSnapshot, error) {
 
 func (s *Store) QueryCursorRange(start, end time.Time, limit ...int) ([]*api.CursorSnapshot, error) {
 	query := `SELECT id, captured_at, account_type, plan_name, quota_count FROM cursor_snapshots
-		WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at ASC`
+		WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
 	args := []interface{}{start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, account_type, plan_name, quota_count
 			FROM (
 				SELECT id, captured_at, account_type, plan_name, quota_count
 				FROM cursor_snapshots
-				WHERE captured_at BETWEEN ? AND ?
+				WHERE captured_at >= ? AND captured_at < ?
 				ORDER BY captured_at DESC
 				LIMIT ?
 			) recent

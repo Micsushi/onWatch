@@ -105,7 +105,7 @@ func (s *Store) QueryOpenRouterRange(start, end time.Time, limit ...int) ([]*api
 	query := `SELECT id, captured_at, label, usage, usage_daily, usage_weekly, usage_monthly,
 		 credit_limit, limit_remaining, is_free_tier, rate_limit_requests, rate_limit_interval
 		FROM openrouter_snapshots
-		WHERE captured_at BETWEEN ? AND ?
+		WHERE captured_at >= ? AND captured_at < ?
 		ORDER BY captured_at ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
@@ -115,7 +115,7 @@ func (s *Store) QueryOpenRouterRange(start, end time.Time, limit ...int) ([]*api
 				SELECT id, captured_at, label, usage, usage_daily, usage_weekly, usage_monthly,
 					 credit_limit, limit_remaining, is_free_tier, rate_limit_requests, rate_limit_interval
 				FROM openrouter_snapshots
-				WHERE captured_at BETWEEN ? AND ?
+				WHERE captured_at >= ? AND captured_at < ?
 				ORDER BY captured_at DESC
 				LIMIT ?
 			) recent

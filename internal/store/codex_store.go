@@ -164,14 +164,14 @@ func (s *Store) QueryCodexRange(accountID int64, start, end time.Time, limit ...
 		accountID = DefaultCodexAccountID
 	}
 	query := `SELECT id, captured_at, plan_type, credits_balance, quota_count, account_id FROM codex_snapshots
-		WHERE account_id = ? AND captured_at BETWEEN ? AND ? ORDER BY captured_at ASC`
+		WHERE account_id = ? AND captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
 	args := []interface{}{accountID, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, plan_type, credits_balance, quota_count, account_id
 			FROM (
 				SELECT id, captured_at, plan_type, credits_balance, quota_count, account_id
 				FROM codex_snapshots
-				WHERE account_id = ? AND captured_at BETWEEN ? AND ?
+				WHERE account_id = ? AND captured_at >= ? AND captured_at < ?
 				ORDER BY captured_at DESC
 				LIMIT ?
 			) recent
@@ -263,7 +263,7 @@ func (s *Store) QueryCodexRangeSampled(accountID int64, start, end time.Time, ma
 				ROW_NUMBER() OVER (ORDER BY captured_at ASC) AS row_number,
 				COUNT(*) OVER () AS total_rows
 			FROM codex_snapshots
-			WHERE account_id = ? AND captured_at BETWEEN ? AND ?
+			WHERE account_id = ? AND captured_at >= ? AND captured_at < ?
 		),
 		sampled AS (
 			SELECT id, captured_at, plan_type, credits_balance, account_id

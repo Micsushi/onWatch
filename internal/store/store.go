@@ -1333,7 +1333,7 @@ func (s *Store) QueryRange(start, end time.Time, limit ...int) ([]*api.Snapshot,
 		 search_limit, search_requests, search_renews_at,
 		 tool_limit, tool_requests, tool_renews_at
 		FROM quota_snapshots
-		WHERE captured_at BETWEEN ? AND ?
+		WHERE captured_at >= ? AND captured_at < ?
 		ORDER BY captured_at ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
@@ -1345,7 +1345,7 @@ func (s *Store) QueryRange(start, end time.Time, limit ...int) ([]*api.Snapshot,
 					search_limit, search_requests, search_renews_at,
 					tool_limit, tool_requests, tool_renews_at
 				FROM quota_snapshots
-				WHERE captured_at BETWEEN ? AND ?
+				WHERE captured_at >= ? AND captured_at < ?
 				ORDER BY captured_at DESC
 				LIMIT ?
 			) recent

@@ -310,6 +310,10 @@ func (a *APIIntegrationsIngestAgent) pruneExpiredUsageEvents() error {
 	if err != nil {
 		return err
 	}
+	compactedMetadata, err := a.store.CompactAPIIntegrationMetadataJSON()
+	if err != nil {
+		return err
+	}
 	a.lastPrune = now
 	if result.CompactedEvents > 0 {
 		a.logger.Info(
@@ -318,6 +322,9 @@ func (a *APIIntegrationsIngestAgent) pruneExpiredUsageEvents() error {
 			"hourly_rows", result.HourlyRows,
 			"cutoff", cutoff.Format(time.RFC3339),
 		)
+	}
+	if compactedMetadata > 0 {
+		a.logger.Info("API integration metadata compacted", "updated_events", compactedMetadata)
 	}
 	return nil
 }

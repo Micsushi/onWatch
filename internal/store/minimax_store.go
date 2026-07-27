@@ -146,7 +146,7 @@ func (s *Store) QueryLatestMiniMax(accountID int64) (*api.MiniMaxSnapshot, error
 func (s *Store) QueryMiniMaxRange(start, end time.Time, accountID int64, limit ...int) ([]*api.MiniMaxSnapshot, error) {
 	query := `SELECT id, captured_at, raw_json, model_count
 		FROM minimax_snapshots
-		WHERE account_id = ? AND captured_at BETWEEN ? AND ?
+		WHERE account_id = ? AND captured_at >= ? AND captured_at < ?
 		ORDER BY captured_at ASC`
 	args := []interface{}{accountID, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 
@@ -155,7 +155,7 @@ func (s *Store) QueryMiniMaxRange(start, end time.Time, accountID int64, limit .
 			FROM (
 				SELECT id, captured_at, raw_json, model_count
 				FROM minimax_snapshots
-				WHERE account_id = ? AND captured_at BETWEEN ? AND ?
+				WHERE account_id = ? AND captured_at >= ? AND captured_at < ?
 				ORDER BY captured_at DESC
 				LIMIT ?
 			) recent

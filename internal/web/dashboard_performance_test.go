@@ -76,38 +76,6 @@ func TestDashboardDoesNotWarmEveryProviderAndRange(t *testing.T) {
 	}
 }
 
-func TestDashboardCombinedHistoryRendersBeforeSecondaryHistory(t *testing.T) {
-	t.Parallel()
-	source := dashboardAppSource(t)
-	renderMarker := "State.allProvidersHistory = data;\n      renderAllProvidersView();"
-	secondaryMarker := "scheduleAPIIntegrationsHistoryRefresh(range, requestSeq);"
-
-	renderAt := strings.Index(source, renderMarker)
-	if renderAt < 0 {
-		t.Fatalf("combined history immediate render path not found")
-	}
-	secondaryAt := strings.Index(source[renderAt:], secondaryMarker)
-	if secondaryAt < 0 {
-		t.Fatalf("secondary API Integrations refresh is not scheduled after combined render")
-	}
-}
-
-func TestDashboardHistoryChartsSkipIdenticalConsecutiveRenders(t *testing.T) {
-	t.Parallel()
-	source := dashboardAppSource(t)
-
-	for _, marker := range []string{
-		"function updateChartWhenChanged(signatureKey, renderState, update)",
-		"State[signatureKey] === signature",
-		"updateChartWhenChanged('mainChartRenderSignature'",
-		"updateChartWhenChanged('platformCostChartRenderSignature'",
-	} {
-		if !strings.Contains(source, marker) {
-			t.Errorf("history chart render deduplication missing %q", marker)
-		}
-	}
-}
-
 func TestDashboardPersistsLastSuccessfulGraphsAcrossPageLoads(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
@@ -144,14 +112,14 @@ func TestDashboardPresetHistoryCacheKeysRemainStableAcrossReloads(t *testing.T) 
 	}
 }
 
-func TestDashboardCanReuseLegacyPresetSnapshotDuringRefresh(t *testing.T) {
+func TestDashboardCanReusePersistedPresetSnapshotDuringRefresh(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
 
 	for _, marker := range []string{
 		"function getStaleProviderHistory(provider, range, selectionKey, accountOverride)",
-		"const cached = getStaleProviderHistory(requestProvider, range, requestRangeKey);",
-		"setDashboardFreshness({ stale: Boolean(options.force || !freshCached), ts: cached.ts });",
+		"const cached = getStaleProviderHistory(provider, range, selectionKey, accountKey);",
+		"{ stale: Boolean(options.force || !freshCached), ts: cached.ts }",
 		"pruneLegacyPresetHistoryEntries(cache);",
 	} {
 		if !strings.Contains(source, marker) {

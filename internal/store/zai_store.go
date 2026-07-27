@@ -112,7 +112,7 @@ func (s *Store) QueryZaiRange(start, end time.Time, limit ...int) ([]*api.ZaiSna
 		 tokens_limit, tokens_unit, tokens_number, tokens_usage,
 		 tokens_current_value, tokens_remaining, tokens_percentage, tokens_next_reset
 		FROM zai_snapshots
-		WHERE captured_at BETWEEN ? AND ?
+		WHERE captured_at >= ? AND captured_at < ?
 		ORDER BY captured_at ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
@@ -126,7 +126,7 @@ func (s *Store) QueryZaiRange(start, end time.Time, limit ...int) ([]*api.ZaiSna
 					 tokens_limit, tokens_unit, tokens_number, tokens_usage,
 					 tokens_current_value, tokens_remaining, tokens_percentage, tokens_next_reset
 				FROM zai_snapshots
-				WHERE captured_at BETWEEN ? AND ?
+				WHERE captured_at >= ? AND captured_at < ?
 				ORDER BY captured_at DESC
 				LIMIT ?
 			) recent

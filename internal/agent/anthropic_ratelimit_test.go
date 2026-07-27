@@ -65,7 +65,7 @@ func TestAnthropicAgent_RateLimitBackoff_OAuthEndpoint429(t *testing.T) {
 	})
 
 	// Run for long enough to have multiple poll cycles
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -73,7 +73,10 @@ func TestAnthropicAgent_RateLimitBackoff_OAuthEndpoint429(t *testing.T) {
 		errCh <- agent.Run(ctx)
 	}()
 
-	<-ctx.Done()
+	waitUntil(t, 5*time.Second, func() bool {
+		return apiCalls.Load() >= 2 && oauthCalls.Load() == 1
+	}, "a second API poll without another OAuth refresh")
+	cancel()
 	select {
 	case <-errCh:
 	case <-time.After(2 * time.Second):

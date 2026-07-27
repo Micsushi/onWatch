@@ -144,14 +144,14 @@ func (s *Store) QueryLatestGemini() (*api.GeminiSnapshot, error) {
 // QueryGeminiRange returns Gemini snapshots within a time range.
 func (s *Store) QueryGeminiRange(start, end time.Time, limit ...int) ([]*api.GeminiSnapshot, error) {
 	query := `SELECT id, captured_at, tier, project_id, quota_count FROM gemini_snapshots
-		WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at ASC`
+		WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, tier, project_id, quota_count
 			FROM (
 				SELECT id, captured_at, tier, project_id, quota_count
 				FROM gemini_snapshots
-				WHERE captured_at BETWEEN ? AND ?
+				WHERE captured_at >= ? AND captured_at < ?
 				ORDER BY captured_at DESC
 				LIMIT ?
 			) recent
@@ -237,7 +237,7 @@ func (s *Store) QueryGeminiRangeSampled(start, end time.Time, maxPoints int) ([]
 				ROW_NUMBER() OVER (ORDER BY captured_at ASC) AS row_number,
 				COUNT(*) OVER () AS total_rows
 			FROM gemini_snapshots
-			WHERE captured_at BETWEEN ? AND ?
+			WHERE captured_at >= ? AND captured_at < ?
 		),
 		sampled AS (
 			SELECT id, captured_at, tier, project_id

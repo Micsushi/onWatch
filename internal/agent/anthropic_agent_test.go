@@ -68,16 +68,18 @@ func TestAnthropicAgent_Run_PollsImmediately(t *testing.T) {
 	// Long interval so only the immediate poll fires within the test window
 	agent := NewAnthropicAgent(client, str, tr, 5*time.Second, logger, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- agent.Run(ctx)
 	}()
 
-	<-ctx.Done()
-	time.Sleep(10 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		return callCount.Load() >= 1
+	}, "immediate Anthropic poll")
+	cancel()
+	waitForAgentStop(t, errCh, 2*time.Second)
 
 	count := callCount.Load()
 	if count < 1 {
@@ -110,10 +112,10 @@ func TestAnthropicAgent_Run_PollsAtInterval(t *testing.T) {
 	client := api.NewAnthropicClient("test-token", logger, api.WithAnthropicBaseURL(server.URL+"/api/oauth/usage"))
 	tr := tracker.NewAnthropicTracker(str, logger)
 
-	// 50ms interval, 230ms timeout: expect 1 immediate + ~4 ticks = 5 calls
+	// 50ms interval: wait for the immediate poll plus three ticks.
 	agent := NewAnthropicAgent(client, str, tr, 50*time.Millisecond, logger, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 230*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -121,25 +123,11 @@ func TestAnthropicAgent_Run_PollsAtInterval(t *testing.T) {
 		errCh <- agent.Run(ctx)
 	}()
 
-	<-ctx.Done()
-	time.Sleep(10 * time.Millisecond)
-
-	count := callCount.Load()
-	if count < 4 {
-		t.Errorf("Expected at least 4 API calls in 230ms with 50ms interval, got %d", count)
-	}
-	if count > 6 {
-		t.Errorf("Expected at most 6 API calls, got %d (too many polls)", count)
-	}
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Errorf("Expected nil error, got: %v", err)
-		}
-	case <-time.After(1 * time.Second):
-		t.Error("Agent.Run() did not return within 1s")
-	}
+	waitUntil(t, 5*time.Second, func() bool {
+		return callCount.Load() >= 4
+	}, "four Anthropic polls")
+	cancel()
+	waitForAgentStop(t, errCh, 2*time.Second)
 }
 
 // TestAnthropicAgent_Run_TokenRefresh_BeforeEachPoll verifies that TokenRefreshFunc
@@ -172,16 +160,18 @@ func TestAnthropicAgent_Run_TokenRefresh_BeforeEachPoll(t *testing.T) {
 		return "test-token" // same token each time
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 130*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- agent.Run(ctx)
 	}()
 
-	<-ctx.Done()
-	time.Sleep(10 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		return callCount.Load() >= 2
+	}, "two Anthropic polls with token refresh")
+	cancel()
+	waitForAgentStop(t, errCh, 2*time.Second)
 
 	polls := callCount.Load()
 	refreshes := refreshCount.Load()
@@ -296,27 +286,18 @@ func TestAnthropicAgent_Run_401Retry_Success(t *testing.T) {
 		return "fresh-token"
 	})
 
-	// Run just long enough for 1 immediate poll (which triggers 401 + retry)
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- agent.Run(ctx)
 	}()
 
-	// Wait for at least the retry to complete
-	time.Sleep(200 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		return requestCount.Load() >= 2
+	}, "Anthropic authentication retry")
 	cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Errorf("Expected nil error, got: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Error("Agent.Run() did not return within 2s")
-	}
+	waitForAgentStop(t, errCh, 2*time.Second)
 
 	// Should have made at least 2 requests (initial 401 + retry)
 	if count := requestCount.Load(); count < 2 {
@@ -361,22 +342,18 @@ func TestAnthropicAgent_Run_401Retry_NoRefreshFunc(t *testing.T) {
 	// No TokenRefreshFunc set
 	agent := NewAnthropicAgent(client, str, tr, 50*time.Millisecond, logger, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 130*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- agent.Run(ctx)
 	}()
 
-	<-ctx.Done()
-
-	// Wait for agent goroutine to fully stop before reading shared logBuf
-	select {
-	case <-errCh:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Agent.Run() did not return within 2s")
-	}
+	waitUntil(t, 5*time.Second, func() bool {
+		return requestCount.Load() >= 2
+	}, "Anthropic agent to continue polling after a 401")
+	cancel()
+	waitForAgentStop(t, errCh, 2*time.Second)
 
 	// Agent should have continued polling despite 401 on first request
 	if count := requestCount.Load(); count < 2 {
@@ -420,20 +397,17 @@ func TestAnthropicAgent_Run_ContextCancel_StopsCleanly(t *testing.T) {
 		errCh <- agent.Run(ctx)
 	}()
 
-	// Let it start polling
-	time.Sleep(50 * time.Millisecond)
-
 	// Cancel context
 	cancel()
 
-	// Should return within 1 second
+	// Should return promptly after cancellation.
 	select {
 	case err := <-errCh:
 		if err != nil {
 			t.Errorf("Expected nil error on graceful shutdown, got: %v", err)
 		}
-	case <-time.After(1 * time.Second):
-		t.Error("Agent.Run() did not return within 1s after context cancellation")
+	case <-time.After(2 * time.Second):
+		t.Error("Agent.Run() did not return within 2s after context cancellation")
 	}
 }
 

@@ -283,6 +283,7 @@ const PLATFORM_COST_HISTORY_CACHE_TTL_MS = 120000;
 const PROVIDER_CURRENT_CACHE_TTL_MS = 120000;
 const PROVIDER_HISTORY_CACHE_TTL_MS = 120000;
 const PROVIDER_INSIGHTS_CACHE_TTL_MS = 120000;
+const PROVIDER_CUSTOM_HISTORY_CACHE_LIMIT = 8;
 const PROVIDER_STALE_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 const GRAPH_SAVED_FALLBACK_MAX_MS = Number.MAX_SAFE_INTEGER;
 const DEFAULT_CHART_RANGE = '7d';
@@ -411,11 +412,26 @@ function pruneLegacyPresetHistoryEntries(cache) {
   });
 }
 
+function pruneOldestCacheEntries(cache, prefix, limit = PROVIDER_CUSTOM_HISTORY_CACHE_LIMIT) {
+  const matches = Object.keys(cache)
+    .filter(key => key.startsWith(prefix))
+    .sort((left, right) => Number(cache[right]?.ts || 0) - Number(cache[left]?.ts || 0));
+  matches.slice(limit).forEach(key => {
+    delete cache[key];
+  });
+}
+
 function setCachedProviderData(kind, provider, extra = '', payload = {}, accountOverride) {
   if (!provider || !payload) return;
   const cache = getProviderDataCache();
   if (kind === 'history') pruneLegacyPresetHistoryEntries(cache);
   cache[providerDataCacheKey(kind, provider, extra, accountOverride)] = { ts: Date.now(), ...payload };
+  if (kind === 'history') {
+    pruneOldestCacheEntries(
+      cache,
+      providerDataCacheKey(kind, provider, 'chart:custom:', accountOverride),
+    );
+  }
   writeJSONStorage(localStorage, PROVIDER_DATA_CACHE_KEY, cache);
 }
 
@@ -708,6 +724,7 @@ function setCachedPlatformCostHistory(provider, range, payload, scope = 'platfor
   if (!provider || !payload) return;
   const cache = State.platformCostHistoryCache || {};
   cache[platformCostCacheKey(provider, range, scope)] = { ts: Date.now(), ...payload };
+  pruneOldestCacheEntries(cache, `${provider}:${scope}:${scope}:custom:`);
   State.platformCostHistoryCache = cache;
   writeJSONStorage(localStorage, PLATFORM_COST_HISTORY_CACHE_KEY, cache);
 }
@@ -1346,19 +1363,28 @@ function selectedPlatformCostBreakdownRange() {
 function loadAPIIntegrationsPreferences() {
   try {
     const provider = getCurrentProvider();
-    State.currentRange = normalizeStoredChartRange(localStorage.getItem(CHART_RANGE_STORAGE_KEY))
-      || getScopedStoredRange(CHART_RANGE_STORAGE_KEY, provider)
+    const scopedMainRange = getScopedStoredRange(CHART_RANGE_STORAGE_KEY, provider);
+    State.currentRange = scopedMainRange
+      || normalizeStoredChartRange(localStorage.getItem(CHART_RANGE_STORAGE_KEY))
       || DEFAULT_CHART_RANGE;
+    if (!scopedMainRange) {
+      localStorage.setItem(scopedRangeStorageKey(CHART_RANGE_STORAGE_KEY, provider), State.currentRange);
+    }
     State.platformCostRange = getScopedStoredRange(PLATFORM_COST_RANGE_STORAGE_KEY, provider)
       || DEFAULT_CHART_RANGE;
     State.platformCostBreakdownRange = getScopedStoredRange(PLATFORM_COST_BREAKDOWN_RANGE_STORAGE_KEY, provider)
       || DEFAULT_CHART_RANGE;
-    const storedDates = readJSONStorage(localStorage, HISTORY_DATE_RANGE_STORAGE_KEY);
+    const scopedMainDatesKey = scopedRangeStorageKey(HISTORY_DATE_RANGE_STORAGE_KEY, provider);
+    const scopedMainDates = readJSONStorage(localStorage, scopedMainDatesKey);
+    const storedDates = scopedMainDates || readJSONStorage(localStorage, HISTORY_DATE_RANGE_STORAGE_KEY);
     if (storedDates && typeof storedDates === 'object') {
       State.historyWindowStart = storedDates.start || null;
       State.historyWindowEnd = storedDates.end || null;
       State.historyStartDate = storedDates.startDate || null;
       State.historyEndDate = storedDates.endDate || null;
+      if (!scopedMainDates) {
+        writeJSONStorage(localStorage, scopedMainDatesKey, storedDates);
+      }
     }
     const storedCostDates = readJSONStorage(localStorage, scopedRangeStorageKey(PLATFORM_COST_DATE_RANGE_STORAGE_KEY, provider));
     if (storedCostDates && typeof storedCostDates === 'object') {
@@ -1389,7 +1415,7 @@ function loadAPIIntegrationsPreferences() {
 
 function saveChartRange(range) {
   try {
-    localStorage.setItem(CHART_RANGE_STORAGE_KEY, normalizeChartRange(range));
+    localStorage.setItem(scopedRangeStorageKey(CHART_RANGE_STORAGE_KEY), normalizeChartRange(range));
   } catch (e) {
     // silent
   }
@@ -1528,7 +1554,7 @@ function persistHistoryWindow(scope = 'chart') {
     writeJSONStorage(localStorage, scopedRangeStorageKey(PLATFORM_COST_BREAKDOWN_DATE_RANGE_STORAGE_KEY), payload);
     return;
   }
-  writeJSONStorage(localStorage, HISTORY_DATE_RANGE_STORAGE_KEY, payload);
+  writeJSONStorage(localStorage, scopedRangeStorageKey(HISTORY_DATE_RANGE_STORAGE_KEY), payload);
 }
 
 function applyPresetHistoryWindow(range, now = new Date(), scope = 'chart') {
@@ -1578,10 +1604,19 @@ function historySelectionKey(range, scope = 'chart') {
 }
 
 function historyRequestQuery(range, scope = 'chart') {
+  const normalized = normalizeChartRange(range || historyScopeWindow(scope).range);
+  if (normalized !== 'custom') {
+    const windowRange = presetHistoryWindow(normalized, new Date());
+    return new URLSearchParams({
+      range: normalized,
+      start: windowRange.start.toISOString(),
+      end: windowRange.end.toISOString(),
+    }).toString();
+  }
   ensureHistoryWindow(scope);
   const windowState = historyScopeWindow(scope);
   return new URLSearchParams({
-    range: normalizeChartRange(range || windowState.range),
+    range: normalized,
     start: windowState.start,
     end: windowState.end,
   }).toString();
@@ -6033,36 +6068,6 @@ function renderPlatformCostChartForSelectedRange(provider = getCurrentProvider()
   renderPlatformCostChart(provider, selectedPlatformCostRange());
 }
 
-async function refreshAPIIntegrationsHistoryForCombinedView(range, requestSeq) {
-  try {
-    const res = await authFetch(`${API_BASE}/api/api-integrations/history?${historyRequestQuery(range)}`);
-    noteArchivedHistoryResponse(res, range);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (State.historyRequestSeq !== requestSeq) return;
-    if (getCurrentProvider() !== 'both' || State.currentRange !== range) return;
-
-    State.apiIntegrationsHistory = data;
-    State.platformCostHistoryRange = range;
-    State.allProvidersHistory = {
-      ...(State.allProvidersHistory || {}),
-      apiIntegrations: data,
-    };
-    updateCachedProviderData('history', 'both', historySelectionKey(range), {
-      apiIntegrationsHistory: data,
-    });
-    renderAllProvidersView();
-  } catch (e) {
-    // silent - API integrations history is optional secondary data
-  }
-}
-
-function scheduleAPIIntegrationsHistoryRefresh(range, requestSeq) {
-  window.setTimeout(() => {
-    refreshAPIIntegrationsHistoryForCombinedView(range, requestSeq);
-  }, 0);
-}
-
 function usageLineDataset(label, hiddenKey, rawData, color, range) {
   const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
   const border = color?.border || color || '#0D9488';
@@ -6219,12 +6224,33 @@ async function runUsageGraphRefreshJob(job, signal) {
     if (!response.ok) throw new Error('Failed to fetch history');
     usesArchivedData = response.headers.get('X-OnWatch-Archived-Data') === 'true';
     data = await response.json();
-    if (job.provider === 'both' && State.apiIntegrationsVisibility?.dashboard !== false) {
-      const apiResponse = await authFetch(`${API_BASE}/api/api-integrations/history?${job.query}`, { signal });
-      if (apiResponse.ok) {
-        usesArchivedData = usesArchivedData || apiResponse.headers.get('X-OnWatch-Archived-Data') === 'true';
-        apiIntegrationsHistory = await apiResponse.json();
+
+    if (job.provider === 'both') {
+      const cachedCostHistory = State.apiIntegrationsVisibility?.dashboard !== false
+        ? getStaleProviderHistory(job.provider, job.range, job.selectionKey, job.accountKey)?.apiIntegrationsHistory || null
+        : null;
+      const primaryPayload = { data, apiIntegrationsHistory: cachedCostHistory, chartDatasets: null, usesArchivedData };
+      setCachedProviderData('history', job.provider, job.selectionKey, primaryPayload, job.accountKey);
+      applyUsageGraphJob(job, primaryPayload);
+
+      if (State.apiIntegrationsVisibility?.dashboard !== false) {
+        try {
+          const apiResponse = await authFetch(`${API_BASE}/api/api-integrations/history?${job.query}`, { signal });
+          if (apiResponse.ok) {
+            usesArchivedData = usesArchivedData || apiResponse.headers.get('X-OnWatch-Archived-Data') === 'true';
+            apiIntegrationsHistory = await apiResponse.json();
+          }
+        } catch (error) {
+          if (signal.aborted) return;
+          // API integrations are optional in the combined view.
+        }
       }
+      if (signal.aborted || !apiIntegrationsHistory) return;
+
+      const combinedPayload = { data, apiIntegrationsHistory, chartDatasets: null, usesArchivedData };
+      setCachedProviderData('history', job.provider, job.selectionKey, combinedPayload, job.accountKey);
+      applyUsageGraphJob(job, combinedPayload);
+      return;
     }
   }
   if (signal.aborted) return;
@@ -6307,405 +6333,6 @@ async function fetchHistory(range, options = {}) {
   const result = enqueueGraphRefresh(job, { foreground: options.background !== true });
   result.then(() => scheduleUsageGraphWarmup(provider, accountKey, range)).catch(() => {});
   return result;
-}
-
-async function fetchHistoryLegacy(range, options = {}) {
-  if (range === undefined) {
-    range = selectedChartRange();
-  }
-  range = normalizeChartRange(range);
-  State.currentRange = range;
-  const requestProvider = getCurrentProvider();
-  const requestAccount = requestProvider === 'codex' ? State.codexAccount : null;
-  const requestRange = range;
-  const requestRangeKey = historySelectionKey(range);
-  const requestSeq = (State.historyRequestSeq || 0) + 1;
-  State.historyRequestSeq = requestSeq;
-
-  const cached = getStaleProviderHistory(requestProvider, range, requestRangeKey);
-  const freshCached = getCachedProviderData('history', requestProvider, requestRangeKey, PROVIDER_HISTORY_CACHE_TTL_MS);
-  let servedRenderableCache = false;
-  if (cached && cached.data) {
-    requestAnimationFrame(() => {
-      if (State.historyRequestSeq !== requestSeq) return;
-      if (getCurrentProvider() !== requestProvider) return;
-      if (requestProvider === 'codex' && State.codexAccount !== requestAccount) return;
-      if (State.currentRange !== requestRange) return;
-      if (cached.chartDatasets && requestProvider !== 'api-integrations' && requestProvider !== 'both') {
-        if (!State.chart) initChart();
-        setMainChartDatasets(cached.chartDatasets, range, { preserveExistingOnEmpty: true });
-        if (supportsPlatformCost(requestProvider)) renderPlatformCostChartForSelectedRange(requestProvider);
-      } else {
-        applyProviderHistoryPayload(requestProvider, range, cached.data, cached.apiIntegrationsHistory || null);
-      }
-      setDashboardFreshness({ stale: Boolean(options.force || !freshCached), ts: cached.ts });
-    });
-    servedRenderableCache = requestProvider === 'api-integrations' || requestProvider === 'both' || Boolean(cached.chartDatasets);
-  }
-  if (!options.force && freshCached && servedRenderableCache) return;
-
-  try {
-    if (requestProvider === 'api-integrations') {
-      const res = await authFetch(`${API_BASE}/api/api-integrations/history?${historyRequestQuery(range)}`);
-      noteArchivedHistoryResponse(res, range);
-      if (!res.ok) throw new Error('Failed to fetch API integrations history');
-      const data = await res.json();
-
-      if (State.historyRequestSeq !== requestSeq) return;
-      if (getCurrentProvider() !== requestProvider) return;
-      if (State.currentRange !== requestRange) return;
-
-      State.apiIntegrationsHistory = data;
-      State.platformCostHistoryRange = range;
-      setCachedProviderData('history', requestProvider, requestRangeKey, { data });
-      setDashboardFreshness({ stale: false });
-      renderAPIIntegrationsChart(range);
-      renderAPIIntegrationsInsights();
-      return;
-    }
-
-    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&${providerParam()}`);
-    if (!res.ok) throw new Error('Failed to fetch history');
-    const data = await res.json();
-
-    if (State.historyRequestSeq !== requestSeq) return;
-    if (getCurrentProvider() !== requestProvider) return;
-    if (requestProvider === 'codex' && State.codexAccount !== requestAccount) return;
-    if (State.currentRange !== requestRange) return;
-
-    const provider = requestProvider;
-    setCachedProviderData('history', requestProvider, requestRangeKey, {
-      data,
-      apiIntegrationsHistory: cached?.apiIntegrationsHistory || null,
-    });
-    setDashboardFreshness({ stale: false });
-
-    if (provider === 'both') {
-      if (cached?.apiIntegrationsHistory) {
-        data.apiIntegrations = cached.apiIntegrationsHistory;
-      }
-      State.allProvidersHistory = data;
-      renderAllProvidersView();
-      if (State.apiIntegrationsVisibility?.dashboard !== false) {
-        scheduleAPIIntegrationsHistoryRefresh(range, requestSeq);
-      }
-      return;
-    }
-
-    if (!State.chart) initChart();
-    if (!State.chart) return;
-
-    if (provider === 'antigravity') {
-      // Antigravity history: { labels: [...], datasets: [...] }
-      const defaultColors = ['#D97757', '#10B981', '#3B82F6'];
-      const labels = data.labels || [];
-      const datasets = [];
-      (data.datasets || []).forEach((ds, idx) => {
-        const rawData = (ds.data || []).map((y, i) => ({ x: new Date(labels[i]), y }));
-        const color = ds.borderColor || defaultColors[idx % defaultColors.length];
-        const { data: processedData, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
-        const mainDataset = {
-          label: ds.label || ds.modelId,
-          data: processedData,
-          borderColor: color,
-          backgroundColor: color + '15',
-          fill: true,
-          tension: 0.4,
-          borderWidth: 2,
-          pointRadius: pointRadii,
-          pointHoverRadius: 4,
-          hidden: State.hiddenQuotas.has(ds.modelId),
-          spanGaps: true,
-          segment: getSegmentStyle(gapSegments, color)
-        };
-        datasets.push(mainDataset);
-      });
-      setMainChartDatasets(datasets, range);
-      renderPlatformCostChartForSelectedRange(provider);
-      return;
-    }
-
-    const historyRows = Array.isArray(data) ? data : [];
-
-    if (provider === 'anthropic') {
-      // Anthropic history: array of { capturedAt, five_hour, seven_day, ... }
-      // Dynamic datasets based on available quota keys
-      const quotaKeys = new Set();
-      historyRows.forEach(d => {
-        Object.keys(d).forEach(k => { if (isHistoryQuotaKey(k)) quotaKeys.add(k); });
-      });
-      const sortedKeys = sortQuotaKeysForProvider(quotaKeys, 'anthropic');
-      let fallbackIdx = 0;
-      const datasets = [];
-      sortedKeys.forEach((key) => {
-        const color = anthropicChartColorMap[key] || anthropicChartColorFallback[fallbackIdx++ % anthropicChartColorFallback.length];
-        const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[key] != null ? d[key] : null }));
-        const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
-        const mainDataset = {
-          label: anthropicDisplayNames[key] || key,
-          data: data,
-          borderColor: color.border,
-          backgroundColor: color.bg,
-          fill: true, tension: 0.4, borderWidth: 2,
-          pointRadius: pointRadii,
-          pointHoverRadius: 4,
-          hidden: State.hiddenQuotas.has(key),
-          spanGaps: true,
-          segment: getSegmentStyle(gapSegments, color.border)
-        };
-        datasets.push(mainDataset);
-      });
-      setMainChartDatasets(datasets, range);
-      renderPlatformCostChartForSelectedRange(provider);
-      return;
-    }
-
-    if (provider === 'copilot') {
-      // Copilot history: array of { capturedAt, quotas: [...] } -> transform to flat object
-      // Extract quota keys and build datasets
-      const quotaKeys = new Set();
-      historyRows.forEach(d => {
-        if (d.quotas) d.quotas.forEach(q => quotaKeys.add(q.name));
-      });
-      const sortedKeys = [...quotaKeys].sort();
-      let fallbackIdx = 0;
-      const datasets = [];
-      sortedKeys.forEach((key) => {
-        const color = copilotChartColorMap[key] || copilotChartColorFallback[fallbackIdx++ % copilotChartColorFallback.length];
-        const rawData = historyRows.map(d => {
-          const q = d.quotas ? d.quotas.find(q => q.name === key) : null;
-          return { x: new Date(d.capturedAt), y: q ? (q.usagePercent || 0) : 0 };
-        });
-        const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
-        const mainDataset = {
-          label: copilotDisplayNames[key] || key,
-          data: data,
-          borderColor: color.border,
-          backgroundColor: color.bg,
-          fill: true, tension: 0.4, borderWidth: 2,
-          pointRadius: pointRadii,
-          pointHoverRadius: 4,
-          hidden: State.hiddenQuotas.has(key),
-          spanGaps: true,
-          segment: getSegmentStyle(gapSegments, color.border)
-        };
-        datasets.push(mainDataset);
-      });
-      setMainChartDatasets(datasets, range);
-      renderPlatformCostChartForSelectedRange(provider);
-      return;
-    }
-
-    if (provider === 'cursor') {
-      const quotaKeys = new Set();
-      historyRows.forEach(d => {
-        if (Array.isArray(d.quotas)) d.quotas.forEach(q => quotaKeys.add(q.name));
-      });
-      const sortedKeys = sortQuotaKeysForProvider(quotaKeys, 'cursor');
-      let fallbackIdx = 0;
-      const datasets = [];
-      sortedKeys.forEach((key) => {
-        const color = cursorChartColorMap[key] || cursorChartColorFallback[fallbackIdx++ % cursorChartColorFallback.length];
-        const rawData = historyRows.map(d => {
-          const q = Array.isArray(d.quotas) ? d.quotas.find(quota => quota.name === key) : null;
-          return { x: new Date(d.capturedAt), y: q ? (q.utilization || 0) : 0 };
-        });
-        const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
-        datasets.push({
-          label: cursorDisplayNames[key] || key,
-          data: data,
-          borderColor: color.border,
-          backgroundColor: color.bg,
-          fill: true,
-          tension: 0.4,
-          borderWidth: 2,
-          pointRadius: pointRadii,
-          pointHoverRadius: 4,
-          hidden: State.hiddenQuotas.has(key),
-          spanGaps: true,
-          segment: getSegmentStyle(gapSegments, color.border)
-        });
-      });
-      setMainChartDatasets(datasets, range);
-      renderPlatformCostChartForSelectedRange(provider);
-      return;
-    }
-
-    if (provider === 'minimax') {
-      const quotaKeys = new Set();
-      historyRows.forEach(d => {
-        Object.keys(d).forEach(k => { if (isHistoryQuotaKey(k)) quotaKeys.add(k); });
-      });
-      const sortedKeys = [...quotaKeys].sort();
-      let fallbackIdx = 0;
-      const datasets = [];
-      sortedKeys.forEach((key) => {
-        const color = minimaxChartColorMap[key] || minimaxChartColorFallback[fallbackIdx++ % minimaxChartColorFallback.length];
-        const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[key] || 0 }));
-        const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
-        const mainDataset = {
-          label: minimaxDisplayNames[key] || key,
-          data: data,
-          borderColor: color.border,
-          backgroundColor: color.bg,
-          fill: true,
-          tension: 0.4,
-          borderWidth: 2,
-          pointRadius: pointRadii,
-          pointHoverRadius: 4,
-          hidden: State.hiddenQuotas.has(key),
-          spanGaps: true,
-          segment: getSegmentStyle(gapSegments, color.border)
-        };
-        datasets.push(mainDataset);
-      });
-      setMainChartDatasets(datasets, range);
-      renderPlatformCostChartForSelectedRange(provider);
-      return;
-    }
-
-    if (provider === 'gemini') {
-      const quotaKeys = new Set();
-      historyRows.forEach(d => {
-        Object.keys(d).forEach(k => { if (isHistoryQuotaKey(k)) quotaKeys.add(k); });
-      });
-      const sortedKeys = [...quotaKeys].sort();
-      let fallbackIdx = 0;
-      const datasets = [];
-      sortedKeys.forEach((key) => {
-        const color = geminiChartColorMap[key] || geminiChartColorFallback[fallbackIdx++ % geminiChartColorFallback.length];
-        const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[key] || 0 }));
-        const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
-        const mainDataset = {
-          label: geminiDisplayNames[key] || key,
-          data: data,
-          borderColor: color.border,
-          backgroundColor: color.bg,
-          fill: true,
-          tension: 0.4,
-          borderWidth: 2,
-          pointRadius: pointRadii,
-          pointHoverRadius: 4,
-          hidden: State.hiddenQuotas.has(key),
-          spanGaps: true,
-          segment: getSegmentStyle(gapSegments, color.border)
-        };
-        datasets.push(mainDataset);
-      });
-      setMainChartDatasets(datasets, range);
-      renderPlatformCostChartForSelectedRange(provider);
-      return;
-    }
-
-    if (provider === 'openrouter') {
-      const quotaKeys = new Set();
-      historyRows.forEach(d => {
-        Object.keys(d).forEach(k => { if (isHistoryQuotaKey(k)) quotaKeys.add(k); });
-      });
-      const sortedKeys = [...quotaKeys].sort();
-      const openrouterDisplayNames = { usage: 'Total Usage', usageDaily: 'Daily Usage', percent: 'Usage %' };
-      const openrouterChartColors = {
-        usage: { border: '#0D9488', bg: 'rgba(13, 148, 136, 0.06)' },
-        usageDaily: { border: '#F59E0B', bg: 'rgba(245, 158, 11, 0.06)' },
-        percent: { border: '#3B82F6', bg: 'rgba(59, 130, 246, 0.06)' }
-      };
-      const openrouterFallback = [
-        { border: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.06)' },
-        { border: '#EC4899', bg: 'rgba(236, 72, 153, 0.06)' }
-      ];
-      let fallbackIdx = 0;
-      const datasets = [];
-      sortedKeys.forEach((key) => {
-        const color = openrouterChartColors[key] || openrouterFallback[fallbackIdx++ % openrouterFallback.length];
-        const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[key] || 0 }));
-        const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
-        datasets.push({
-          label: openrouterDisplayNames[key] || key,
-          data: data,
-          borderColor: color.border,
-          backgroundColor: color.bg,
-          fill: true,
-          tension: 0.4,
-          borderWidth: 2,
-          pointRadius: pointRadii,
-          pointHoverRadius: 4,
-          hidden: State.hiddenQuotas.has(key),
-          spanGaps: true,
-          segment: getSegmentStyle(gapSegments, color.border)
-        });
-      });
-      setMainChartDatasets(datasets, range);
-      return;
-    }
-
-    if (provider === 'codex') {
-      // Codex history: array of { capturedAt, five_hour, seven_day, ... }
-      const quotaKeys = new Set();
-      historyRows.forEach(d => {
-        Object.keys(d).forEach(k => { if (isHistoryQuotaKey(k)) quotaKeys.add(k); });
-      });
-      const sortedKeys = sortQuotaKeysForProvider(quotaKeys, 'codex');
-      let fallbackIdx = 0;
-      const datasets = [];
-      sortedKeys.forEach((key) => {
-        const color = codexChartColorMap[key] || codexChartColorFallback[fallbackIdx++ % codexChartColorFallback.length];
-        const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[key] || 0 }));
-        const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
-        const mainDataset = {
-          label: codexDisplayNames[key] || key,
-          data: data,
-          borderColor: color.border,
-          backgroundColor: color.bg,
-          fill: true, tension: 0.4, borderWidth: 2, pointRadius: pointRadii, pointHoverRadius: 4,
-          hidden: State.hiddenQuotas.has(key),
-          spanGaps: true,
-          segment: getSegmentStyle(gapSegments, color.border)
-        };
-        datasets.push(mainDataset);
-      });
-      setMainChartDatasets(datasets, range);
-      return;
-    }
-
-    if (provider === 'zai') {
-      const style = getComputedStyle(document.documentElement);
-      const datasets = [];
-      const configs = [
-        { label: 'Tokens', key: 'tokensPercent', hiddenKey: 'tokensLimit', color: style.getPropertyValue('--chart-subscription').trim() || '#0D9488', bg: 'rgba(13, 148, 136, 0.06)' },
-        { label: 'Time', key: 'timePercent', hiddenKey: 'timeLimit', color: style.getPropertyValue('--chart-search').trim() || '#F59E0B', bg: 'rgba(245, 158, 11, 0.06)' },
-        { label: 'Tool Calls', key: 'toolCallsPercent', hiddenKey: 'toolCalls', color: style.getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', bg: 'rgba(59, 130, 246, 0.06)' }
-      ];
-      configs.forEach(cfg => {
-        const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[cfg.key] }));
-        const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
-        const mainDataset = { label: cfg.label, data: data, borderColor: cfg.color, backgroundColor: cfg.bg, fill: true, tension: 0.4, borderWidth: 2, pointRadius: pointRadii, pointHoverRadius: 4, hidden: State.hiddenQuotas.has(cfg.hiddenKey), spanGaps: true, segment: getSegmentStyle(gapSegments, cfg.color) };
-        datasets.push(mainDataset);
-      });
-      State.chart.data.datasets = datasets;
-    } else {
-      const datasets = [];
-      const configs = [
-        { label: 'Subscription', key: 'subscriptionPercent', hiddenKey: 'subscription', color: '#0D9488', bg: 'rgba(13, 148, 136, 0.06)' },
-        { label: 'Search', key: 'searchPercent', hiddenKey: 'search', color: '#F59E0B', bg: 'rgba(245, 158, 11, 0.06)' },
-        { label: 'Tool Calls', key: 'toolCallsPercent', hiddenKey: 'toolCalls', color: '#3B82F6', bg: 'rgba(59, 130, 246, 0.06)' }
-      ];
-      configs.forEach(cfg => {
-        const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[cfg.key] }));
-        const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
-        const mainDataset = { label: cfg.label, data: data, borderColor: cfg.color, backgroundColor: cfg.bg, fill: true, tension: 0.4, borderWidth: 2, pointRadius: pointRadii, pointHoverRadius: 4, hidden: State.hiddenQuotas.has(cfg.hiddenKey), spanGaps: true, segment: getSegmentStyle(gapSegments, cfg.color) };
-        datasets.push(mainDataset);
-      });
-      State.chart.data.datasets = datasets;
-    }
-
-    setMainChartDatasets(State.chart.data.datasets, range);
-    renderPlatformCostChartForSelectedRange(provider);
-  } catch (err) {
-    // history fetch error - chart shows empty state
-    if (State.historyRequestSeq === requestSeq && getCurrentProvider() === requestProvider) {
-      setDashboardFreshness({ stale: true });
-    }
-  }
 }
 
 // "Both" Mode: Provider Cards
@@ -10714,7 +10341,7 @@ function applyCustomHistoryDates(scope, startDate, endDate) {
   }
   const start = historyDateStartUTC(startDate);
   const end = historyDateStartUTC(historyDatePlusDays(endDate, 1));
-  if (!start || !end || !start.getTime() || !end.getTime()) {
+  if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
     setGraphHistoryRangeError(scope, 'Choose a valid start and end date.');
     return false;
   }

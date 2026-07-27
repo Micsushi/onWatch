@@ -42,6 +42,51 @@ func TestStore_InsertAPIIntegrationUsageEvent_Dedup(t *testing.T) {
 	}
 }
 
+func TestStore_CompactAPIIntegrationMetadataJSON(t *testing.T) {
+	t.Parallel()
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	insertAPIIntegrationUsageEventForTest(t, s,
+		`{"ts":"2026-04-03T12:00:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6","prompt_tokens":10,"completion_tokens":5}`,
+		"/tmp/api-integrations/codex.jsonl",
+	)
+	const legacyMetadata = `{"session_id":"session-1","reasoning_effort":"high","input_tokens":10,"custom":"keep-me"}`
+	if _, err := s.db.Exec(`UPDATE api_integration_usage_events SET metadata_json = ?`, legacyMetadata); err != nil {
+		t.Fatalf("seed legacy metadata: %v", err)
+	}
+
+	updated, err := s.CompactAPIIntegrationMetadataJSON()
+	if err != nil {
+		t.Fatalf("CompactAPIIntegrationMetadataJSON: %v", err)
+	}
+	if updated != 1 {
+		t.Fatalf("updated=%d want 1", updated)
+	}
+
+	var metadata string
+	if err := s.db.QueryRow(`SELECT metadata_json FROM api_integration_usage_events`).Scan(&metadata); err != nil {
+		t.Fatalf("read compacted metadata: %v", err)
+	}
+	if strings.Contains(metadata, "session_id") || strings.Contains(metadata, "reasoning_effort") || strings.Contains(metadata, "input_tokens") {
+		t.Fatalf("duplicated metadata survived compaction: %q", metadata)
+	}
+	if !strings.Contains(metadata, `"custom":"keep-me"`) {
+		t.Fatalf("custom metadata was removed: %q", metadata)
+	}
+
+	updated, err = s.CompactAPIIntegrationMetadataJSON()
+	if err != nil {
+		t.Fatalf("second CompactAPIIntegrationMetadataJSON: %v", err)
+	}
+	if updated != 0 {
+		t.Fatalf("second compaction updated=%d want 0", updated)
+	}
+}
+
 func TestStore_InsertAPIIntegrationUsageEvent_DuplicateUpdatesMetadata(t *testing.T) {
 	t.Parallel()
 	s, err := New(":memory:")
