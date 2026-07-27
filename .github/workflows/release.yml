@@ -17,15 +17,46 @@ permissions:
   packages: write
 
 jobs:
-  # Run tests once before building
-  test:
-    if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, server1, onwatch]
-    name: Test
+  validate-release-ref:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      verified_sha: ${{ steps.verify.outputs.verified_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release tag belongs to main
+        id: verify
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "ERROR: invalid release tag: $TAG"
+            exit 1
+          fi
+
+          git fetch --no-tags origin main
+          VERIFIED_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+          git merge-base --is-ancestor "$VERIFIED_SHA" origin/main
+          echo "verified_sha=$VERIFIED_SHA" >> "$GITHUB_OUTPUT"
+
+  # Run tests once before building
+  test:
+    needs: validate-release-ref
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, server1, onwatch]
+    name: Test
+    outputs:
+      verified_sha: ${{ needs.validate-release-ref.outputs.verified_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate-release-ref.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -57,7 +88,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -92,7 +124,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -127,7 +160,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -159,7 +193,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -185,7 +220,7 @@ jobs:
 
   # Create GitHub release with all binaries
   release:
-    needs: [build-standard, build-macos-amd64, build-macos-arm64, build-linux-desktop]
+    needs: [test, build-standard, build-macos-amd64, build-macos-arm64, build-linux-desktop]
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, server1, onwatch]
     name: Release
@@ -193,7 +228,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Download all artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -223,7 +259,7 @@ jobs:
 
   # Build and push Docker image (after release is created)
   docker:
-    needs: release
+    needs: [test, release]
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, server1, onwatch]
     name: Docker
@@ -232,7 +268,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
           persist-credentials: false
 
       - name: Set up QEMU
@@ -312,7 +348,7 @@ jobs:
 
   # Update Homebrew formula with new version and checksums
   homebrew:
-    needs: [release, docker]
+    needs: [test, release, docker]
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, server1, onwatch]
     name: Update Homebrew Formula
@@ -320,7 +356,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Read version
         id: version

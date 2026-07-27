@@ -58,6 +58,29 @@ func TestReleaseLinuxJobsRequireMainAndServer1(t *testing.T) {
 	}
 }
 
+func TestReleaseValidatesTagBeforePersistentRunnerCheckout(t *testing.T) {
+	release := workflow(t, "release.yml")
+	for _, marker := range []string{
+		"validate-release-ref:",
+		"runs-on: ubuntu-latest",
+		"git merge-base --is-ancestor",
+		"refs/tags/$TAG",
+		"verified_sha",
+	} {
+		if !strings.Contains(release, marker) {
+			t.Errorf("release ref validation is missing %q", marker)
+		}
+	}
+	if strings.Contains(release, "ref: ${{ inputs.tag }}") {
+		t.Fatal("release jobs must checkout the immutable verified SHA, not the unvalidated input")
+	}
+	validateAt := strings.Index(release, "  validate-release-ref:")
+	firstPersistentRunnerAt := strings.Index(release, "runs-on: [self-hosted, Linux, X64, server1, onwatch]")
+	if validateAt < 0 || firstPersistentRunnerAt < 0 || validateAt > firstPersistentRunnerAt {
+		t.Fatal("hosted release-ref validation must precede every persistent-runner job")
+	}
+}
+
 func TestSelfHostedActionsAreCommitPinned(t *testing.T) {
 	for _, name := range []string{"ci.yml", "release.yml"} {
 		source := workflow(t, name)
