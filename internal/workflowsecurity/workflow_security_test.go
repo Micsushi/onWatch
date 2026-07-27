@@ -15,7 +15,7 @@ func workflow(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(content)
+	return strings.ReplaceAll(string(content), "\r\n", "\n")
 }
 
 func TestPublicPullRequestsStayOnHostedRunners(t *testing.T) {
