@@ -17,17 +17,49 @@ permissions:
   packages: write
 
 jobs:
+  validate-release-ref:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      verified_sha: ${{ steps.verify.outputs.verified_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release tag belongs to main
+        id: verify
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "ERROR: invalid release tag: $TAG"
+            exit 1
+          fi
+
+          git fetch --no-tags origin main
+          VERIFIED_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+          git merge-base --is-ancestor "$VERIFIED_SHA" origin/main
+          echo "verified_sha=$VERIFIED_SHA" >> "$GITHUB_OUTPUT"
+
   # Run tests once before building
   test:
-    runs-on: ubuntu-latest
+    needs: validate-release-ref
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, server1, onwatch]
     name: Test
+    outputs:
+      verified_sha: ${{ needs.validate-release-ref.outputs.verified_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.validate-release-ref.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -36,6 +68,7 @@ jobs:
 
   build-standard:
     needs: test
+    if: github.ref == 'refs/heads/main'
     strategy:
       matrix:
         include:
@@ -49,16 +82,17 @@ jobs:
             goarch: amd64
             binary: onwatch-windows-amd64.exe
 
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, server1, onwatch]
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -76,30 +110,30 @@ jobs:
             -o ${{ matrix.binary }} .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.binary }}
           path: ${{ matrix.binary }}
 
   build-linux-desktop:
     needs: test
-    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, server1, onwatch]
     name: Build Linux desktop (amd64)
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
       - name: Install GTK and WebKitGTK dev libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+        run: dpkg-query -W libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
 
       - name: Read version
         id: version
@@ -113,7 +147,7 @@ jobs:
             -o onwatch-linux-amd64-desktop .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: onwatch-linux-amd64-desktop
           path: onwatch-linux-amd64-desktop
@@ -124,12 +158,13 @@ jobs:
     name: Build macOS amd64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -145,7 +180,7 @@ jobs:
             -o onwatch-darwin-amd64 .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: onwatch-darwin-amd64
           path: onwatch-darwin-amd64
@@ -156,12 +191,13 @@ jobs:
     name: Build macOS arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -177,24 +213,26 @@ jobs:
             -o onwatch-darwin-arm64 .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: onwatch-darwin-arm64
           path: onwatch-darwin-arm64
 
   # Create GitHub release with all binaries
   release:
-    needs: [build-standard, build-macos-amd64, build-macos-arm64, build-linux-desktop]
-    runs-on: ubuntu-latest
+    needs: [test, build-standard, build-macos-amd64, build-macos-arm64, build-linux-desktop]
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, server1, onwatch]
     name: Release
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
@@ -221,25 +259,26 @@ jobs:
 
   # Build and push Docker image (after release is created)
   docker:
-    needs: release
-    runs-on: ubuntu-latest
+    needs: [test, release]
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, server1, onwatch]
     name: Docker
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
           persist-credentials: false
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -257,7 +296,7 @@ jobs:
       # Build Alpine variant first (issue #34)
       - name: Extract metadata for Alpine variant
         id: meta-alpine
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -266,7 +305,7 @@ jobs:
             type=raw,value=alpine
 
       - name: Build and push Docker image (Alpine with shell)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           target: runtime-shell
@@ -283,7 +322,7 @@ jobs:
       # Build distroless last so its `latest` tag is the final push
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -293,7 +332,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push Docker image (distroless)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           target: runtime
@@ -309,14 +348,16 @@ jobs:
 
   # Update Homebrew formula with new version and checksums
   homebrew:
-    needs: [release, docker]
-    runs-on: ubuntu-latest
+    needs: [test, release, docker]
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, server1, onwatch]
     name: Update Homebrew Formula
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.test.outputs.verified_sha }}
+          persist-credentials: false
 
       - name: Read version
         id: version

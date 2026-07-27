@@ -437,9 +437,14 @@ func TestZaiAgent_SetPollingCheck_DisablesPolling(t *testing.T) {
 
 func TestCodexAgent_SetCredentialsRefresh(t *testing.T) {
 	t.Parallel()
+	requestSeen := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":45.2,"reset_at":1766000000,"limit_window_seconds":18000}}}`))
+		select {
+		case requestSeen <- struct{}{}:
+		default:
+		}
 	}))
 	defer server.Close()
 
@@ -465,17 +470,33 @@ func TestCodexAgent_SetCredentialsRefresh(t *testing.T) {
 		}
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- agent.Run(ctx)
 	}()
-	<-ctx.Done()
+
+	select {
+	case <-requestSeen:
+	case <-ctx.Done():
+		t.Fatal("Codex agent did not poll before the test deadline")
+	}
+
+	var latest *api.CodexSnapshot
+	for latest == nil && ctx.Err() == nil {
+		latest, err = str.QueryLatestCodex(store.DefaultCodexAccountID)
+		if err != nil {
+			t.Fatalf("QueryLatestCodex: %v", err)
+		}
+		if latest == nil {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	cancel()
 	waitForAgentStop(t, errCh, 3*time.Second)
 
-	latest, _ := str.QueryLatestCodex(1)
 	if latest == nil {
 		t.Fatal("expected Codex snapshot after poll")
 	}
