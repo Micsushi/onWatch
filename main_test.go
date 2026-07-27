@@ -77,22 +77,30 @@ func TestPollHealthMonitorWiringStartsOnceBeforeAgentsAndJoinsBeforeStoreClose(t
 	agentStartAt := strings.Index(source, "agentMgr.Start(providerKey)")
 	cancelAt := strings.LastIndex(source, "\n\tcancel()")
 	joinAt := strings.Index(source, "<-pollHealthMonitorDone")
+	deliveryJoinAt := strings.Index(source, "notifier.ShutdownPollHealthDeliveries()")
 	storeCloseAt := strings.LastIndex(source, "if err := db.Close()")
-	if startAt < 0 || agentStartAt < 0 || cancelAt < 0 || joinAt < 0 || storeCloseAt < 0 {
+	if startAt < 0 || agentStartAt < 0 || cancelAt < 0 || joinAt < 0 || deliveryJoinAt < 0 || storeCloseAt < 0 {
 		t.Fatalf(
-			"missing lifecycle marker: start=%d agent=%d cancel=%d join=%d close=%d",
+			"missing lifecycle marker: start=%d agent=%d cancel=%d monitor_join=%d delivery_join=%d close=%d",
 			startAt,
 			agentStartAt,
 			cancelAt,
 			joinAt,
+			deliveryJoinAt,
 			storeCloseAt,
 		)
 	}
 	if startAt >= agentStartAt {
 		t.Fatalf("poll-health monitor starts after provider agents: start=%d agent=%d", startAt, agentStartAt)
 	}
-	if !(cancelAt < joinAt && joinAt < storeCloseAt) {
-		t.Fatalf("shutdown order must be cancel, monitor join, store close: cancel=%d join=%d close=%d", cancelAt, joinAt, storeCloseAt)
+	if !(cancelAt < joinAt && joinAt < deliveryJoinAt && deliveryJoinAt < storeCloseAt) {
+		t.Fatalf(
+			"shutdown order must be cancel, monitor join, delivery join, store close: cancel=%d monitor_join=%d delivery_join=%d close=%d",
+			cancelAt,
+			joinAt,
+			deliveryJoinAt,
+			storeCloseAt,
+		)
 	}
 }
 

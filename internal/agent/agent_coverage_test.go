@@ -460,13 +460,14 @@ func TestCodexAgent_SetCredentialsRefresh(t *testing.T) {
 
 	agent := NewCodexAgent(client, str, tr, 5*time.Second, logger, nil)
 
-	// Set a credentials refresh function that returns non-expiring credentials
+	// Keep expiry beyond the six-hour proactive refresh threshold so this test
+	// exercises polling without making a real OAuth request.
 	agent.SetCredentialsRefresh(func() *api.CodexCredentials {
 		return &api.CodexCredentials{
 			AccessToken:  "test-token",
 			RefreshToken: "test-refresh",
-			ExpiresIn:    2 * time.Hour, // Not expiring soon
-			ExpiresAt:    time.Now().Add(2 * time.Hour),
+			ExpiresIn:    12 * time.Hour,
+			ExpiresAt:    time.Now().Add(12 * time.Hour),
 		}
 	})
 

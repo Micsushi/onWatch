@@ -2,12 +2,14 @@ package notify
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -313,6 +315,49 @@ func TestSMTPMailer_Send_PlainSMTP(t *testing.T) {
 
 	if mailCount.Load() != 1 {
 		t.Errorf("Expected 1 mail sent, got %d", mailCount.Load())
+	}
+}
+
+func TestSMTPMailer_SendContextReturnsOnCancellation(t *testing.T) {
+	accepted := make(chan struct{})
+	release := make(chan struct{})
+	addr, listener := mockSMTPServer(t, func(conn net.Conn) {
+		close(accepted)
+		<-release
+		_ = conn.Close()
+	})
+	defer func() {
+		close(release)
+		_ = listener.Close()
+	}()
+
+	host, port := splitHostPort(t, addr)
+	mailer := NewSMTPMailer(SMTPConfig{
+		Host:     host,
+		Port:     port,
+		Protocol: "none",
+		FromAddr: "sender@test.com",
+		ToAddrs:  []string{"recipient@test.com"},
+	}, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- mailer.SendContext(ctx, "Subject", "Body")
+	}()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("SMTP connection did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("SendContext error = %v, want context cancellation", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("SMTP send ignored context cancellation")
 	}
 }
 

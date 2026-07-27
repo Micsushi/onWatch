@@ -191,14 +191,17 @@ func TestRestart_SpawnsAppliedBinary(t *testing.T) {
 
 	for i := 0; i < 40; i++ {
 		if data, err := os.ReadFile(markerPath); err == nil {
-			if string(data) != "spawned" {
-				t.Fatalf("spawn marker = %q, want spawned", string(data))
+			if string(data) == "spawned" {
+				return
 			}
-			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("spawned marker was not written by restarted process")
+	data, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("spawned marker was not written by restarted process: %v", err)
+	}
+	t.Fatalf("spawn marker = %q, want spawned", string(data))
 }
 
 func TestRestart_SystemdBranchUsesSystemctl(t *testing.T) {

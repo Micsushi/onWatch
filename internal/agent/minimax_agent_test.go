@@ -62,12 +62,17 @@ func TestMiniMaxAgent_SinglePoll(t *testing.T) {
 	t.Parallel()
 	ag, s, _ := setupMiniMaxAgentTest(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-
-	go ag.Run(ctx)
-	time.Sleep(250 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- ag.Run(ctx)
+	}()
+	waitUntil(t, 5*time.Second, func() bool {
+		latest, err := s.QueryLatestMiniMax(2)
+		return err == nil && latest != nil
+	}, "MiniMax snapshot after polling")
 	cancel()
+	waitForAgentStop(t, errCh, 2*time.Second)
 
 	latest, err := s.QueryLatestMiniMax(2)
 	if err != nil {

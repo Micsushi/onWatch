@@ -190,12 +190,18 @@ func TestAgent_ProcessesWithTracker(t *testing.T) {
 
 	agent := New(client, str, tr, 50*time.Millisecond, logger, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 125*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- agent.Run(ctx)
+	}()
 
-	go agent.Run(ctx)
-	<-ctx.Done()
-	time.Sleep(10 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		activeCycle, err := str.QueryActiveCycle("subscription")
+		return err == nil && activeCycle != nil
+	}, "tracker to create an active subscription cycle")
+	cancel()
+	waitForAgentStop(t, errCh, 2*time.Second)
 
 	// Check that cycles were created (indicates tracker processed snapshots)
 	cycles, _ := str.QueryCycleHistory("subscription")
@@ -203,7 +209,10 @@ func TestAgent_ProcessesWithTracker(t *testing.T) {
 		t.Logf("Found %d completed subscription cycles", len(cycles))
 	}
 
-	activeCycle, _ := str.QueryActiveCycle("subscription")
+	activeCycle, err := str.QueryActiveCycle("subscription")
+	if err != nil {
+		t.Fatalf("QueryActiveCycle: %v", err)
+	}
 	if activeCycle == nil {
 		t.Error("Expected active subscription cycle to exist")
 	}

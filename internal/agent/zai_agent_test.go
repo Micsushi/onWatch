@@ -278,23 +278,19 @@ func TestZaiAgent_Run_SessionManagerReportsPoll(t *testing.T) {
 	sm := NewSessionManager(str, "zai", 10*time.Second, logger)
 	agent := NewZaiAgent(client, str, tr, 50*time.Millisecond, logger, sm)
 
-	// Run long enough for multiple polls (values change each time -> session created)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- agent.Run(ctx)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	waitUntil(t, 5*time.Second, func() bool {
+		sessions, err := str.QuerySessionHistory("zai")
+		return err == nil && len(sessions) > 0
+	}, "Z.ai usage session after changing poll values")
 	cancel()
-
-	select {
-	case <-errCh:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Agent.Run() did not return within 2s")
-	}
+	waitForAgentStop(t, errCh, 2*time.Second)
 
 	// The session manager should have received poll values and created a session
 	// (since values change each poll, session should be detected after 2nd poll)

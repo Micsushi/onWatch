@@ -52,6 +52,7 @@ func newPollHealthEngine(t *testing.T) (*NotificationEngine, *store.Store, *time
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	engine.now = func() time.Time { return now }
 	engine.pollHealthGrace = 0
+	engine.pollHealthAsync = false
 	engine.cfg.PollFailureThreshold = 3
 	engine.cfg.PollFailureRepeat = 6 * time.Hour
 	engine.cfg.NotifyPollFailure = true
@@ -121,6 +122,43 @@ func TestPollHealthFirstFailureCreatesInAppOnly(t *testing.T) {
 	if capture.count() != 0 {
 		t.Fatalf("first failure sent %d external messages", capture.count())
 	}
+}
+
+func TestPollHealthExternalDeliveryDoesNotBlockPollOutcome(t *testing.T) {
+	engine, _, _, _ := newPollHealthEngine(t)
+	engine.cfg.PollFailureThreshold = 2
+	engine.pollHealthAsync = true
+
+	deliveryStarted := make(chan struct{})
+	releaseDelivery := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(deliveryStarted)
+		<-releaseDelivery
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	engine.discord = &DiscordSender{webhookURL: server.URL, client: server.Client()}
+
+	engine.RecordPollFailure("codex", "acct-1", "network", "first")
+	recorded := make(chan struct{})
+	go func() {
+		engine.RecordPollFailure("codex", "acct-1", "network", "second")
+		close(recorded)
+	}()
+
+	select {
+	case <-deliveryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("external delivery did not start")
+	}
+	select {
+	case <-recorded:
+	case <-time.After(100 * time.Millisecond):
+		close(releaseDelivery)
+		t.Fatal("poll outcome waited for external delivery")
+	}
+	close(releaseDelivery)
+	engine.ShutdownPollHealthDeliveries()
 }
 
 func TestPollHealthThresholdSendsExternalOnce(t *testing.T) {

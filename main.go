@@ -1561,6 +1561,7 @@ func run() error {
 	cancel()
 	agentMgr.StopAll()
 	<-pollHealthMonitorDone
+	notifier.ShutdownPollHealthDeliveries()
 	_ = stopMenubarProcess(cfg.TestMode)
 
 	// Give agent a moment to clean up

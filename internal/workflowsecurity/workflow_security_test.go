@@ -81,6 +81,16 @@ func TestReleaseValidatesTagBeforePersistentRunnerCheckout(t *testing.T) {
 	}
 }
 
+func TestReleaseRerunDoesNotDeletePublishedRelease(t *testing.T) {
+	release := workflow(t, "release.yml")
+	if strings.Contains(release, "gh release delete") {
+		t.Fatal("release reruns must not delete the published release before replacement succeeds")
+	}
+	if !strings.Contains(release, "gh release upload") {
+		t.Fatal("release reruns must update existing release assets in place")
+	}
+}
+
 func TestSelfHostedActionsAreCommitPinned(t *testing.T) {
 	for _, name := range []string{"ci.yml", "release.yml"} {
 		source := workflow(t, name)

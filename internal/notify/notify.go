@@ -14,24 +14,26 @@ import (
 
 // NotificationEngine evaluates quota statuses and sends alerts via email, push, and Discord.
 type NotificationEngine struct {
-	store               *store.Store
-	logger              *slog.Logger
-	mailer              *SMTPMailer
-	pushSender          *PushSender
-	discord             *DiscordSender
-	vapidPublicKey      string
-	mu                  sync.RWMutex
-	cfg                 NotificationConfig
-	encryptionKey       string // current hex-encoded key for decrypting SMTP passwords
-	legacyEncryptionKey string // fallback hex-encoded key for legacy SMTP password migration
-	now                 func() time.Time
-	paceStates          map[string]paceAlertState
-	pollHealthMu        sync.Mutex
-	pollHealthPollers   map[PollIdentity]pollRegistration
-	pollHealthAttempts  map[PollIdentity]pollDeliveryAttempt
-	pollHealthAttemptID uint64
-	pollHealthGrace     time.Duration
-	pollHealthTick      time.Duration
+	store                *store.Store
+	logger               *slog.Logger
+	mailer               *SMTPMailer
+	pushSender           *PushSender
+	discord              *DiscordSender
+	vapidPublicKey       string
+	mu                   sync.RWMutex
+	cfg                  NotificationConfig
+	encryptionKey        string // current hex-encoded key for decrypting SMTP passwords
+	legacyEncryptionKey  string // fallback hex-encoded key for legacy SMTP password migration
+	now                  func() time.Time
+	paceStates           map[string]paceAlertState
+	pollHealthMu         sync.Mutex
+	pollHealthPollers    map[PollIdentity]pollRegistration
+	pollHealthAttempts   map[PollIdentity]pollDeliveryAttempt
+	pollHealthAttemptID  uint64
+	pollHealthGrace      time.Duration
+	pollHealthTick       time.Duration
+	pollHealthAsync      bool
+	pollHealthDeliveryWG sync.WaitGroup
 }
 
 // NotificationConfig holds threshold and delivery settings.
@@ -159,6 +161,7 @@ func New(s *store.Store, logger *slog.Logger) *NotificationEngine {
 		pollHealthAttempts: make(map[PollIdentity]pollDeliveryAttempt),
 		pollHealthGrace:    10 * time.Second,
 		pollHealthTick:     30 * time.Second,
+		pollHealthAsync:    true,
 	}
 }
 
@@ -999,7 +1002,7 @@ func (e *NotificationEngine) sendViaChannelsContext(
 	sent := false
 
 	if ctx.Err() == nil && channels.Email && mailer != nil {
-		if err := mailer.Send(subject, body); err != nil {
+		if err := mailer.SendContext(ctx, subject, body); err != nil {
 			e.logger.Error("failed to send email notification", append([]any{"error", err}, logAttrs...)...)
 		} else {
 			sent = true

@@ -186,7 +186,7 @@ func (e *NotificationEngine) RecordPollFailure(provider, accountID, category, me
 		Message:  sanitizePollHealthText(message, maxPollErrorMessageRunes),
 	})
 	e.pollHealthMu.Unlock()
-	e.executePollDelivery(claim)
+	e.dispatchPollDelivery(claim)
 }
 
 // RecordPollSuccess resolves an active incident and records the completed poll.
@@ -284,7 +284,7 @@ func (e *NotificationEngine) RecordPollSuccess(provider, accountID string) {
 		}
 	}
 	e.pollHealthMu.Unlock()
-	e.executePollDelivery(claim)
+	e.dispatchPollDelivery(claim)
 }
 
 // EvaluatePollHealth detects missed intervals and sends due failure reminders.
@@ -344,7 +344,7 @@ func (e *NotificationEngine) evaluatePollHealth(ctx context.Context) {
 	e.pollHealthMu.Unlock()
 
 	for _, claim := range claims {
-		e.executePollDelivery(claim)
+		e.dispatchPollDelivery(claim)
 	}
 }
 
@@ -688,6 +688,32 @@ func (e *NotificationEngine) executePollDelivery(claim *pollDeliveryClaim) {
 	}
 	e.pollHealthMu.Unlock()
 	e.executePollDelivery(recoveryClaim)
+}
+
+func (e *NotificationEngine) dispatchPollDelivery(claim *pollDeliveryClaim) {
+	if claim == nil {
+		return
+	}
+	if !e.pollHealthAsync {
+		e.executePollDelivery(claim)
+		return
+	}
+	e.pollHealthDeliveryWG.Add(1)
+	go func() {
+		defer e.pollHealthDeliveryWG.Done()
+		e.executePollDelivery(claim)
+	}()
+}
+
+// ShutdownPollHealthDeliveries cancels and joins all external poll-health sends.
+// Call it only after every poller and the monitor have stopped producing work.
+func (e *NotificationEngine) ShutdownPollHealthDeliveries() {
+	e.pollHealthMu.Lock()
+	for _, attempt := range e.pollHealthAttempts {
+		attempt.cancel()
+	}
+	e.pollHealthMu.Unlock()
+	e.pollHealthDeliveryWG.Wait()
 }
 
 func (e *NotificationEngine) loadRegisteredPollState(

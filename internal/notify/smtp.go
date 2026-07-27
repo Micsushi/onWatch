@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -81,6 +82,22 @@ func (m *SMTPMailer) Send(subject, body string) error {
 	client.Quit()
 	m.logger.Info("email sent", "subject", subject, "recipients", len(m.config.ToAddrs))
 	return nil
+}
+
+// SendContext returns promptly when the caller is canceled. The underlying
+// net/smtp call remains bounded by smtpIOTimeout and reports through a buffered
+// channel so it can finish safely after cancellation.
+func (m *SMTPMailer) SendContext(ctx context.Context, subject, body string) error {
+	result := make(chan error, 1)
+	go func() {
+		result <- m.Send(subject, body)
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // TestConnectionResult holds diagnostic details from an SMTP connection test.
