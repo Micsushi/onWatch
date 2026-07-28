@@ -97,7 +97,15 @@ The built-in OpenAI entries reflect the published launch prices:
 - GPT-5.6 Terra, effective 2026-06-26: $2.50/$0.25/$15 per million input/cached/output tokens.
 - GPT-5.6 Luna, effective 2026-06-26: $1/$0.10/$6 per million input/cached/output tokens.
 
-OpenAI's published record describes Terra as 2x cheaper than GPT-5.5; it does not describe a retroactive GPT-5.5 price cut. The GPT-5.6 date is the limited-preview date when those prices were first published; general availability followed on 2026-07-09. Sources: [Introducing GPT-5.5](https://openai.com/index/introducing-gpt-5-5/), [GPT-5.5 model pricing](https://developers.openai.com/api/docs/models/gpt-5.5), [Previewing GPT-5.6](https://openai.com/index/previewing-gpt-5-6-sol/), and [Introducing GPT-5.6](https://openai.com/index/gpt-5-6/).
+GPT-5.6 requests above 272,000 prompt tokens are billed at 2x input and 1.5x output for the full request. Fast/Priority processing is 2x standard pricing and is not available for those long-context requests. OpenAI's published record describes Terra as 2x cheaper than GPT-5.5; it does not describe a retroactive GPT-5.5 price cut. The GPT-5.6 date is the limited-preview date when those prices were first published; general availability followed on 2026-07-09. Sources: [Introducing GPT-5.5](https://openai.com/index/introducing-gpt-5-5/), [GPT-5.5 model pricing](https://developers.openai.com/api/docs/models/gpt-5.5), [Previewing GPT-5.6](https://openai.com/index/previewing-gpt-5-6-sol/), [GPT-5.6 Sol model pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [Priority processing](https://openai.com/api-priority-processing/), and [Introducing GPT-5.6](https://openai.com/index/gpt-5-6/).
+
+The built-in Anthropic entries include current Claude 5 pricing:
+
+- Claude Opus 5: $5 per million input tokens and $25 per million output tokens. Fast mode is 2x the base price.
+- Claude Sonnet 5: $2/$10 per million input/output tokens through 2026-08-31, then $3/$15 beginning 2026-09-01.
+- Claude Fable 5: $10 per million input tokens and $50 per million output tokens.
+
+Sources: [Claude Opus 5](https://www.anthropic.com/news/claude-opus-5), [Claude Sonnet 5](https://www.anthropic.com/news/claude-sonnet-5), and [Claude models overview](https://platform.claude.com/docs/en/about-claude/models/overview).
 
 ## Local Agent Usage Collector
 
@@ -147,14 +155,14 @@ onwatch agent-usage --home "D:\Users\agent" --out "\\server\onwatch-api-integrat
 
 ### Reasoning Effort And Fast Mode
 
-Codex session logs expose model and effort context in `turn_context` records. onWatch records that data into usage metadata when present:
+Claude and Codex session logs expose model, effort, and speed context. onWatch records that data into usage metadata when present:
 
 - `reasoning_effort`: values such as `low`, `medium`, `high`, or `xhigh`
 - `mode`: the Codex collaboration mode, when logged
 - `fast_mode` and `speed_mode`: whether the turn was recorded as fast or standard, when logged
-- `speed_multiplier`: best-effort multiplier, currently `2.5` for GPT-5.5 and `2.0` for GPT-5.4 when Codex Desktop global state reports the fast service tier
+- `speed_multiplier`: best-effort multiplier, currently `2.0` for GPT-5.6, `2.5` for GPT-5.5, and `2.0` for GPT-5.4 when the request is eligible for the fast service tier
 
-The Cost tab groups model usage by effort, mode, and speed. Older rows or providers that do not expose this context appear as `unknown`. When the collector re-sees a duplicate event with richer metadata, onWatch updates the stored metadata instead of creating a duplicate row.
+The Cost tab groups model usage by effort, mode, and speed. Direct per-turn telemetry takes precedence over process-wide settings. Older rows or providers that do not expose this context appear as `unknown`. When the collector re-sees a duplicate event with richer metadata, onWatch updates the stored metadata instead of creating a duplicate row.
 
 Codex logs do not currently include the x1.5 speed tier in each `turn_context`. onWatch therefore reads `~/.codex/.codex-global-state.json` as a best-effort side channel when parsing Codex sessions under `~/.codex/sessions`. This is accurate for the normal case where the service tier is set before the turn is collected. If you toggle speed while a chat is already running, old rows may inherit the current global setting because Codex does not timestamp that setting per token event.
 

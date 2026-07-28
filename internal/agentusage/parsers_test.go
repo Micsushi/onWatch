@@ -28,6 +28,12 @@ func testPricing(t *testing.T) *PricingMap {
 			"output_cost_per_token": 0.00003,
 			"cache_read_input_token_cost": 0.0000005
 		},
+		"gpt-5.6-sol": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.00003,
+			"cache_read_input_token_cost": 0.0000005,
+			"cache_creation_input_token_cost": 0.00000625
+		},
 		"google/gemini-2.5-pro": {
 			"input_cost_per_token": 0.00000125,
 			"output_cost_per_token": 0.00001,
@@ -112,6 +118,39 @@ func TestParseClaudeUsageLineAppliesFastModeMultiplier(t *testing.T) {
 	}
 }
 
+func TestParseClaudeUsageLineCapturesOpus5EffortAndFastMode(t *testing.T) {
+	pricing, err := NewPricingMapFromJSON([]byte(`{
+		"claude-opus-5": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"cache_read_input_token_cost": 0.0000005,
+			"cache_creation_input_token_cost": 0.00000625
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("NewPricingMapFromJSON() error = %v", err)
+	}
+	line := []byte(`{"timestamp":"2026-07-27T12:34:56Z","effort":"medium","message":{"model":"claude-opus-5","usage":{"input_tokens":1000,"output_tokens":100,"speed":"fast","service_tier":"priority"}}}`)
+
+	event, err := ParseClaudeUsageLine(line, `s.jsonl`, pricing)
+	if err != nil {
+		t.Fatalf("ParseClaudeUsageLine() error = %v", err)
+	}
+	const want = 0.015
+	if event.CostUSD != want {
+		t.Fatalf("fast cost = %.8f, want %.8f", event.CostUSD, want)
+	}
+	if event.ReasoningEffort != "medium" {
+		t.Fatalf("reasoning effort = %q, want medium", event.ReasoningEffort)
+	}
+	if event.FastMode == nil || !*event.FastMode {
+		t.Fatalf("fast mode = %v, want true", event.FastMode)
+	}
+	if event.SpeedMode != "fast" || event.SpeedMultiplier != 2 || event.SpeedSource != "claude_usage" {
+		t.Fatalf("speed metadata = %q/%v/%q", event.SpeedMode, event.SpeedMultiplier, event.SpeedSource)
+	}
+}
+
 func TestParseClaudeUsageLineFastModeOpus47Is6x(t *testing.T) {
 	pricing, err := NewPricingMapFromJSON([]byte(`{
 		"claude-opus-4-7": {"input_cost_per_token": 0.000005, "output_cost_per_token": 0.000025}
@@ -142,7 +181,7 @@ func TestParseClaudeUsageLineStandardSpeedUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPricingMapFromJSON() error = %v", err)
 	}
-	line := []byte(`{"timestamp":"2026-05-25T12:34:56Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1000,"output_tokens":100,"speed":"standard","service_tier":"standard"}}}`)
+	line := []byte(`{"timestamp":"2026-05-25T12:34:56Z","effort":"high","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1000,"output_tokens":100,"speed":"standard","service_tier":"standard"}}}`)
 
 	event, err := ParseClaudeUsageLine(line, `s.jsonl`, pricing)
 	if err != nil {
@@ -154,6 +193,9 @@ func TestParseClaudeUsageLineStandardSpeedUnchanged(t *testing.T) {
 	}
 	if event.SpeedMultiplier != 0 {
 		t.Fatalf("standard speed multiplier = %v, want 0", event.SpeedMultiplier)
+	}
+	if event.FastMode == nil || *event.FastMode || event.SpeedMode != "standard" || event.SpeedSource != "claude_usage" || event.ReasoningEffort != "high" {
+		t.Fatalf("standard metadata = fast:%v speed:%q source:%q effort:%q", event.FastMode, event.SpeedMode, event.SpeedSource, event.ReasoningEffort)
 	}
 }
 
@@ -187,6 +229,74 @@ func TestParseCodexUsageFileSessionAndHeadlessLines(t *testing.T) {
 	}
 	if events[1].InputTokens != 45 || events[1].CachedInputTokens != 5 || events[1].TotalTokens != 60 {
 		t.Fatalf("bad second event tokens: %+v", events[1])
+	}
+}
+
+func TestParseCodexUsageFileUsesGPT56LongContextPricingWithoutUnavailableFastTier(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-gpt56-fast-large.jsonl")
+	writeFixture(t, path, []string{
+		`{"type":"turn_context","timestamp":"2026-07-27T12:00:00Z","payload":{"model":"gpt-5.6-sol","effort":"high","fast_mode":true}}`,
+		`{"type":"event_msg","timestamp":"2026-07-27T12:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":300000,"output_tokens":10000,"total_tokens":310000}}}}`,
+	})
+
+	events, err := ParseCodexUsageFile(path, testPricing(t))
+	if err != nil {
+		t.Fatalf("ParseCodexUsageFile() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(events))
+	}
+	const want = 3.45
+	if events[0].CostUSD != want {
+		t.Fatalf("cost = %.8f, want %.8f", events[0].CostUSD, want)
+	}
+	if events[0].FastMode == nil || !*events[0].FastMode {
+		t.Fatalf("fast mode = %v, want true", events[0].FastMode)
+	}
+	if events[0].SpeedMode != "fast" || events[0].SpeedSource != "codex_turn_context" {
+		t.Fatalf("speed metadata = %q/%q, want fast/codex_turn_context", events[0].SpeedMode, events[0].SpeedSource)
+	}
+	if events[0].SpeedMultiplier != 0 {
+		t.Fatalf("speed multiplier = %v, want 0 for long-context request", events[0].SpeedMultiplier)
+	}
+}
+
+func TestParseCodexUsageFileAppliesGPT56FastPricingBelowLongContextThreshold(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-gpt56-fast.jsonl")
+	writeFixture(t, path, []string{
+		`{"type":"turn_context","timestamp":"2026-07-27T12:00:00Z","payload":{"model":"gpt-5.6-sol","effort":"high","fast_mode":true}}`,
+		`{"type":"event_msg","timestamp":"2026-07-27T12:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"output_tokens":100,"total_tokens":1100}}}}`,
+	})
+
+	events, err := ParseCodexUsageFile(path, testPricing(t))
+	if err != nil {
+		t.Fatalf("ParseCodexUsageFile() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(events))
+	}
+	const want = 0.016
+	if events[0].CostUSD != want {
+		t.Fatalf("cost = %.8f, want %.8f", events[0].CostUSD, want)
+	}
+	if events[0].SpeedMultiplier != 2 {
+		t.Fatalf("speed multiplier = %v, want 2", events[0].SpeedMultiplier)
+	}
+}
+
+func TestCodexCountsSeparatesCacheWritesFromUncachedInput(t *testing.T) {
+	counts := codexCounts(map[string]any{
+		"input_tokens":             float64(1000),
+		"cached_input_tokens":      float64(200),
+		"cache_write_input_tokens": float64(300),
+		"output_tokens":            float64(100),
+	})
+
+	if counts.InputTokens != 500 || counts.CachedInputTokens != 200 || counts.CacheCreationTokens != 300 {
+		t.Fatalf("input split = %d/%d/%d, want 500/200/300", counts.InputTokens, counts.CachedInputTokens, counts.CacheCreationTokens)
+	}
+	if counts.TotalTokens != 1100 {
+		t.Fatalf("total tokens = %d, want 1100", counts.TotalTokens)
 	}
 }
 
