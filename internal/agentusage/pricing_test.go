@@ -106,6 +106,54 @@ func TestDefaultPricingMapVersionsGPTPricingByLaunchDate(t *testing.T) {
 	}
 }
 
+func TestDefaultPricingMapIncludesClaudeOpus5(t *testing.T) {
+	pricing, err := DefaultPricingMap()
+	if err != nil {
+		t.Fatalf("DefaultPricingMap() error = %v", err)
+	}
+	if !pricing.Known("claude-opus-5", nil) {
+		t.Fatal("expected claude-opus-5 to be known")
+	}
+	got := pricing.CalculateCost("claude-opus-5", TokenCounts{
+		InputTokens:       1_000_000,
+		CachedInputTokens: 1_000_000,
+		OutputTokens:      1_000_000,
+	}, CostOptions{})
+	if got != 30.5 {
+		t.Fatalf("claude-opus-5 cost = %v, want 30.5", got)
+	}
+}
+
+func TestDefaultPricingMapVersionsClaudeSonnet5Pricing(t *testing.T) {
+	pricing, err := DefaultPricingMap()
+	if err != nil {
+		t.Fatalf("DefaultPricingMap() error = %v", err)
+	}
+	counts := TokenCounts{
+		InputTokens:       1_000_000,
+		CachedInputTokens: 1_000_000,
+		OutputTokens:      1_000_000,
+	}
+	before := pricing.CalculateCostAt(
+		"claude-sonnet-5",
+		time.Date(2026, 8, 31, 23, 59, 59, 0, time.UTC),
+		counts,
+		CostOptions{},
+	)
+	after := pricing.CalculateCostAt(
+		"claude-sonnet-5",
+		time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+		counts,
+		CostOptions{},
+	)
+	if before != 12.2 {
+		t.Fatalf("pre-September cost = %v, want 12.2", before)
+	}
+	if after != 18.3 {
+		t.Fatalf("September cost = %v, want 18.3", after)
+	}
+}
+
 func TestPricingMapCalculateCostUsesInputOutputCacheAndReasoning(t *testing.T) {
 	pricing, err := NewPricingMapFromJSON([]byte(`{
 		"gpt-5.2-codex": {
@@ -128,6 +176,30 @@ func TestPricingMapCalculateCostUsesInputOutputCacheAndReasoning(t *testing.T) {
 	}, CostOptions{ReasoningBilledAsOutput: true})
 
 	want := 0.00028
+	if got != want {
+		t.Fatalf("cost = %.8f, want %.8f", got, want)
+	}
+}
+
+func TestPricingMapAppliesSeparateInputAndOutputMultipliers(t *testing.T) {
+	pricing, err := NewPricingMapFromJSON([]byte(`{
+		"gpt-test": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000030,
+			"cache_read_input_token_cost": 0.0000005
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("NewPricingMapFromJSON() error = %v", err)
+	}
+
+	got := pricing.CalculateCost("gpt-test", TokenCounts{
+		InputTokens:       300_000,
+		CachedInputTokens: 100_000,
+		OutputTokens:      20_000,
+	}, CostOptions{InputMultiplier: 2, OutputMultiplier: 1.5})
+
+	const want = 4.0
 	if got != want {
 		t.Fatalf("cost = %.8f, want %.8f", got, want)
 	}

@@ -50,6 +50,13 @@ func ParseClaudeUsageLine(line []byte, sourcePath string, pricing *PricingMap) (
 	if model == "" {
 		model = firstString(obj, "model", "model_name")
 	}
+	effort := firstString(obj, "effort", "reasoning_effort")
+	if effort == "" {
+		effort = firstString(message, "effort", "reasoning_effort")
+	}
+	if effort == "" {
+		effort = firstString(usage, "effort", "reasoning_effort")
+	}
 	event := UsageEvent{
 		Timestamp:             timeValue(obj, "timestamp", "ts"),
 		Source:                "claude",
@@ -57,6 +64,7 @@ func ParseClaudeUsageLine(line []byte, sourcePath string, pricing *PricingMap) (
 		SessionID:             firstString(obj, "sessionId", "session_id"),
 		RequestID:             firstString(obj, "requestId", "request_id"),
 		Model:                 model,
+		ReasoningEffort:       effort,
 		InputTokens:           counts.InputTokens,
 		CachedInputTokens:     counts.CachedInputTokens,
 		CacheCreationTokens:   counts.CacheCreationTokens,
@@ -73,42 +81,51 @@ func ParseClaudeUsageLine(line []byte, sourcePath string, pricing *PricingMap) (
 	if event.RequestID == "" {
 		event.RequestID = firstString(message, "id")
 	}
-	if event.CostUSD <= 0 {
-		costOptions := CostOptions{}
-		if claudeUsageIsFast(usage) {
+	costOptions := CostOptions{}
+	if speedMode, known := claudeUsageSpeed(usage); known {
+		fastMode := speedMode == "fast"
+		event.FastMode = &fastMode
+		event.SpeedMode = speedMode
+		event.SpeedSource = "claude_usage"
+		if fastMode {
 			if multiplier := claudeFastModeCostMultiplier(event.Model); multiplier > 0 {
 				costOptions.CostMultiplier = multiplier
-				event.SpeedMode = "fast"
 				event.SpeedMultiplier = multiplier
-				event.SpeedSource = "claude_usage"
 			}
 		}
+	}
+	if event.CostUSD <= 0 {
 		event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, costOptions)
 	}
 	return &event, nil
 }
 
-// claudeUsageIsFast reports whether a Claude Code usage block was billed at the
-// fast/priority tier. Claude Code records this in usage.speed ("fast") and/or
-// usage.service_tier ("priority").
-func claudeUsageIsFast(usage map[string]any) bool {
+func claudeUsageSpeed(usage map[string]any) (string, bool) {
 	switch strings.ToLower(firstString(usage, "speed")) {
 	case "fast", "priority":
-		return true
+		return "fast", true
+	case "standard":
+		return "standard", true
 	}
-	return strings.ToLower(firstString(usage, "service_tier")) == "priority"
+	switch strings.ToLower(firstString(usage, "service_tier")) {
+	case "priority":
+		return "fast", true
+	case "standard":
+		return "standard", true
+	default:
+		return "", false
+	}
 }
 
 // claudeFastModeCostMultiplier returns the fast-mode cost multiplier for a
-// Claude model, relative to standard pricing. Per Anthropic's published fast-
-// mode rates: Opus 4.8 bills 2x ($10/$50 vs $5/$25); Opus 4.6 and 4.7 bill 6x
-// ($30/$150 vs $5/$25). The multiplier applies across all token categories,
-// since cache rates are defined as multipliers of the (raised) base input
-// price. Returns 0 (no adjustment) for models without a known fast tier.
+// Claude model, relative to standard pricing. Opus 5 and 4.8 bill 2x. Historical
+// Opus 4.6 and 4.7 fast requests bill 6x. The multiplier applies across all
+// token categories because cache rates follow the raised base input price.
+// Returns 0 for models without a known fast tier.
 func claudeFastModeCostMultiplier(model string) float64 {
 	m := strings.ToLower(strings.TrimSpace(model))
 	switch {
-	case strings.HasPrefix(m, "claude-opus-4-8"):
+	case strings.HasPrefix(m, "claude-opus-5"), strings.HasPrefix(m, "claude-opus-4-8"):
 		return 2.0
 	case strings.HasPrefix(m, "claude-opus-4-7"), strings.HasPrefix(m, "claude-opus-4-6"):
 		return 6.0
@@ -246,6 +263,16 @@ func parseCodexUsageFile(path string, pricing *PricingMap, state codexParseState
 			seenUsage[key] = struct{}{}
 		}
 		counts := codexCounts(usage)
+		speedMode := speed.Mode
+		speedSource := speed.Source
+		if next.currentFastMode != nil {
+			if *next.currentFastMode {
+				speedMode = "fast"
+			} else {
+				speedMode = "standard"
+			}
+			speedSource = "codex_turn_context"
+		}
 		event := UsageEvent{
 			Timestamp:           timeValue(obj, "timestamp", "ts"),
 			Source:              "codex",
@@ -256,8 +283,8 @@ func parseCodexUsageFile(path string, pricing *PricingMap, state codexParseState
 			ReasoningEffort:     next.currentReasoningEffort,
 			Mode:                next.currentMode,
 			FastMode:            next.currentFastMode,
-			SpeedMode:           speed.Mode,
-			SpeedSource:         speed.Source,
+			SpeedMode:           speedMode,
+			SpeedSource:         speedSource,
 			InputTokens:         counts.InputTokens,
 			CachedInputTokens:   counts.CachedInputTokens,
 			CacheCreationTokens: counts.CacheCreationTokens,
@@ -267,10 +294,9 @@ func parseCodexUsageFile(path string, pricing *PricingMap, state codexParseState
 			SourcePath:          path,
 			UsageSignature:      contentSignature,
 		}
-		costOptions := CostOptions{}
-		if next.currentFastMode != nil && *next.currentFastMode {
-			costOptions.CostMultiplier = codexFastModeCostMultiplier(event.Model)
-		} else if speed.Mode == "fast" {
+		costOptions := codexCostOptions(event.Model, counts)
+		longContext := costOptions.InputMultiplier > 0 || costOptions.OutputMultiplier > 0
+		if !longContext && speedMode == "fast" {
 			costOptions.CostMultiplier = codexFastModeCostMultiplier(event.Model)
 		}
 		event.SpeedMultiplier = costOptions.CostMultiplier
@@ -457,6 +483,8 @@ func codexUsageSignature(usage map[string]any) string {
 func codexFastModeCostMultiplier(model string) float64 {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	switch {
+	case strings.HasPrefix(normalized, "gpt-5.6"):
+		return 2
 	case strings.HasPrefix(normalized, "gpt-5.5"):
 		return 2.5
 	case strings.HasPrefix(normalized, "gpt-5.4") && !strings.HasPrefix(normalized, "gpt-5.4-mini"):
@@ -464,6 +492,15 @@ func codexFastModeCostMultiplier(model string) float64 {
 	default:
 		return 0
 	}
+}
+
+func codexCostOptions(model string, counts TokenCounts) CostOptions {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	requestInput := counts.InputTokens + counts.CachedInputTokens + counts.CacheCreationTokens
+	if strings.HasPrefix(normalized, "gpt-5.6") && requestInput > 272_000 {
+		return CostOptions{InputMultiplier: 2, OutputMultiplier: 1.5}
+	}
+	return CostOptions{}
 }
 
 func ParseGeminiUsageFile(path, source, provider string, pricing *PricingMap) ([]UsageEvent, error) {
@@ -831,20 +868,21 @@ func geminiEventFromTokens(tokens, obj map[string]any, path, source, provider st
 func codexCounts(usage map[string]any) TokenCounts {
 	inputRaw := intValue(usage, "input_tokens", "input")
 	cached := intValue(usage, "cached_input_tokens", "cache_read_input_tokens", "cached")
-	input := inputRaw - cached
+	cacheCreation := intValue(usage, "cache_write_input_tokens", "cache_creation_input_tokens", "cache_creation_tokens")
+	input := inputRaw - cached - cacheCreation
 	if input < 0 {
 		input = 0
 	}
 	counts := TokenCounts{
 		InputTokens:         input,
 		CachedInputTokens:   cached,
-		CacheCreationTokens: intValue(usage, "cache_creation_input_tokens", "cache_creation_tokens"),
+		CacheCreationTokens: cacheCreation,
 		OutputTokens:        intValue(usage, "output_tokens", "output"),
 		ReasoningTokens:     intValue(usage, "reasoning_output_tokens", "reasoning_tokens"),
 		TotalTokens:         intValue(usage, "total_tokens", "total"),
 	}
 	if counts.TotalTokens <= 0 {
-		counts.TotalTokens = inputRaw + counts.CacheCreationTokens + counts.OutputTokens
+		counts.TotalTokens = inputRaw + counts.OutputTokens
 	}
 	return counts
 }

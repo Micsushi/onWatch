@@ -25,6 +25,8 @@ type CostOptions struct {
 	ReasoningBilledAsOutput bool
 	ProviderPrefixes        []string
 	CostMultiplier          float64
+	InputMultiplier         float64
+	OutputMultiplier        float64
 }
 
 type UsageEvent struct {

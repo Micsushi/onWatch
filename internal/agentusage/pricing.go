@@ -141,6 +141,13 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_input_token_cost": 0.00000625,
 			"cache_creation_1h_input_token_cost": 0.00001
 		},
+		"claude-opus-5": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"cache_read_input_token_cost": 0.0000005,
+			"cache_creation_input_token_cost": 0.00000625,
+			"cache_creation_1h_input_token_cost": 0.00001
+		},
 		"claude-haiku-4-5-20251001": {
 			"input_cost_per_token": 0.000001,
 			"output_cost_per_token": 0.000005,
@@ -156,11 +163,20 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_1h_input_token_cost": 0.000002
 		},
 		"claude-sonnet-5": {
-			"input_cost_per_token": 0.000002,
-			"output_cost_per_token": 0.00001,
-			"cache_read_input_token_cost": 0.0000002,
-			"cache_creation_input_token_cost": 0.0000025,
-			"cache_creation_1h_input_token_cost": 0.000004
+			"history": [{
+				"input_cost_per_token": 0.000002,
+				"output_cost_per_token": 0.00001,
+				"cache_read_input_token_cost": 0.0000002,
+				"cache_creation_input_token_cost": 0.0000025,
+				"cache_creation_1h_input_token_cost": 0.000004
+			}, {
+				"effective_from": "2026-09-01T00:00:00Z",
+				"input_cost_per_token": 0.000003,
+				"output_cost_per_token": 0.000015,
+				"cache_read_input_token_cost": 0.0000003,
+				"cache_creation_input_token_cost": 0.00000375,
+				"cache_creation_1h_input_token_cost": 0.000006
+			}]
 		},
 		"claude-fable-5": {
 			"input_cost_per_token": 0.00001,
@@ -279,14 +295,21 @@ func (p *PricingMap) CalculateCostAt(model string, at time.Time, counts TokenCou
 	if cacheCreation5mTokens < 0 {
 		cacheCreation5mTokens = 0
 	}
-	cost := float64(counts.InputTokens)*entry.InputCost +
+	inputCost := float64(counts.InputTokens)*entry.InputCost +
 		float64(counts.CachedInputTokens)*cacheRead +
 		float64(cacheCreation5mTokens)*cacheCreation +
-		float64(counts.CacheCreation1hTokens)*cacheCreation1h +
-		float64(counts.OutputTokens)*entry.OutputCost
+		float64(counts.CacheCreation1hTokens)*cacheCreation1h
+	outputCost := float64(counts.OutputTokens) * entry.OutputCost
 	if opts.ReasoningBilledAsOutput {
-		cost += float64(counts.ReasoningTokens) * entry.OutputCost
+		outputCost += float64(counts.ReasoningTokens) * entry.OutputCost
 	}
+	if opts.InputMultiplier > 0 {
+		inputCost *= opts.InputMultiplier
+	}
+	if opts.OutputMultiplier > 0 {
+		outputCost *= opts.OutputMultiplier
+	}
+	cost := inputCost + outputCost
 	if opts.CostMultiplier > 0 {
 		cost *= opts.CostMultiplier
 	}
