@@ -78,6 +78,32 @@ func TestEvaluateWeeklyPaceMatchesDashboardStates(t *testing.T) {
 	}
 }
 
+func TestNotificationEngine_DiscordSkipsSubPercentPaceDifferenceAfterReset(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	defer s.Close()
+	engine := newTestEngine(t, s)
+	discord, capture := newDiscordCapture(t)
+	now := time.Date(2026, 7, 28, 22, 1, 0, 0, time.UTC)
+	reset := now.Add(weeklyPaceWindow - 45*time.Minute)
+
+	engine.discord = discord
+	engine.now = func() time.Time { return now }
+	engine.cfg.Channels = NotificationChannels{Discord: true}
+	engine.cfg.Types = NotificationTypes{Underuse: true}
+	engine.cfg.UnderuseTimes = []string{"22:00"}
+	engine.Check(QuotaStatus{
+		Provider:    "codex",
+		QuotaKey:    "seven_day",
+		Utilization: 0,
+		ResetsAt:    &reset,
+	})
+
+	if messages := capture.snapshot(); len(messages) != 0 {
+		t.Fatalf("Discord messages = %d, want 0 for sub-percent pace difference: %v", len(messages), messages)
+	}
+}
+
 func TestNotificationEngine_DiscordVeryOverPaceEntryAndTenPointSteps(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

@@ -13,6 +13,7 @@ const (
 	paceVeryUnderHardThreshold = 15.0
 	paceTimeSliceFraction      = 0.20
 	paceVeryTimeSliceFraction  = 0.30
+	paceMinimumDelta           = 1.0
 )
 
 type PaceTier string
@@ -64,6 +65,9 @@ func EvaluateWeeklyPace(quotaName string, utilization float64, resetsAt, now tim
 		VeryUnderTimeThreshold: expectedUsed * paceVeryTimeSliceFraction,
 		TimeLeftOverPercent:    timeLeftOverPercent(delta, remainingExpected),
 		ElapsedUnderPercent:    elapsedUnderPercent(delta, expectedUsed),
+	}
+	if delta > -paceMinimumDelta && delta < paceMinimumDelta {
+		return result, true
 	}
 	if tier, trigger := overPaceTier(result); tier != PaceOn {
 		result.Tier = tier
