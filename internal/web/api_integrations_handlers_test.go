@@ -338,7 +338,7 @@ func TestHandler_APIIntegrationsSessions_IncludesUnsampledTotals(t *testing.T) {
 	}
 	defer s.Close()
 
-	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Minute)
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 3; i++ {
 		line := `{"ts":"` + base.Add(time.Duration(i)*time.Minute).Format(time.RFC3339) + `","integration":"Codex CLI","provider":"openai","model":"gpt-5.5","prompt_tokens":10,"completion_tokens":5,"cost_usd":0.25,"metadata":{"session_id":"chat-a"}}`
 		insertAPIIntegrationEventForTest(t, s, line, "/tmp/api-integrations/codex-a.jsonl")
@@ -347,7 +347,9 @@ func TestHandler_APIIntegrationsSessions_IncludesUnsampledTotals(t *testing.T) {
 	insertAPIIntegrationEventForTest(t, s, `{"ts":"`+base.Add(10*time.Minute).Format(time.RFC3339)+`","integration":"Claude Code","provider":"anthropic","model":"claude-sonnet-4-6","prompt_tokens":100,"completion_tokens":50,"cost_usd":1.5}`, "/tmp/api-integrations/claude.jsonl")
 
 	h := NewHandler(s, nil, nil, nil, &config.Config{APIIntegrationsEnabled: true, APIIntegrationsDir: "/tmp/api-integrations"})
-	req := httptest.NewRequest(http.MethodGet, "/api/api-integrations/sessions?range=24h&integration=Codex%20CLI", nil)
+	windowStart := base.Add(-time.Hour).Format(time.RFC3339)
+	windowEnd := base.Add(time.Hour).Format(time.RFC3339)
+	req := httptest.NewRequest(http.MethodGet, "/api/api-integrations/sessions?integration=Codex%20CLI&start="+windowStart+"&end="+windowEnd, nil)
 	rr := httptest.NewRecorder()
 
 	h.APIIntegrationsSessions(rr, req)
