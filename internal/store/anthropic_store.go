@@ -115,18 +115,21 @@ func (s *Store) QueryLatestAnthropic() (*api.AnthropicSnapshot, error) {
 // QueryAnthropicRange returns Anthropic snapshots within a time range with optional limit.
 func (s *Store) QueryAnthropicRange(start, end time.Time, limit ...int) ([]*api.AnthropicSnapshot, error) {
 	query := `SELECT id, captured_at, quota_count FROM anthropic_snapshots
-		WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
+		WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+			AND captured_at COLLATE ONWATCH_RFC3339 < ?
+		ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, quota_count
 			FROM (
 				SELECT id, captured_at, quota_count
 				FROM anthropic_snapshots
-				WHERE captured_at >= ? AND captured_at < ?
-				ORDER BY captured_at DESC
+				WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+					AND captured_at COLLATE ONWATCH_RFC3339 < ?
+				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 				LIMIT ?
 			) recent
-			ORDER BY captured_at ASC`
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
 
@@ -193,10 +196,11 @@ func (s *Store) QueryAnthropicRangeSampled(start, end time.Time, maxPoints int) 
 	rows, err := s.db.Query(`
 		WITH ranked AS (
 			SELECT id, captured_at,
-				ROW_NUMBER() OVER (ORDER BY captured_at ASC) AS row_number,
+				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC) AS row_number,
 				COUNT(*) OVER () AS total_rows
 			FROM anthropic_snapshots
-			WHERE captured_at >= ? AND captured_at < ?
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+				AND captured_at COLLATE ONWATCH_RFC3339 < ?
 		),
 		sampled AS (
 			SELECT id, captured_at
@@ -210,7 +214,7 @@ func (s *Store) QueryAnthropicRangeSampled(start, end time.Time, maxPoints int) 
 			quota.quota_name, quota.utilization, quota.resets_at
 		FROM sampled
 		LEFT JOIN anthropic_quota_values quota ON quota.snapshot_id = sampled.id
-		ORDER BY sampled.captured_at ASC, quota.quota_name ASC`,
+		ORDER BY sampled.captured_at COLLATE ONWATCH_RFC3339 ASC, quota.quota_name ASC`,
 		start.Format(time.RFC3339Nano),
 		end.Format(time.RFC3339Nano),
 		maxPoints,

@@ -15,7 +15,7 @@ import (
 
 	"github.com/onllm-dev/onwatch/v2/internal/api"
 	"github.com/onllm-dev/onwatch/v2/internal/menubar"
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
 )
 
 // Store provides SQLite storage for onWatch
@@ -74,6 +74,28 @@ type CrossQuotaEntry struct {
 
 // ErrDuplicateAPIIntegrationUsageEvent indicates an API integrations telemetry event already exists.
 var ErrDuplicateAPIIntegrationUsageEvent = errors.New("store: duplicate API integration usage event")
+
+const historyTimestampCollation = "ONWATCH_RFC3339"
+
+func init() {
+	sqlite.MustRegisterCollationUtf8(historyTimestampCollation, compareRFC3339Timestamps)
+}
+
+func compareRFC3339Timestamps(left, right string) int {
+	leftTime, leftErr := time.Parse(time.RFC3339Nano, left)
+	rightTime, rightErr := time.Parse(time.RFC3339Nano, right)
+	if leftErr == nil && rightErr == nil {
+		switch {
+		case leftTime.Before(rightTime):
+			return -1
+		case leftTime.After(rightTime):
+			return 1
+		default:
+			return 0
+		}
+	}
+	return strings.Compare(left, right)
+}
 
 func preflightDatabasePath(dbPath string) error {
 	trimmed := strings.TrimSpace(dbPath)
@@ -405,6 +427,7 @@ func (s *Store) createTables() error {
 
 		-- Anthropic indexes
 		CREATE INDEX IF NOT EXISTS idx_anthropic_snapshots_captured ON anthropic_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_anthropic_snapshots_captured_time ON anthropic_snapshots(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_anthropic_quota_values_snapshot ON anthropic_quota_values(snapshot_id);
 		CREATE INDEX IF NOT EXISTS idx_anthropic_cycles_name_start ON anthropic_reset_cycles(quota_name, cycle_start);
 		CREATE INDEX IF NOT EXISTS idx_anthropic_cycles_name_active ON anthropic_reset_cycles(quota_name, cycle_end) WHERE cycle_end IS NULL;
@@ -648,6 +671,7 @@ func (s *Store) createTables() error {
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_gemini_snapshots_captured ON gemini_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_gemini_snapshots_captured_time ON gemini_snapshots(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_gemini_quota_values_snapshot ON gemini_quota_values(snapshot_id);
 		CREATE INDEX IF NOT EXISTS idx_gemini_quota_values_model ON gemini_quota_values(model_id);
 		CREATE INDEX IF NOT EXISTS idx_gemini_cycles_model_start ON gemini_reset_cycles(model_id, cycle_start);

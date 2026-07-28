@@ -75,6 +75,81 @@ func TestQueryRangeExcludesSnapshotAtEnd(t *testing.T) {
 	}
 }
 
+func TestProviderRangesOrderFractionalSecondsChronologically(t *testing.T) {
+	t.Parallel()
+
+	capturedAt := time.Date(2026, 7, 1, 12, 0, 0, 123_000_000, time.UTC)
+	start := capturedAt.Add(-time.Hour)
+	end := capturedAt.Add(100 * time.Microsecond)
+
+	t.Run("anthropic", func(t *testing.T) {
+		s, err := New(":memory:")
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		defer s.Close()
+
+		if _, err := s.InsertAnthropicSnapshot(&api.AnthropicSnapshot{
+			CapturedAt: capturedAt,
+			Quotas: []api.AnthropicQuota{{
+				Name:        "five_hour",
+				Utilization: 10,
+			}},
+		}); err != nil {
+			t.Fatalf("InsertAnthropicSnapshot: %v", err)
+		}
+
+		rows, err := s.QueryAnthropicRange(start, end)
+		if err != nil {
+			t.Fatalf("QueryAnthropicRange: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("QueryAnthropicRange returned %d rows, want 1", len(rows))
+		}
+		limited, err := s.QueryAnthropicRange(start, end, 200)
+		if err != nil {
+			t.Fatalf("limited QueryAnthropicRange: %v", err)
+		}
+		if len(limited) != 1 {
+			t.Fatalf("limited QueryAnthropicRange returned %d rows, want 1", len(limited))
+		}
+	})
+
+	t.Run("gemini", func(t *testing.T) {
+		s, err := New(":memory:")
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		defer s.Close()
+
+		if _, err := s.InsertGeminiSnapshot(&api.GeminiSnapshot{
+			CapturedAt: capturedAt,
+			Quotas: []api.GeminiQuota{{
+				ModelID:           "gemini-2.5-pro",
+				RemainingFraction: 0.9,
+				UsagePercent:      10,
+			}},
+		}); err != nil {
+			t.Fatalf("InsertGeminiSnapshot: %v", err)
+		}
+
+		rows, err := s.QueryGeminiRange(start, end)
+		if err != nil {
+			t.Fatalf("QueryGeminiRange: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("QueryGeminiRange returned %d rows, want 1", len(rows))
+		}
+		limited, err := s.QueryGeminiRange(start, end, 200)
+		if err != nil {
+			t.Fatalf("limited QueryGeminiRange: %v", err)
+		}
+		if len(limited) != 1 {
+			t.Fatalf("limited QueryGeminiRange returned %d rows, want 1", len(limited))
+		}
+	})
+}
+
 func TestAPIIntegrationRangesExcludeEventAtEnd(t *testing.T) {
 	t.Parallel()
 	s, err := New(":memory:")

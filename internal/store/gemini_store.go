@@ -144,18 +144,21 @@ func (s *Store) QueryLatestGemini() (*api.GeminiSnapshot, error) {
 // QueryGeminiRange returns Gemini snapshots within a time range.
 func (s *Store) QueryGeminiRange(start, end time.Time, limit ...int) ([]*api.GeminiSnapshot, error) {
 	query := `SELECT id, captured_at, tier, project_id, quota_count FROM gemini_snapshots
-		WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
+		WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+			AND captured_at COLLATE ONWATCH_RFC3339 < ?
+		ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, tier, project_id, quota_count
 			FROM (
 				SELECT id, captured_at, tier, project_id, quota_count
 				FROM gemini_snapshots
-				WHERE captured_at >= ? AND captured_at < ?
-				ORDER BY captured_at DESC
+				WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+					AND captured_at COLLATE ONWATCH_RFC3339 < ?
+				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 				LIMIT ?
 			) recent
-			ORDER BY captured_at ASC`
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
 
@@ -234,10 +237,11 @@ func (s *Store) QueryGeminiRangeSampled(start, end time.Time, maxPoints int) ([]
 	rows, err := s.db.Query(`
 		WITH ranked AS (
 			SELECT id, captured_at, tier, project_id,
-				ROW_NUMBER() OVER (ORDER BY captured_at ASC) AS row_number,
+				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC) AS row_number,
 				COUNT(*) OVER () AS total_rows
 			FROM gemini_snapshots
-			WHERE captured_at >= ? AND captured_at < ?
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+				AND captured_at COLLATE ONWATCH_RFC3339 < ?
 		),
 		sampled AS (
 			SELECT id, captured_at, tier, project_id
@@ -251,7 +255,7 @@ func (s *Store) QueryGeminiRangeSampled(start, end time.Time, maxPoints int) ([]
 			quota.model_id, quota.remaining_fraction, quota.usage_percent, quota.reset_time
 		FROM sampled
 		LEFT JOIN gemini_quota_values quota ON quota.snapshot_id = sampled.id
-		ORDER BY sampled.captured_at ASC, quota.model_id ASC`,
+		ORDER BY sampled.captured_at COLLATE ONWATCH_RFC3339 ASC, quota.model_id ASC`,
 		start.Format(time.RFC3339Nano),
 		end.Format(time.RFC3339Nano),
 		maxPoints,
