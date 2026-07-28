@@ -6,8 +6,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Wrapper = Join-Path $InstallDir "onwatch.cmd"
+$DevScript = Join-Path $InstallDir "onwatch-dev.ps1"
 $InstalledExe = Join-Path $InstallDir "bin\onwatch.exe"
+$Launcher = Join-Path $RepoDir "scripts\run-hidden.vbs"
+$WScriptPath = Join-Path $env:SystemRoot "System32\wscript.exe"
+$PowerShellPath = Join-Path $PSHOME "powershell.exe"
 $LogDir = Join-Path $InstallDir "logs"
 $LogPath = Join-Path $LogDir "watchdog.log"
 $LockPath = Join-Path $InstallDir "onwatch-watchdog.lock"
@@ -29,14 +32,33 @@ function Test-OnWatchRunning {
 }
 
 function Start-OnWatchFromRepo {
-    if (!(Test-Path $Wrapper)) {
-        throw "onWatch wrapper not found: $Wrapper"
+    foreach ($path in @($DevScript, $Launcher, $WScriptPath, $PowerShellPath)) {
+        if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Required file not found: $path"
+        }
     }
     if (!(Test-Path $RepoDir)) {
         throw "onWatch repo not found: $RepoDir"
     }
     Write-WatchdogLog "starting onWatch from repo"
-    Start-Process -FilePath $Wrapper -ArgumentList "restart" -WorkingDirectory $RepoDir -WindowStyle Hidden | Out-Null
+    & $WScriptPath `
+        "//B" `
+        "//Nologo" `
+        $Launcher `
+        $PowerShellPath `
+        "-NoLogo" `
+        "-NoProfile" `
+        "-NonInteractive" `
+        "-WindowStyle" `
+        "Hidden" `
+        "-ExecutionPolicy" `
+        "Bypass" `
+        "-File" `
+        $DevScript `
+        "restart"
+    if ($LASTEXITCODE -ne 0) {
+        throw "onWatch restart failed with exit code $LASTEXITCODE."
+    }
 }
 
 New-Item -ItemType Directory -Force $InstallDir | Out-Null

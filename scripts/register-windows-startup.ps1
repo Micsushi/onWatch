@@ -7,15 +7,44 @@ param(
 $ErrorActionPreference = "Stop"
 
 $WatchdogScript = Join-Path $RepoDir "scripts\windows-background-watchdog.ps1"
-if (!(Test-Path $WatchdogScript)) {
-    throw "Watchdog script not found: $WatchdogScript"
+$LauncherScript = Join-Path $RepoDir "scripts\run-hidden.vbs"
+$WScriptPath = Join-Path $env:SystemRoot "System32\wscript.exe"
+$PowerShellPath = Join-Path $PSHOME "powershell.exe"
+foreach ($path in @($WatchdogScript, $LauncherScript, $WScriptPath, $PowerShellPath)) {
+    if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Required file not found: $path"
+    }
 }
 
-$escapedScript = $WatchdogScript.Replace('"', '\"')
-$escapedRepo = $RepoDir.Replace('"', '\"')
-$arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$escapedScript`" -RepoDir `"$escapedRepo`" -CheckIntervalSeconds $CheckIntervalSeconds"
+$argumentList = @(
+    "//B",
+    "//Nologo",
+    $LauncherScript,
+    $PowerShellPath,
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-WindowStyle",
+    "Hidden",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    $WatchdogScript,
+    "-RepoDir",
+    $RepoDir,
+    "-CheckIntervalSeconds",
+    [string]$CheckIntervalSeconds
+)
+$arguments = ($argumentList | ForEach-Object {
+    '"' + $_.Replace('"', '\"') + '"'
+}) -join " "
 
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments
+$existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($existingTask -and $existingTask.State -eq "Running") {
+    Stop-ScheduledTask -InputObject $existingTask
+}
+
+$action = New-ScheduledTaskAction -Execute $WScriptPath -Argument $arguments
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
