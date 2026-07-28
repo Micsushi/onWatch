@@ -113,7 +113,7 @@ func TestDownloadWithRetry_TimeoutThenSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempt := attempts.Add(1)
 		if attempt == 1 {
-			time.Sleep(120 * time.Millisecond)
+			<-r.Context().Done()
 			return
 		}
 		_, _ = w.Write(payload)
@@ -121,7 +121,7 @@ func TestDownloadWithRetry_TimeoutThenSuccess(t *testing.T) {
 	defer srv.Close()
 
 	u := NewUpdater("1.0.0", slog.Default())
-	u.downloadTimeout = 50 * time.Millisecond
+	u.downloadTimeout = time.Second
 	u.downloadRetryBackoff = 1 * time.Millisecond
 	u.downloadMaxAttempts = 2
 
