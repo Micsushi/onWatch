@@ -73,7 +73,7 @@ func (s *Store) QueryLatestOpenRouter() (*api.OpenRouterSnapshot, error) {
 	err := s.db.QueryRow(
 		`SELECT id, captured_at, label, usage, usage_daily, usage_weekly, usage_monthly,
 		 credit_limit, limit_remaining, is_free_tier, rate_limit_requests, rate_limit_interval
-		FROM openrouter_snapshots ORDER BY captured_at DESC LIMIT 1`,
+		FROM openrouter_snapshots ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC LIMIT 1`,
 	).Scan(
 		&snapshot.ID, &capturedAt, &snapshot.Label,
 		&snapshot.Usage, &snapshot.UsageDaily, &snapshot.UsageWeekly, &snapshot.UsageMonthly,
@@ -105,8 +105,8 @@ func (s *Store) QueryOpenRouterRange(start, end time.Time, limit ...int) ([]*api
 	query := `SELECT id, captured_at, label, usage, usage_daily, usage_weekly, usage_monthly,
 		 credit_limit, limit_remaining, is_free_tier, rate_limit_requests, rate_limit_interval
 		FROM openrouter_snapshots
-		WHERE captured_at >= ? AND captured_at < ?
-		ORDER BY captured_at ASC`
+		WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+		ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, label, usage, usage_daily, usage_weekly, usage_monthly,
@@ -115,11 +115,11 @@ func (s *Store) QueryOpenRouterRange(start, end time.Time, limit ...int) ([]*api
 				SELECT id, captured_at, label, usage, usage_daily, usage_weekly, usage_monthly,
 					 credit_limit, limit_remaining, is_free_tier, rate_limit_requests, rate_limit_interval
 				FROM openrouter_snapshots
-				WHERE captured_at >= ? AND captured_at < ?
-				ORDER BY captured_at DESC
+				WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 				LIMIT ?
 			) recent
-			ORDER BY captured_at ASC`
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
 	rows, err := s.db.Query(query, args...)

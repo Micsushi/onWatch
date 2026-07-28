@@ -80,7 +80,7 @@ func (s *Store) QueryLatestCursor() (*api.CursorSnapshot, error) {
 	var capturedAt, accountType, planName string
 
 	err := s.db.QueryRow(
-		`SELECT id, captured_at, account_type, plan_name, quota_count FROM cursor_snapshots ORDER BY captured_at DESC LIMIT 1`,
+		`SELECT id, captured_at, account_type, plan_name, quota_count FROM cursor_snapshots ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC LIMIT 1`,
 	).Scan(&snapshot.ID, &capturedAt, &accountType, &planName, new(int))
 
 	if err == sql.ErrNoRows {
@@ -123,18 +123,18 @@ func (s *Store) QueryLatestCursor() (*api.CursorSnapshot, error) {
 
 func (s *Store) QueryCursorRange(start, end time.Time, limit ...int) ([]*api.CursorSnapshot, error) {
 	query := `SELECT id, captured_at, account_type, plan_name, quota_count FROM cursor_snapshots
-		WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
+		WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ? ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 	args := []interface{}{start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, account_type, plan_name, quota_count
 			FROM (
 				SELECT id, captured_at, account_type, plan_name, quota_count
 				FROM cursor_snapshots
-				WHERE captured_at >= ? AND captured_at < ?
-				ORDER BY captured_at DESC
+				WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 				LIMIT ?
 			) recent
-			ORDER BY captured_at ASC`
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
 
@@ -351,8 +351,8 @@ func (s *Store) QueryCursorUtilizationSeries(quotaName string, since time.Time) 
 		`SELECT s.captured_at, qv.utilization
 		FROM cursor_quota_values qv
 		JOIN cursor_snapshots s ON s.id = qv.snapshot_id
-		WHERE qv.quota_name = ? AND s.captured_at >= ?
-		ORDER BY s.captured_at ASC`,
+		WHERE qv.quota_name = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ?
+		ORDER BY s.captured_at COLLATE ONWATCH_RFC3339 ASC`,
 		quotaName, since.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -482,7 +482,7 @@ func (s *Store) QueryCursorCycleOverview(groupBy string, limit int) ([]CycleOver
 		err := s.db.QueryRow(
 			`SELECT s.id, s.captured_at FROM cursor_snapshots s
 			JOIN cursor_quota_values qv ON qv.snapshot_id = s.id
-			WHERE qv.quota_name = ? AND s.captured_at >= ? AND s.captured_at < ?
+			WHERE qv.quota_name = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ? AND s.captured_at COLLATE ONWATCH_RFC3339 < ?
 			ORDER BY qv.utilization DESC LIMIT 1`,
 			groupBy,
 			c.CycleStart.Format(time.RFC3339Nano),

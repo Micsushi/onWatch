@@ -86,7 +86,7 @@ func (s *Store) QueryLatestCopilot() (*api.CopilotSnapshot, error) {
 	var resetDate sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, captured_at, copilot_plan, reset_date, quota_count FROM copilot_snapshots ORDER BY captured_at DESC LIMIT 1`,
+		`SELECT id, captured_at, copilot_plan, reset_date, quota_count FROM copilot_snapshots ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC LIMIT 1`,
 	).Scan(&snapshot.ID, &capturedAt, &copilotPlan, &resetDate, new(int))
 
 	if err == sql.ErrNoRows {
@@ -132,18 +132,18 @@ func (s *Store) QueryLatestCopilot() (*api.CopilotSnapshot, error) {
 // QueryCopilotRange returns Copilot snapshots within a time range.
 func (s *Store) QueryCopilotRange(start, end time.Time, limit ...int) ([]*api.CopilotSnapshot, error) {
 	query := `SELECT id, captured_at, copilot_plan, reset_date, quota_count FROM copilot_snapshots
-		WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
+		WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ? ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, copilot_plan, reset_date, quota_count
 			FROM (
 				SELECT id, captured_at, copilot_plan, reset_date, quota_count
 				FROM copilot_snapshots
-				WHERE captured_at >= ? AND captured_at < ?
-				ORDER BY captured_at DESC
+				WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 				LIMIT ?
 			) recent
-			ORDER BY captured_at ASC`
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
 
@@ -367,8 +367,8 @@ func (s *Store) QueryCopilotUsageSeries(quotaName string, since time.Time) ([]Co
 		`SELECT s.captured_at, qv.entitlement, qv.remaining, qv.unlimited
 		FROM copilot_quota_values qv
 		JOIN copilot_snapshots s ON s.id = qv.snapshot_id
-		WHERE qv.quota_name = ? AND s.captured_at >= ?
-		ORDER BY s.captured_at ASC`,
+		WHERE qv.quota_name = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ?
+		ORDER BY s.captured_at COLLATE ONWATCH_RFC3339 ASC`,
 		quotaName, since.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -441,7 +441,7 @@ func (s *Store) QueryCopilotCycleOverview(groupBy string, limit int) ([]CycleOve
 		err := s.db.QueryRow(
 			`SELECT s.id, s.captured_at FROM copilot_snapshots s
 			JOIN copilot_quota_values qv ON qv.snapshot_id = s.id
-			WHERE qv.quota_name = ? AND s.captured_at >= ? AND s.captured_at < ?
+			WHERE qv.quota_name = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ? AND s.captured_at COLLATE ONWATCH_RFC3339 < ?
 			ORDER BY (qv.entitlement - qv.remaining) DESC LIMIT 1`,
 			groupBy,
 			c.CycleStart.Format(time.RFC3339Nano),

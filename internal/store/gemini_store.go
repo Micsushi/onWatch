@@ -90,7 +90,7 @@ func (s *Store) QueryLatestGemini() (*api.GeminiSnapshot, error) {
 
 	err := s.db.QueryRow(
 		`SELECT id, captured_at, tier, project_id, quota_count
-		FROM gemini_snapshots ORDER BY captured_at DESC LIMIT 1`,
+		FROM gemini_snapshots ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC LIMIT 1`,
 	).Scan(&snapshot.ID, &capturedAt, &tier, &projectID, new(int))
 
 	if err == sql.ErrNoRows {
@@ -523,8 +523,8 @@ func (s *Store) QueryGeminiUsageSeries(modelID string, since time.Time) ([]Gemin
 		`SELECT s.captured_at, qv.remaining_fraction
 		FROM gemini_quota_values qv
 		JOIN gemini_snapshots s ON s.id = qv.snapshot_id
-		WHERE qv.model_id = ? AND s.captured_at >= ?
-		ORDER BY s.captured_at ASC`,
+		WHERE qv.model_id = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ?
+		ORDER BY s.captured_at COLLATE ONWATCH_RFC3339 ASC`,
 		modelID,
 		since.UTC().Format(time.RFC3339Nano),
 	)
@@ -597,7 +597,7 @@ func (s *Store) QueryGeminiCycleOverview(modelID string, limit int) ([]CycleOver
 		err := s.db.QueryRow(
 			`SELECT s.id, s.captured_at FROM gemini_snapshots s
 			JOIN gemini_quota_values qv ON qv.snapshot_id = s.id
-			WHERE qv.model_id = ? AND s.captured_at >= ? AND s.captured_at < ?
+			WHERE qv.model_id = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ? AND s.captured_at COLLATE ONWATCH_RFC3339 < ?
 			ORDER BY qv.usage_percent DESC LIMIT 1`,
 			modelID,
 			c.CycleStart.Format(time.RFC3339Nano),

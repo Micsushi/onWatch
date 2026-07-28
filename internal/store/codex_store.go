@@ -103,7 +103,7 @@ func (s *Store) QueryLatestCodex(accountID int64) (*api.CodexSnapshot, error) {
 	var creditsBalance sql.NullFloat64
 
 	err := s.db.QueryRow(
-		`SELECT id, captured_at, plan_type, credits_balance, quota_count, account_id FROM codex_snapshots WHERE account_id = ? ORDER BY captured_at DESC LIMIT 1`,
+		`SELECT id, captured_at, plan_type, credits_balance, quota_count, account_id FROM codex_snapshots WHERE account_id = ? ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC LIMIT 1`,
 		accountID,
 	).Scan(&snapshot.ID, &capturedAt, &planType, &creditsBalance, new(int), &snapshot.AccountID)
 
@@ -164,18 +164,18 @@ func (s *Store) QueryCodexRange(accountID int64, start, end time.Time, limit ...
 		accountID = DefaultCodexAccountID
 	}
 	query := `SELECT id, captured_at, plan_type, credits_balance, quota_count, account_id FROM codex_snapshots
-		WHERE account_id = ? AND captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
+		WHERE account_id = ? AND captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ? ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 	args := []interface{}{accountID, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, plan_type, credits_balance, quota_count, account_id
 			FROM (
 				SELECT id, captured_at, plan_type, credits_balance, quota_count, account_id
 				FROM codex_snapshots
-				WHERE account_id = ? AND captured_at >= ? AND captured_at < ?
-				ORDER BY captured_at DESC
+				WHERE account_id = ? AND captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 				LIMIT ?
 			) recent
-			ORDER BY captured_at ASC`
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
 
@@ -260,10 +260,10 @@ func (s *Store) QueryCodexRangeSampled(accountID int64, start, end time.Time, ma
 	rows, err := s.db.Query(`
 		WITH ranked AS (
 			SELECT id, captured_at, plan_type, credits_balance, account_id,
-				ROW_NUMBER() OVER (ORDER BY captured_at ASC) AS row_number,
+				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC) AS row_number,
 				COUNT(*) OVER () AS total_rows
 			FROM codex_snapshots
-			WHERE account_id = ? AND captured_at >= ? AND captured_at < ?
+			WHERE account_id = ? AND captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
 		),
 		sampled AS (
 			SELECT id, captured_at, plan_type, credits_balance, account_id
@@ -277,7 +277,7 @@ func (s *Store) QueryCodexRangeSampled(accountID int64, start, end time.Time, ma
 			quota.quota_name, quota.utilization, quota.resets_at, quota.status
 		FROM sampled
 		LEFT JOIN codex_quota_values quota ON quota.snapshot_id = sampled.id
-		ORDER BY sampled.captured_at ASC, quota.quota_name ASC`,
+		ORDER BY sampled.captured_at COLLATE ONWATCH_RFC3339 ASC, quota.quota_name ASC`,
 		accountID,
 		start.Format(time.RFC3339Nano),
 		end.Format(time.RFC3339Nano),
@@ -643,8 +643,8 @@ func (s *Store) QueryCodexUtilizationSeries(accountID int64, quotaName string, s
 		`SELECT s.captured_at, qv.utilization
 		FROM codex_quota_values qv
 		JOIN codex_snapshots s ON s.id = qv.snapshot_id
-		WHERE s.account_id = ? AND qv.quota_name = ? AND s.captured_at >= ?
-		ORDER BY s.captured_at ASC`,
+		WHERE s.account_id = ? AND qv.quota_name = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ?
+		ORDER BY s.captured_at COLLATE ONWATCH_RFC3339 ASC`,
 		accountID,
 		quotaName,
 		since.UTC().Format(time.RFC3339Nano),
@@ -720,7 +720,7 @@ func (s *Store) QueryCodexCycleOverview(accountID int64, groupBy string, limit i
 		err := s.db.QueryRow(
 			`SELECT s.id, s.captured_at
 			FROM codex_snapshots s
-			WHERE s.account_id = ? AND s.captured_at >= ? AND s.captured_at < ?
+			WHERE s.account_id = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ? AND s.captured_at COLLATE ONWATCH_RFC3339 < ?
 				AND EXISTS (
 					SELECT 1 FROM codex_quota_values qv
 					WHERE qv.snapshot_id = s.id AND qv.quota_name = ?
@@ -756,8 +756,8 @@ func (s *Store) QueryCodexCycleOverview(accountID int64, groupBy string, limit i
 		var firstSnapshotID int64
 		err = s.db.QueryRow(
 			`SELECT id FROM codex_snapshots
-			WHERE account_id = ? AND captured_at >= ? AND captured_at < ?
-			ORDER BY captured_at ASC LIMIT 1`,
+			WHERE account_id = ? AND captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC LIMIT 1`,
 			accountID,
 			c.CycleStart.Format(time.RFC3339Nano),
 			endBoundary.Format(time.RFC3339Nano),

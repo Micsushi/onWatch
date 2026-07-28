@@ -1368,12 +1368,15 @@ func TestHandler_Current_ZaiReturnsTokensAndTimeLimits(t *testing.T) {
 
 func TestHandler_History_WithZaiProvider(t *testing.T) {
 	t.Parallel()
-	s, _ := store.New(":memory:")
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 	defer s.Close()
 
 	resetTime := time.Now().Add(24 * time.Hour)
 	zaiSnapshot := &api.ZaiSnapshot{
-		CapturedAt:          time.Now().UTC(),
+		CapturedAt:          time.Now().UTC().Add(-time.Minute),
 		TokensLimit:         200000000,
 		TokensUsage:         200112618,
 		TokensRemaining:     0,
@@ -1384,7 +1387,9 @@ func TestHandler_History_WithZaiProvider(t *testing.T) {
 		TimePercentage:      1,
 		TokensNextResetTime: &resetTime,
 	}
-	s.InsertZaiSnapshot(zaiSnapshot)
+	if _, err := s.InsertZaiSnapshot(zaiSnapshot); err != nil {
+		t.Fatalf("failed to insert Z.ai snapshot: %v", err)
+	}
 
 	cfg := createTestConfigWithZai()
 	h := NewHandler(s, nil, nil, nil, cfg)
@@ -2446,18 +2451,23 @@ func TestHandler_Current_AnthropicEmptyDB(t *testing.T) {
 
 func TestHandler_History_WithAnthropicProvider(t *testing.T) {
 	t.Parallel()
-	s, _ := store.New(":memory:")
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 	defer s.Close()
 
 	resetsAt := time.Now().Add(5 * time.Hour)
 	snapshot := &api.AnthropicSnapshot{
-		CapturedAt: time.Now().UTC(),
+		CapturedAt: time.Now().UTC().Add(-time.Minute),
 		Quotas: []api.AnthropicQuota{
 			{Name: "five_hour", Utilization: 45.0, ResetsAt: &resetsAt},
 		},
 		RawJSON: `{"five_hour":{"utilization":0.45}}`,
 	}
-	s.InsertAnthropicSnapshot(snapshot)
+	if _, err := s.InsertAnthropicSnapshot(snapshot); err != nil {
+		t.Fatalf("failed to insert Anthropic snapshot: %v", err)
+	}
 
 	cfg := createTestConfigWithAnthropic()
 	h := NewHandler(s, nil, nil, nil, cfg)

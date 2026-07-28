@@ -312,7 +312,7 @@ func (s *Store) CompactAPIIntegrationUsageEvents(cutoff time.Time) (APIIntegrati
 	if err := tx.QueryRow(`
 		SELECT COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0)
 		FROM api_integration_usage_events
-		WHERE captured_at < ?
+		WHERE captured_at COLLATE ONWATCH_RFC3339 < ?
 	`, cutoffRaw).Scan(&rawCount, &rawTotalTokens, &rawCost); err != nil {
 		return result, fmt.Errorf("inspect API integration compaction candidates: %w", err)
 	}
@@ -349,7 +349,7 @@ func (s *Store) CompactAPIIntegrationUsageEvents(cutoff time.Time) (APIIntegrati
 				cost_usd,
 				captured_at
 			FROM api_integration_usage_events
-			WHERE captured_at < ?
+			WHERE captured_at COLLATE ONWATCH_RFC3339 < ?
 		)
 		SELECT
 			hour_start, integration_name, provider, account_name, model,
@@ -364,8 +364,8 @@ func (s *Store) CompactAPIIntegrationUsageEvents(cutoff time.Time) (APIIntegrati
 			COALESCE(SUM(output_tokens), 0) AS output_tokens,
 			COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
 			COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
-			MIN(captured_at) AS first_captured_at,
-			MAX(captured_at) AS last_captured_at
+			MIN(captured_at COLLATE ONWATCH_RFC3339) AS first_captured_at,
+			MAX(captured_at COLLATE ONWATCH_RFC3339) AS last_captured_at
 		FROM annotated
 		GROUP BY hour_start, integration_name, provider, account_name, model,
 			reasoning_effort, mode, speed_mode
@@ -419,8 +419,8 @@ func (s *Store) CompactAPIIntegrationUsageEvents(cutoff time.Time) (APIIntegrati
 			output_tokens = output_tokens + excluded.output_tokens,
 			reasoning_output_tokens = reasoning_output_tokens + excluded.reasoning_output_tokens,
 			total_cost_usd = total_cost_usd + excluded.total_cost_usd,
-			first_captured_at = MIN(first_captured_at, excluded.first_captured_at),
-			last_captured_at = MAX(last_captured_at, excluded.last_captured_at)
+			first_captured_at = MIN(first_captured_at COLLATE ONWATCH_RFC3339, excluded.first_captured_at),
+			last_captured_at = MAX(last_captured_at COLLATE ONWATCH_RFC3339, excluded.last_captured_at)
 	`); err != nil {
 		return result, fmt.Errorf("store API integration hourly archive: %w", err)
 	}
@@ -429,7 +429,7 @@ func (s *Store) CompactAPIIntegrationUsageEvents(cutoff time.Time) (APIIntegrati
 		INSERT OR IGNORE INTO api_integration_usage_compacted_fingerprints (fingerprint, captured_at)
 		SELECT fingerprint, captured_at
 		FROM api_integration_usage_events
-		WHERE captured_at < ?
+		WHERE captured_at COLLATE ONWATCH_RFC3339 < ?
 	`, cutoffRaw); err != nil {
 		return result, fmt.Errorf("store compacted API integration fingerprints: %w", err)
 	}
@@ -439,14 +439,14 @@ func (s *Store) CompactAPIIntegrationUsageEvents(cutoff time.Time) (APIIntegrati
 		  AND local_record_id IN (
 			SELECT CAST(id AS TEXT)
 			FROM api_integration_usage_events
-			WHERE captured_at < ?
+			WHERE captured_at COLLATE ONWATCH_RFC3339 < ?
 		  )
 	`, cutoffRaw); err != nil {
 		return result, fmt.Errorf("clean compacted API integration transfer records: %w", err)
 	}
 	deleteResult, err := tx.Exec(`
 		DELETE FROM api_integration_usage_events
-		WHERE captured_at < ?
+		WHERE captured_at COLLATE ONWATCH_RFC3339 < ?
 	`, cutoffRaw)
 	if err != nil {
 		return result, fmt.Errorf("delete compacted API integration usage events: %w", err)
@@ -611,8 +611,8 @@ func (s *Store) QueryAPIIntegrationUsageRange(start, end time.Time, limit ...int
 		       source.total_tokens, source.cost_usd, source.latency_ms, %s,
 		       source.source_path, source.fingerprint
 		FROM api_integration_usage_events AS source
-		WHERE source.captured_at >= ? AND source.captured_at < ?
-		ORDER BY source.captured_at ASC
+		WHERE source.captured_at COLLATE ONWATCH_RFC3339 >= ? AND source.captured_at COLLATE ONWATCH_RFC3339 < ?
+		ORDER BY source.captured_at COLLATE ONWATCH_RFC3339 ASC
 	`, apiIntegrationMetadataJSONExpression("source"))
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
@@ -668,7 +668,7 @@ func (s *Store) QueryAPIIntegrationUsageRange(start, end time.Time, limit ...int
 func (s *Store) DeleteAPIIntegrationUsageEventsOlderThan(cutoff time.Time) (int64, error) {
 	res, err := s.db.Exec(`
 		DELETE FROM api_integration_usage_events
-		WHERE captured_at < ?
+		WHERE captured_at COLLATE ONWATCH_RFC3339 < ?
 	`, cutoff.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, fmt.Errorf("failed to delete expired API integration usage events: %w", err)
@@ -697,7 +697,7 @@ func (s *Store) QueryAPIIntegrationUsageSummary() ([]APIIntegrationUsageSummaryR
 		       COALESCE(SUM(output_tokens), 0),
 		       COALESCE(SUM(reasoning_output_tokens), 0),
 		       COALESCE(SUM(cost_usd), 0),
-		       MAX(captured_at)
+		       MAX(captured_at COLLATE ONWATCH_RFC3339)
 		FROM api_integration_usage_events
 		GROUP BY integration_name, provider, account_name, model
 		ORDER BY integration_name, provider, account_name, model
@@ -773,7 +773,7 @@ func (s *Store) QueryAPIIntegrationUsageEffortSummary() ([]APIIntegrationUsageEf
 			       COALESCE(SUM(output_tokens), 0) AS output_tokens,
 			       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
 			       COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
-			       MAX(captured_at) AS last_captured_at
+			       MAX(captured_at COLLATE ONWATCH_RFC3339) AS last_captured_at
 			FROM raw_annotated
 			GROUP BY integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode
 			UNION ALL
@@ -794,7 +794,7 @@ func (s *Store) QueryAPIIntegrationUsageEffortSummary() ([]APIIntegrationUsageEf
 		       COALESCE(SUM(output_tokens), 0),
 		       COALESCE(SUM(reasoning_output_tokens), 0),
 		       COALESCE(SUM(total_cost_usd), 0),
-		       MAX(last_captured_at)
+		       MAX(last_captured_at COLLATE ONWATCH_RFC3339)
 		FROM combined
 		GROUP BY integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode
 		ORDER BY integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode
@@ -860,7 +860,7 @@ func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integ
 				cost_usd,
 				captured_at
 			FROM api_integration_usage_events
-			WHERE captured_at >= ? AND captured_at < ?
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
 		),
 		combined AS (
 			SELECT integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode,
@@ -874,7 +874,7 @@ func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integ
 			       COALESCE(SUM(output_tokens), 0) AS output_tokens,
 			       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
 			       COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
-			       MAX(captured_at) AS last_captured_at
+			       MAX(captured_at COLLATE ONWATCH_RFC3339) AS last_captured_at
 			FROM raw_annotated
 			GROUP BY integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode
 			UNION ALL
@@ -883,7 +883,7 @@ func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integ
 			       cached_input_tokens, cache_creation_input_tokens, output_tokens,
 			       reasoning_output_tokens, total_cost_usd, last_captured_at
 			FROM api_integration_usage_hourly
-			WHERE hour_start < ? AND last_captured_at >= ?
+			WHERE hour_start < ? AND last_captured_at COLLATE ONWATCH_RFC3339 >= ?
 		)
 		SELECT integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode,
 		       COALESCE(SUM(request_count), 0),
@@ -896,7 +896,7 @@ func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integ
 		       COALESCE(SUM(output_tokens), 0),
 		       COALESCE(SUM(reasoning_output_tokens), 0),
 		       COALESCE(SUM(total_cost_usd), 0),
-		       MAX(last_captured_at)
+		       MAX(last_captured_at COLLATE ONWATCH_RFC3339)
 		FROM combined
 	`
 	startRaw := start.Format(time.RFC3339Nano)
@@ -973,7 +973,7 @@ func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 			       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
 			       COALESCE(SUM(cost_usd), 0) AS total_cost_usd
 			FROM api_integration_usage_events
-			WHERE captured_at >= ? AND captured_at < ?
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
 			GROUP BY integration_name, bucket_start
 			UNION ALL
 			SELECT integration_name,
@@ -989,7 +989,7 @@ func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 			       COALESCE(SUM(reasoning_output_tokens), 0),
 			       COALESCE(SUM(total_cost_usd), 0)
 			FROM api_integration_usage_hourly
-			WHERE hour_start < ? AND last_captured_at >= ?
+			WHERE hour_start < ? AND last_captured_at COLLATE ONWATCH_RFC3339 >= ?
 			GROUP BY integration_name, bucket_start
 		)
 		SELECT integration_name, bucket_start,
@@ -1050,8 +1050,8 @@ func (s *Store) QueryAPIIntegrationUsageSessions(start, end time.Time, integrati
 		SELECT integration_name,
 		       COALESCE(NULLIF(session_id, ''), source_path, 'unknown') AS session_id,
 		       substr(captured_at, 1, 10) AS chat_date,
-		       MIN(captured_at),
-		       MAX(captured_at),
+		       MIN(captured_at COLLATE ONWATCH_RFC3339),
+		       MAX(captured_at COLLATE ONWATCH_RFC3339),
 		       COUNT(*),
 		       COALESCE(SUM(prompt_tokens), 0),
 		       COALESCE(SUM(completion_tokens), 0),
@@ -1063,7 +1063,7 @@ func (s *Store) QueryAPIIntegrationUsageSessions(start, end time.Time, integrati
 		       COALESCE(SUM(reasoning_output_tokens), 0),
 		       COALESCE(SUM(cost_usd), 0)
 		FROM api_integration_usage_events
-		WHERE captured_at >= ? AND captured_at < ?
+		WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
 	`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if integrationName != "" {
@@ -1072,7 +1072,7 @@ func (s *Store) QueryAPIIntegrationUsageSessions(start, end time.Time, integrati
 	}
 	query += `
 		GROUP BY integration_name, session_id, chat_date
-		ORDER BY MIN(captured_at) ASC
+		ORDER BY MIN(captured_at COLLATE ONWATCH_RFC3339) ASC
 		LIMIT ?
 	`
 	args = append(args, limit)
@@ -1128,9 +1128,9 @@ func (s *Store) QueryAPIIntegrationUsageTotals(start, end time.Time, integration
 			       COALESCE(SUM(output_tokens), 0) AS output_tokens,
 			       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
 			       COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
-			       MAX(captured_at) AS last_captured_at
+			       MAX(captured_at COLLATE ONWATCH_RFC3339) AS last_captured_at
 			FROM api_integration_usage_events
-			WHERE captured_at >= ? AND captured_at < ?
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
 			GROUP BY integration_name
 			UNION ALL
 			SELECT integration_name,
@@ -1144,9 +1144,9 @@ func (s *Store) QueryAPIIntegrationUsageTotals(start, end time.Time, integration
 			       COALESCE(SUM(output_tokens), 0),
 			       COALESCE(SUM(reasoning_output_tokens), 0),
 			       COALESCE(SUM(total_cost_usd), 0),
-			       MAX(last_captured_at)
+			       MAX(last_captured_at COLLATE ONWATCH_RFC3339)
 			FROM api_integration_usage_hourly
-			WHERE hour_start < ? AND last_captured_at >= ?
+			WHERE hour_start < ? AND last_captured_at COLLATE ONWATCH_RFC3339 >= ?
 			GROUP BY integration_name
 		)
 		SELECT integration_name,
@@ -1160,7 +1160,7 @@ func (s *Store) QueryAPIIntegrationUsageTotals(start, end time.Time, integration
 		       COALESCE(SUM(output_tokens), 0),
 		       COALESCE(SUM(reasoning_output_tokens), 0),
 		       COALESCE(SUM(total_cost_usd), 0),
-		       MAX(last_captured_at)
+		       MAX(last_captured_at COLLATE ONWATCH_RFC3339)
 		FROM combined
 	`
 	startRaw := start.Format(time.RFC3339Nano)
@@ -1215,7 +1215,7 @@ func (s *Store) APIIntegrationUsageUsesArchive(start, end time.Time) (bool, erro
 		SELECT EXISTS (
 			SELECT 1
 			FROM api_integration_usage_hourly
-			WHERE hour_start < ? AND last_captured_at >= ?
+			WHERE hour_start < ? AND last_captured_at COLLATE ONWATCH_RFC3339 >= ?
 		)
 	`, end.UTC().Format(time.RFC3339Nano), start.UTC().Format(time.RFC3339Nano)).Scan(&usesArchive)
 	if err != nil {
@@ -1293,7 +1293,7 @@ func (s *Store) UpsertAPIIntegrationIngestState(state *apiintegrations.IngestSta
 func (s *Store) QueryAPIIntegrationIngestHealth() ([]APIIntegrationIngestHealthRow, error) {
 	rows, err := s.db.Query(`
 		SELECT s.source_path, s.offset_bytes, s.file_size, s.file_mod_time, s.partial_line, s.updated_at,
-		       MAX(e.captured_at) as last_captured_at
+		       MAX(e.captured_at COLLATE ONWATCH_RFC3339) as last_captured_at
 		FROM api_integration_ingest_state s
 		LEFT JOIN api_integration_usage_events e ON e.source_path = s.source_path
 		GROUP BY s.source_path, s.offset_bytes, s.file_size, s.file_mod_time, s.partial_line, s.updated_at

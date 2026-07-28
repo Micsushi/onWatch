@@ -121,7 +121,7 @@ func (s *Store) QueryLatestAntigravity() (*api.AntigravitySnapshot, error) {
 
 	err := s.db.QueryRow(
 		`SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
-		FROM antigravity_snapshots ORDER BY captured_at DESC LIMIT 1`,
+		FROM antigravity_snapshots ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC LIMIT 1`,
 	).Scan(&snapshot.ID, &capturedAt, &email, &planName, &promptCredits, &monthlyCredits, new(int))
 
 	if err == sql.ErrNoRows {
@@ -192,18 +192,18 @@ func (s *Store) QueryAntigravityRange(start, end time.Time, limit ...int) ([]*ap
 	// Order by ASC for chronological chart display (oldest to newest, left to right)
 	query := `SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
 		FROM antigravity_snapshots
-		WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at ASC`
+		WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ? ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
 			FROM (
 				SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
 				FROM antigravity_snapshots
-				WHERE captured_at >= ? AND captured_at < ?
-				ORDER BY captured_at DESC
+				WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 				LIMIT ?
 			) recent
-			ORDER BY captured_at ASC`
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
 
@@ -410,8 +410,8 @@ func (s *Store) QueryAntigravityUsageSeries(modelID string, since time.Time) ([]
 		`SELECT s.captured_at, mv.remaining_fraction
 		FROM antigravity_model_values mv
 		JOIN antigravity_snapshots s ON s.id = mv.snapshot_id
-		WHERE mv.model_id = ? AND s.captured_at >= ?
-		ORDER BY s.captured_at ASC`,
+		WHERE mv.model_id = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ?
+		ORDER BY s.captured_at COLLATE ONWATCH_RFC3339 ASC`,
 		modelID, since.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -626,8 +626,8 @@ func (s *Store) QueryAntigravitySnapshotAtOrBefore(t time.Time) (*api.Antigravit
 	err := s.db.QueryRow(
 		`SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
 		 FROM antigravity_snapshots
-		 WHERE captured_at <= ?
-		 ORDER BY captured_at DESC
+		 WHERE captured_at COLLATE ONWATCH_RFC3339 <= ?
+		 ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 		 LIMIT 1`,
 		t.Format(time.RFC3339Nano),
 	).Scan(&snapshot.ID, &capturedAt, &email, &planName, &promptCredits, &monthlyCredits, new(int))

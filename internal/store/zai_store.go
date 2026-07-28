@@ -79,7 +79,7 @@ func (s *Store) QueryLatestZai() (*api.ZaiSnapshot, error) {
 		 time_current_value, time_remaining, time_percentage, time_usage_details,
 		 tokens_limit, tokens_unit, tokens_number, tokens_usage,
 		 tokens_current_value, tokens_remaining, tokens_percentage, tokens_next_reset
-		FROM zai_snapshots ORDER BY captured_at DESC LIMIT 1`,
+		FROM zai_snapshots ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC LIMIT 1`,
 	).Scan(
 		&snapshot.ID, &capturedAt, &snapshot.TimeLimit, &snapshot.TimeUnit, &snapshot.TimeNumber,
 		&snapshot.TimeUsage, &snapshot.TimeCurrentValue, &snapshot.TimeRemaining, &snapshot.TimePercentage,
@@ -112,8 +112,9 @@ func (s *Store) QueryZaiRange(start, end time.Time, limit ...int) ([]*api.ZaiSna
 		 tokens_limit, tokens_unit, tokens_number, tokens_usage,
 		 tokens_current_value, tokens_remaining, tokens_percentage, tokens_next_reset
 		FROM zai_snapshots
-		WHERE captured_at >= ? AND captured_at < ?
-		ORDER BY captured_at ASC`
+		WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+			AND captured_at COLLATE ONWATCH_RFC3339 < ?
+		ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, time_limit, time_unit, time_number, time_usage,
@@ -126,11 +127,12 @@ func (s *Store) QueryZaiRange(start, end time.Time, limit ...int) ([]*api.ZaiSna
 					 tokens_limit, tokens_unit, tokens_number, tokens_usage,
 					 tokens_current_value, tokens_remaining, tokens_percentage, tokens_next_reset
 				FROM zai_snapshots
-				WHERE captured_at >= ? AND captured_at < ?
-				ORDER BY captured_at DESC
+				WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+					AND captured_at COLLATE ONWATCH_RFC3339 < ?
+				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 				LIMIT ?
 			) recent
-			ORDER BY captured_at ASC`
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
 	rows, err := s.db.Query(query, args...)
@@ -432,7 +434,8 @@ func (s *Store) QueryZaiCycleOverview(groupBy string, limit int) ([]CycleOvervie
 		err = s.db.QueryRow(
 			fmt.Sprintf(`SELECT captured_at, time_usage, time_current_value, tokens_usage, tokens_current_value
 			FROM zai_snapshots
-			WHERE captured_at >= ? AND captured_at < ?
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+				AND captured_at COLLATE ONWATCH_RFC3339 < ?
 			ORDER BY %s DESC LIMIT 1`, peakCol),
 			c.CycleStart.Format(time.RFC3339Nano),
 			endBoundary.Format(time.RFC3339Nano),

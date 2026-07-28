@@ -482,8 +482,8 @@ func (s *Store) getAnthropicSnapshotsInRange(quotaName string, start, end time.T
 		SELECT s.captured_at, qv.utilization, qv.resets_at
 		FROM anthropic_quota_values qv
 		JOIN anthropic_snapshots s ON s.id = qv.snapshot_id
-		WHERE qv.quota_name = ? AND s.captured_at >= ? AND s.captured_at <= ?
-		ORDER BY s.captured_at ASC
+		WHERE qv.quota_name = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ? AND s.captured_at COLLATE ONWATCH_RFC3339 <= ?
+		ORDER BY s.captured_at COLLATE ONWATCH_RFC3339 ASC
 	`
 	rows, err := s.db.Query(query, quotaName, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano))
 	if err != nil {

@@ -216,7 +216,7 @@ func TestGeminiCycles_ViaRouter(t *testing.T) {
 
 	now := time.Now().UTC()
 	resetTime := now.Add(1 * time.Hour)
-	insertTestGeminiSnapshot(t, s, now, []api.GeminiQuota{
+	insertTestGeminiSnapshot(t, s, now.Add(-time.Minute), []api.GeminiQuota{
 		{ModelID: "gemini-2.5-pro", RemainingFraction: 0.8, UsagePercent: 20.0, ResetTime: &resetTime},
 		{ModelID: "gemini-2.5-flash", RemainingFraction: 0.5, UsagePercent: 50.0, ResetTime: &resetTime},
 	})
@@ -607,7 +607,7 @@ func TestBothCycles_IncludesGemini(t *testing.T) {
 
 	now := time.Now().UTC()
 	resetTime := now.Add(1 * time.Hour)
-	insertTestGeminiSnapshot(t, s, now, []api.GeminiQuota{
+	insertTestGeminiSnapshot(t, s, now.Add(-time.Minute), []api.GeminiQuota{
 		{ModelID: "gemini-2.5-pro", RemainingFraction: 0.8, UsagePercent: 20.0, ResetTime: &resetTime},
 	})
 

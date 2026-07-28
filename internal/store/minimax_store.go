@@ -118,7 +118,7 @@ func (s *Store) QueryLatestMiniMax(accountID int64) (*api.MiniMaxSnapshot, error
 	var rawJSON sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, captured_at, raw_json, model_count FROM minimax_snapshots WHERE account_id = ? ORDER BY captured_at DESC LIMIT 1`,
+		`SELECT id, captured_at, raw_json, model_count FROM minimax_snapshots WHERE account_id = ? ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC LIMIT 1`,
 		accountID,
 	).Scan(&snapshot.ID, &capturedAt, &rawJSON, new(int))
 	if err == sql.ErrNoRows {
@@ -146,8 +146,8 @@ func (s *Store) QueryLatestMiniMax(accountID int64) (*api.MiniMaxSnapshot, error
 func (s *Store) QueryMiniMaxRange(start, end time.Time, accountID int64, limit ...int) ([]*api.MiniMaxSnapshot, error) {
 	query := `SELECT id, captured_at, raw_json, model_count
 		FROM minimax_snapshots
-		WHERE account_id = ? AND captured_at >= ? AND captured_at < ?
-		ORDER BY captured_at ASC`
+		WHERE account_id = ? AND captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+		ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 	args := []interface{}{accountID, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 
 	if len(limit) > 0 && limit[0] > 0 {
@@ -155,11 +155,11 @@ func (s *Store) QueryMiniMaxRange(start, end time.Time, accountID int64, limit .
 			FROM (
 				SELECT id, captured_at, raw_json, model_count
 				FROM minimax_snapshots
-				WHERE account_id = ? AND captured_at >= ? AND captured_at < ?
-				ORDER BY captured_at DESC
+				WHERE account_id = ? AND captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 				LIMIT ?
 			) recent
-			ORDER BY captured_at ASC`
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = []interface{}{accountID, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), limit[0]}
 	}
 
@@ -392,8 +392,8 @@ func (s *Store) QueryMiniMaxUsageSeries(modelName string, since time.Time, accou
 		`SELECT s.captured_at, mv.total, mv.remain, mv.used
 		FROM minimax_model_values mv
 		JOIN minimax_snapshots s ON s.id = mv.snapshot_id
-		WHERE mv.model_name = ? AND s.account_id = ? AND s.captured_at >= ?
-		ORDER BY s.captured_at ASC`,
+		WHERE mv.model_name = ? AND s.account_id = ? AND s.captured_at COLLATE ONWATCH_RFC3339 >= ?
+		ORDER BY s.captured_at COLLATE ONWATCH_RFC3339 ASC`,
 		modelName,
 		accountID,
 		since.UTC().Format(time.RFC3339Nano),
@@ -451,8 +451,8 @@ func (s *Store) queryMiniMaxSnapshotAtOrBefore(t time.Time, accountID int64) (*a
 	err := s.db.QueryRow(
 		`SELECT id, captured_at, raw_json, model_count
 		FROM minimax_snapshots
-		WHERE account_id = ? AND captured_at <= ?
-		ORDER BY captured_at DESC
+		WHERE account_id = ? AND captured_at COLLATE ONWATCH_RFC3339 <= ?
+		ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 		LIMIT 1`,
 		accountID, t.UTC().Format(time.RFC3339Nano),
 	).Scan(&snap.ID, &capturedAt, &rawJSON, new(int))

@@ -272,6 +272,7 @@ func (s *Store) createTables() error {
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_snapshots_captured ON quota_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_snapshots_captured_time ON quota_snapshots(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_snapshots_sub_renews ON quota_snapshots(sub_renews_at);
 		CREATE INDEX IF NOT EXISTS idx_snapshots_tool_renews ON quota_snapshots(tool_renews_at);
 		CREATE INDEX IF NOT EXISTS idx_cycles_type_start ON reset_cycles(quota_type, cycle_start);
@@ -393,6 +394,7 @@ func (s *Store) createTables() error {
 
 		-- Z.ai indexes
 		CREATE INDEX IF NOT EXISTS idx_zai_snapshots_captured ON zai_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_zai_snapshots_captured_time ON zai_snapshots(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_zai_snapshots_tokens_reset ON zai_snapshots(tokens_next_reset);
 		CREATE INDEX IF NOT EXISTS idx_zai_hourly_hour ON zai_hourly_usage(hour);
 		CREATE INDEX IF NOT EXISTS idx_zai_cycles_type_start ON zai_reset_cycles(quota_type, cycle_start);
@@ -498,6 +500,7 @@ func (s *Store) createTables() error {
 
 		-- Copilot indexes
 		CREATE INDEX IF NOT EXISTS idx_copilot_snapshots_captured ON copilot_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_copilot_snapshots_captured_time ON copilot_snapshots(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_copilot_quota_values_snapshot ON copilot_quota_values(snapshot_id);
 		CREATE INDEX IF NOT EXISTS idx_copilot_cycles_name_start ON copilot_reset_cycles(quota_name, cycle_start);
 		CREATE INDEX IF NOT EXISTS idx_copilot_cycles_name_active ON copilot_reset_cycles(quota_name) WHERE cycle_end IS NULL;
@@ -536,6 +539,7 @@ func (s *Store) createTables() error {
 
 		-- Codex indexes
 		CREATE INDEX IF NOT EXISTS idx_codex_snapshots_captured ON codex_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_codex_snapshots_captured_time ON codex_snapshots(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_codex_quota_values_snapshot ON codex_quota_values(snapshot_id);
 		CREATE INDEX IF NOT EXISTS idx_codex_cycles_name_start ON codex_reset_cycles(quota_name, cycle_start);
 		CREATE INDEX IF NOT EXISTS idx_codex_cycles_name_active ON codex_reset_cycles(quota_name) WHERE cycle_end IS NULL;
@@ -594,6 +598,7 @@ func (s *Store) createTables() error {
 
 		-- Antigravity indexes
 		CREATE INDEX IF NOT EXISTS idx_antigravity_snapshots_captured ON antigravity_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_antigravity_snapshots_captured_time ON antigravity_snapshots(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_antigravity_model_values_snapshot ON antigravity_model_values(snapshot_id);
 		CREATE INDEX IF NOT EXISTS idx_antigravity_model_values_model_id ON antigravity_model_values(model_id);
 		CREATE INDEX IF NOT EXISTS idx_antigravity_model_values_model_snapshot ON antigravity_model_values(model_id, snapshot_id);
@@ -635,6 +640,7 @@ func (s *Store) createTables() error {
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_minimax_snapshots_captured ON minimax_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_minimax_snapshots_captured_time ON minimax_snapshots(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_minimax_model_values_snapshot ON minimax_model_values(snapshot_id);
 		CREATE INDEX IF NOT EXISTS idx_minimax_model_values_name ON minimax_model_values(model_name);
 		CREATE INDEX IF NOT EXISTS idx_minimax_cycles_name_start ON minimax_reset_cycles(model_name, cycle_start);
@@ -704,6 +710,7 @@ func (s *Store) createTables() error {
 
 		-- OpenRouter indexes
 		CREATE INDEX IF NOT EXISTS idx_openrouter_snapshots_captured ON openrouter_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_openrouter_snapshots_captured_time ON openrouter_snapshots(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_openrouter_cycles_type_start ON openrouter_reset_cycles(quota_type, cycle_start);
 		CREATE INDEX IF NOT EXISTS idx_openrouter_cycles_type_active ON openrouter_reset_cycles(quota_type, cycle_end) WHERE cycle_end IS NULL;
 
@@ -741,6 +748,7 @@ func (s *Store) createTables() error {
 
 		-- Cursor indexes
 		CREATE INDEX IF NOT EXISTS idx_cursor_snapshots_captured ON cursor_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_cursor_snapshots_captured_time ON cursor_snapshots(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_cursor_quota_values_snapshot ON cursor_quota_values(snapshot_id);
 		CREATE INDEX IF NOT EXISTS idx_cursor_cycles_name_start ON cursor_reset_cycles(quota_name, cycle_start);
 		CREATE INDEX IF NOT EXISTS idx_cursor_cycles_name_active ON cursor_reset_cycles(quota_name, cycle_end) WHERE cycle_end IS NULL;
@@ -776,9 +784,13 @@ func (s *Store) createTables() error {
 
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_api_integration_usage_events_fingerprint ON api_integration_usage_events(fingerprint);
 		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_captured ON api_integration_usage_events(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_captured_time ON api_integration_usage_events(captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_integration_provider ON api_integration_usage_events(integration_name, provider, captured_at);
 		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_integration_captured ON api_integration_usage_events(integration_name, captured_at);
 		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_provider_model ON api_integration_usage_events(provider, model, captured_at);
+		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_integration_provider_time ON api_integration_usage_events(integration_name, provider, captured_at COLLATE ONWATCH_RFC3339);
+		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_integration_captured_time ON api_integration_usage_events(integration_name, captured_at COLLATE ONWATCH_RFC3339);
+		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_provider_model_time ON api_integration_usage_events(provider, model, captured_at COLLATE ONWATCH_RFC3339);
 		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_source ON api_integration_usage_events(source_path);
 
 		CREATE TABLE IF NOT EXISTS api_integration_usage_hourly (
@@ -812,6 +824,8 @@ func (s *Store) createTables() error {
 
 		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_hourly_range
 			ON api_integration_usage_hourly(hour_start, integration_name);
+		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_hourly_range_time
+			ON api_integration_usage_hourly(hour_start, last_captured_at COLLATE ONWATCH_RFC3339);
 
 		CREATE TABLE IF NOT EXISTS api_integration_usage_compacted_fingerprints (
 			fingerprint TEXT PRIMARY KEY,
@@ -999,6 +1013,7 @@ func (s *Store) migrateSchema() error {
 	// Add Codex multi-account indexes
 	for _, stmt := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_codex_snapshots_account ON codex_snapshots(account_id, captured_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_codex_snapshots_account_time ON codex_snapshots(account_id, captured_at COLLATE ONWATCH_RFC3339)`,
 		`CREATE INDEX IF NOT EXISTS idx_codex_cycles_account ON codex_reset_cycles(account_id, quota_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_accounts_provider ON provider_accounts(provider)`,
 	} {
@@ -1090,6 +1105,7 @@ func (s *Store) migrateSchema() error {
 	// Add MiniMax multi-account indexes.
 	for _, stmt := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_minimax_snapshots_account ON minimax_snapshots(account_id, captured_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_minimax_snapshots_account_time ON minimax_snapshots(account_id, captured_at COLLATE ONWATCH_RFC3339)`,
 		`CREATE INDEX IF NOT EXISTS idx_minimax_cycles_account ON minimax_reset_cycles(account_id, model_name)`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -1206,6 +1222,12 @@ func (s *Store) migrateAPIIntegrationNormalizedColumns() error {
 		ON api_integration_usage_events(integration_name, captured_at)
 	`); err != nil {
 		return fmt.Errorf("create API integration integration/time index: %w", err)
+	}
+	if _, err := s.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_api_integration_usage_events_integration_captured_time
+		ON api_integration_usage_events(integration_name, captured_at COLLATE ONWATCH_RFC3339)
+	`); err != nil {
+		return fmt.Errorf("create chronological API integration integration/time index: %w", err)
 	}
 	return nil
 }
@@ -1328,7 +1350,7 @@ func (s *Store) QueryLatest() (*api.Snapshot, error) {
 		`SELECT id, captured_at, sub_limit, sub_requests, sub_renews_at,
 		 search_limit, search_requests, search_renews_at,
 		 tool_limit, tool_requests, tool_renews_at
-		FROM quota_snapshots ORDER BY captured_at DESC LIMIT 1`,
+		FROM quota_snapshots ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC LIMIT 1`,
 	).Scan(
 		&snapshot.ID, &capturedAt, &snapshot.Sub.Limit, &snapshot.Sub.Requests, &subRenewsAt,
 		&snapshot.Search.Limit, &snapshot.Search.Requests, &searchRenewsAt,
@@ -1357,8 +1379,9 @@ func (s *Store) QueryRange(start, end time.Time, limit ...int) ([]*api.Snapshot,
 		 search_limit, search_requests, search_renews_at,
 		 tool_limit, tool_requests, tool_renews_at
 		FROM quota_snapshots
-		WHERE captured_at >= ? AND captured_at < ?
-		ORDER BY captured_at ASC`
+		WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+			AND captured_at COLLATE ONWATCH_RFC3339 < ?
+		ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
 	if len(limit) > 0 && limit[0] > 0 {
 		query = `SELECT id, captured_at, sub_limit, sub_requests, sub_renews_at,
@@ -1369,11 +1392,12 @@ func (s *Store) QueryRange(start, end time.Time, limit ...int) ([]*api.Snapshot,
 					search_limit, search_requests, search_renews_at,
 					tool_limit, tool_requests, tool_renews_at
 				FROM quota_snapshots
-				WHERE captured_at >= ? AND captured_at < ?
-				ORDER BY captured_at DESC
+				WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+					AND captured_at COLLATE ONWATCH_RFC3339 < ?
+				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
 				LIMIT ?
 			) recent
-			ORDER BY captured_at ASC`
+			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
 	rows, err := s.db.Query(query, args...)
@@ -1779,7 +1803,8 @@ func (s *Store) QuerySyntheticCycleOverview(groupBy string, limit int) ([]CycleO
 		err = s.db.QueryRow(
 			fmt.Sprintf(`SELECT captured_at, sub_limit, sub_requests, search_limit, search_requests, tool_limit, tool_requests
 			FROM quota_snapshots
-			WHERE captured_at >= ? AND captured_at < ?
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+				AND captured_at COLLATE ONWATCH_RFC3339 < ?
 			ORDER BY %s DESC LIMIT 1`, peakCol),
 			c.CycleStart.Format(time.RFC3339Nano),
 			endBoundary.Format(time.RFC3339Nano),
@@ -1978,7 +2003,7 @@ func (s *Store) MigrateSessionsToUsageBased(idleTimeout time.Duration) error {
 func (s *Store) migrateSyntheticSessions(idleTimeout time.Duration) error {
 	rows, err := s.db.Query(
 		`SELECT captured_at, sub_requests, search_requests, tool_requests
-		FROM quota_snapshots ORDER BY captured_at ASC`,
+		FROM quota_snapshots ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`,
 	)
 	if err != nil {
 		return err
@@ -1992,7 +2017,7 @@ func (s *Store) migrateSyntheticSessions(idleTimeout time.Duration) error {
 func (s *Store) migrateZaiSessions(idleTimeout time.Duration) error {
 	rows, err := s.db.Query(
 		`SELECT captured_at, tokens_current_value, time_current_value
-		FROM zai_snapshots ORDER BY captured_at ASC`,
+		FROM zai_snapshots ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`,
 	)
 	if err != nil {
 		return err
@@ -2007,7 +2032,7 @@ func (s *Store) migrateAnthropicSessions(idleTimeout time.Duration) error {
 	// Anthropic has normalized data - we need to pivot per-snapshot quota values into a flat slice.
 	// Walk snapshot by snapshot.
 	snapRows, err := s.db.Query(
-		`SELECT id, captured_at FROM anthropic_snapshots ORDER BY captured_at ASC`,
+		`SELECT id, captured_at FROM anthropic_snapshots ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`,
 	)
 	if err != nil {
 		return err
