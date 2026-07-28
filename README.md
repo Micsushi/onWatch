@@ -108,6 +108,7 @@ SYNTHETIC_API_KEY=syn_your_key_here       # https://synthetic.new/settings/api
 ZAI_API_KEY=your_zai_key_here             # https://www.z.ai/api-keys
 ANTHROPIC_TOKEN=your_token_here           # Auto-detected from Claude Code credentials
 ANTHROPIC_TOKEN_ROTATION=off              # Safe default for shared Claude Code credentials
+CLAUDE_CONFIG_DIR=/path/to/isolated-profile # Optional isolated Claude credential directory
 CODEX_TOKEN=your_token_here               # Recommended for Codex-only setups
 COPILOT_TOKEN=ghp_your_token_here         # GitHub PAT with copilot scope (Beta)
 ONWATCH_ADMIN_USER=admin
@@ -234,7 +235,7 @@ Set `ZAI_API_KEY` in your `.env`. onWatch polls the Z.ai `/monitor/usage/quota/l
 
 ### How do I track my Anthropic (Claude Code) usage?
 
-onWatch auto-detects your Claude Code credentials from the system keychain (macOS) or keyring/file (Linux). Just install and run -- if Claude Code is installed, Anthropic tracking is offered automatically. You can also set `ANTHROPIC_TOKEN` manually in your `.env`. Anthropic quotas are dynamic (5-Hour, 7-Day, Monthly, etc.) and displayed as utilization percentages. By default onWatch only re-reads credentials maintained by Claude Code and never rotates its shared OAuth refresh token.
+onWatch auto-detects your Claude Code credentials from the system keychain (macOS) or credential file (Windows/Linux). Just install and run -- if Claude Code is installed, Anthropic tracking is offered automatically. You can also set `ANTHROPIC_TOKEN` manually in your `.env`. Set `CLAUDE_CONFIG_DIR` to an isolated Claude profile directory when onWatch should not read the profile used by VS Code. Anthropic quotas are dynamic (5-Hour, 7-Day, Monthly, etc.) and displayed as utilization percentages. By default onWatch only re-reads credentials maintained by Claude Code and never rotates its OAuth refresh token.
 
 ### How do I track my Codex usage?
 
@@ -325,6 +326,7 @@ Additional environment variables:
 | ------------------------ | ------------------------------------------------------ |
 | `ANTHROPIC_TOKEN`        | Anthropic OAuth token (auto-detected from Claude Code) |
 | `ANTHROPIC_TOKEN_ROTATION` | OAuth refresh-token rotation (`off` by default; use `on` only with isolated credentials) |
+| `CLAUDE_CONFIG_DIR`      | Optional isolated Claude profile directory (Windows/Linux) |
 | `CODEX_TOKEN`            | Codex OAuth access token (recommended for Codex-only)  |
 | `COPILOT_TOKEN`          | GitHub Copilot PAT with `copilot` scope (Beta)         |
 | `MINIMAX_API_KEY`        | MiniMax Coding Plan API key                            |
@@ -519,6 +521,7 @@ Copy `.env.docker.example` to `.env` and set provider keys as needed. onWatch ca
 | `ZAI_REGION`            | Z.ai region: `global` (default) or `cn`    | `global`   |
 | `ANTHROPIC_TOKEN`       | Anthropic token (auto-detected if not set) | --         |
 | `ANTHROPIC_TOKEN_ROTATION` | Rotate Anthropic OAuth credentials to bypass 429s | `off` |
+| `CLAUDE_CONFIG_DIR`     | Isolated Claude profile directory (Windows/Linux) | -- |
 | `CODEX_TOKEN`           | Codex OAuth access token (recommended; required for Codex-only) | -- |
 | `MINIMAX_API_KEY`       | MiniMax Coding Plan API key                | --         |
 | `MINIMAX_REGION`        | MiniMax region: `global` (default) or `cn` | `global`   |
@@ -559,6 +562,8 @@ The `docker-compose.yml` includes memory limits (64M limit, 32M reservation), lo
 **Debugging:** The default distroless image has no shell. Use the Alpine variant (`ghcr.io/micsushi/onwatch:alpine`) if you need `docker exec` access, or use a sidecar: `docker run -it --rm --pid=container:onwatch --net=container:onwatch nicolaka/netshoot bash`
 
 **Anthropic 429 rate limit errors:** Anthropic's `/api/oauth/usage` endpoint has aggressive rate limits. onWatch now waits for the next poll by default instead of rotating Claude Code's shared refresh token. Rotation can force Claude Code to sign in again because OAuth refresh tokens are one-time use. The old bypass can be enabled with `ANTHROPIC_TOKEN_ROTATION=on`, but only use it with credentials isolated from Claude Code. See [issue #16](https://github.com/onllm-dev/onWatch/issues/16) and [anthropics/claude-code#31021](https://github.com/anthropics/claude-code/issues/31021) for details.
+
+**Claude signs out in another app:** On Windows or Linux, authenticate a second Claude profile with `CLAUDE_CONFIG_DIR` and give that directory to onWatch. Keep `ANTHROPIC_TOKEN_ROTATION=off` when another process, such as Quota Wake, owns refreshes for that profile. onWatch then reads the isolated credentials without touching the VS Code profile.
 
 ---
 

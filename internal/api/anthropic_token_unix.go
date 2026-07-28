@@ -31,6 +31,9 @@ func SetTestMode(enabled bool) {
 
 // getCredentialsFilePath returns the path to the Claude credentials file.
 func getCredentialsFilePath() string {
+	if configDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); configDir != "" {
+		return filepath.Join(configDir, ".credentials.json")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		if u, err := user.Current(); err == nil {

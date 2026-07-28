@@ -3099,9 +3099,21 @@ func TestWriteAnthropicCredentials_InvalidJSONFile(t *testing.T) {
 func TestGetCredentialsFilePath_ValidHOME(t *testing.T) {
 	dir := t.TempDir()
 	setTestHome(t, dir)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
 	path := getCredentialsFilePath()
 	expected := filepath.Join(dir, ".claude", ".credentials.json")
+	if path != expected {
+		t.Errorf("getCredentialsFilePath() = %q, want %q", path, expected)
+	}
+}
+
+func TestGetCredentialsFilePath_ClaudeConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+	path := getCredentialsFilePath()
+	expected := filepath.Join(dir, ".credentials.json")
 	if path != expected {
 		t.Errorf("getCredentialsFilePath() = %q, want %q", path, expected)
 	}
