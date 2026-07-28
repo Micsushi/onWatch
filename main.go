@@ -1366,7 +1366,12 @@ func run() error {
 	}
 	if codexTr != nil {
 		codexTr.SetOnReset(func(quotaName string) {
-			notifier.Check(notify.QuotaStatus{Provider: "codex", QuotaKey: quotaName, ResetOccurred: true})
+			status := notify.QuotaStatus{Provider: "codex", QuotaKey: quotaName, ResetOccurred: true}
+			if summary, err := codexTr.UsageSummary(tracker.DefaultCodexAccountID, quotaName); err == nil {
+				status.Utilization = summary.CurrentUtil
+				status.ResetsAt = summary.ResetsAt
+			}
+			notifier.Check(status)
 		})
 	}
 	// Antigravity reset notifications are intentionally disabled: each model_id

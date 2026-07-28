@@ -964,6 +964,9 @@ func (e *NotificationEngine) sendNotification(mailer *SMTPMailer, pushSender *Pu
 
 	subject := e.buildSubject(status, notifType)
 	body := e.buildBody(status, notifType)
+	if notifType == "reset" && !sentAt.IsZero() {
+		body = addPreviousResetAlert(body, sentAt)
+	}
 	e.mu.RLock()
 	discord := e.discord
 	e.mu.RUnlock()
@@ -1087,7 +1090,7 @@ func (e *NotificationEngine) buildSubject(status QuotaStatus, notifType string) 
 		return fmt.Sprintf("[WARNING] %s quota %s at %.1f%%",
 			titleCase(status.Provider), status.QuotaKey, status.Utilization)
 	case "reset":
-		return fmt.Sprintf("[RESET] %s quota %s has been reset",
+		return fmt.Sprintf("[RESET] %s quota %s: new cycle detected",
 			titleCase(status.Provider), status.QuotaKey)
 	default:
 		return fmt.Sprintf("[%s] %s quota %s", notifType, status.Provider, status.QuotaKey)
@@ -1103,10 +1106,23 @@ func (e *NotificationEngine) buildBody(status QuotaStatus, notifType string) str
 	if status.Limit > 0 {
 		sb.WriteString(fmt.Sprintf("Limit: %.0f\n", status.Limit))
 	}
+	if notifType == "reset" && status.ResetsAt != nil {
+		sb.WriteString(fmt.Sprintf("Next reset: %s\n", status.ResetsAt.UTC().Format(time.RFC3339)))
+	}
 	sb.WriteString(fmt.Sprintf("Alert Type: %s\n", notifType))
 	sb.WriteString(fmt.Sprintf("Time: %s\n", time.Now().UTC().Format(time.RFC3339)))
 	sb.WriteString("\n-- Sent by onWatch")
 	return sb.String()
+}
+
+func addPreviousResetAlert(body string, sentAt time.Time) string {
+	const footer = "\n-- Sent by onWatch"
+	if !strings.HasSuffix(body, footer) {
+		return body
+	}
+	body = strings.TrimSuffix(body, footer)
+	return fmt.Sprintf("%sPrevious reset alert: %s\n%s",
+		body, sentAt.UTC().Format(time.RFC3339), footer)
 }
 
 // AuthErrorAlert represents an authentication error for notification purposes.

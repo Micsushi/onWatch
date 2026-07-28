@@ -1396,6 +1396,61 @@ func TestBuildBody(t *testing.T) {
 	}
 }
 
+func TestBuildResetMessageExplainsNewWindow(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	defer s.Close()
+
+	engine := newTestEngine(t, s)
+	resetsAt := time.Date(2026, 8, 4, 3, 22, 1, 0, time.UTC)
+	status := QuotaStatus{
+		Provider:      "codex",
+		QuotaKey:      "seven_day",
+		Utilization:   0,
+		ResetsAt:      &resetsAt,
+		ResetOccurred: true,
+	}
+
+	subject := engine.buildSubject(status, "reset")
+	if !strings.Contains(subject, "new cycle detected") {
+		t.Fatalf("reset subject = %q, want new-cycle context", subject)
+	}
+	body := engine.buildBody(status, "reset")
+	if !strings.Contains(body, "Next reset: 2026-08-04T03:22:01Z") {
+		t.Fatalf("reset body = %q, want next reset timestamp", body)
+	}
+}
+
+func TestNotificationEngine_ResetNotificationIdentifiesPreviousAlert(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	defer s.Close()
+
+	engine := newTestEngine(t, s)
+	discord, capture := newDiscordCapture(t)
+	engine.discord = discord
+	engine.cfg.Channels = NotificationChannels{Discord: true}
+	engine.cfg.Types = NotificationTypes{Reset: true}
+	engine.cfg.Cooldown = time.Millisecond
+
+	status := QuotaStatus{
+		Provider:      "codex",
+		QuotaKey:      "seven_day",
+		ResetOccurred: true,
+	}
+	engine.Check(status)
+	time.Sleep(5 * time.Millisecond)
+	engine.Check(status)
+
+	messages := capture.snapshot()
+	if len(messages) != 2 {
+		t.Fatalf("Discord messages = %d, want 2 distinct reset alerts", len(messages))
+	}
+	if !strings.Contains(messages[1], "Previous reset alert:") {
+		t.Fatalf("second reset message = %q, want previous-alert context", messages[1])
+	}
+}
+
 func TestBuildBody_NoLimit(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
