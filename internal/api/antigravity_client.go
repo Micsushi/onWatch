@@ -391,6 +391,12 @@ func (c *AntigravityClient) detectProcessWindowsCIM(ctx context.Context) (*Antig
 
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", psCmd)
 	output, err := cmd.Output()
+	// The query text contains the same keywords it searches for, so the shell
+	// running it matches itself. Exclude that PID explicitly.
+	probePID := 0
+	if cmd.Process != nil {
+		probePID = cmd.Process.Pid
+	}
 	if err != nil {
 		return nil, fmt.Errorf("antigravity: CIM query failed: %w", err)
 	}
@@ -416,34 +422,20 @@ func (c *AntigravityClient) detectProcessWindowsCIM(ctx context.Context) (*Antig
 		processes = append(processes, single)
 	}
 
-	var best *AntigravityProcessInfo
-	bestScore := -1
-
+	candidates := make([]AntigravityProcessInfo, 0, len(processes))
 	for _, proc := range processes {
-		cmdLine := proc.CommandLine
-		if cmdLine == "" {
+		if proc.CommandLine == "" {
 			continue
 		}
-
-		// Filter: must have "antigravity" somewhere in the command line
-		if !strings.Contains(strings.ToLower(cmdLine), "antigravity") {
-			continue
-		}
-
-		info := &AntigravityProcessInfo{
+		candidates = append(candidates, AntigravityProcessInfo{
 			PID:                 proc.ProcessId,
-			CSRFToken:           extractArgument(cmdLine, "--csrf_token"),
-			ExtensionServerPort: extractPortArgument(cmdLine, "--extension_server_port"),
-			CommandLine:         cmdLine,
-		}
-
-		score := scoreWindowsCandidate(info)
-		if score > bestScore {
-			best = info
-			bestScore = score
-		}
+			CSRFToken:           extractArgument(proc.CommandLine, "--csrf_token"),
+			ExtensionServerPort: extractPortArgument(proc.CommandLine, "--extension_server_port"),
+			CommandLine:         proc.CommandLine,
+		})
 	}
 
+	best := selectAntigravityProcess(candidates, probePID)
 	if best == nil {
 		return nil, ErrAntigravityProcessNotFound
 	}
@@ -451,11 +443,84 @@ func (c *AntigravityClient) detectProcessWindowsCIM(ctx context.Context) (*Antig
 	return best, nil
 }
 
+// selectAntigravityProcess picks the best language server candidate.
+//
+// It rejects two kinds of false positive that both send port discovery to a
+// PID that never listens, which surfaces as a permanent "no listening port
+// found" instead of an honest "process not found":
+//   - the detection probe itself, whose command line quotes the very keywords
+//     it searches for
+//   - Antigravity IDE helper processes, which mention Antigravity only because
+//     of their install path
+func selectAntigravityProcess(candidates []AntigravityProcessInfo, excludePID int) *AntigravityProcessInfo {
+	var best *AntigravityProcessInfo
+	bestScore := -1
+
+	for i := range candidates {
+		info := candidates[i]
+		if info.PID != 0 && info.PID == excludePID {
+			continue
+		}
+		lower := strings.ToLower(info.CommandLine)
+		if !strings.Contains(lower, "antigravity") {
+			continue
+		}
+		if isProcessQueryCommandLine(lower) {
+			continue
+		}
+		if !hasAntigravityServerSignal(info) {
+			continue
+		}
+
+		score := scoreWindowsCandidate(&info)
+		if score > bestScore {
+			candidate := info
+			best = &candidate
+			bestScore = score
+		}
+	}
+
+	return best
+}
+
+// isProcessQueryCommandLine reports whether a command line is a process
+// enumeration, which is how a detection probe (this one or another tool's)
+// picks up the keywords it is searching for.
+func isProcessQueryCommandLine(lowerCommandLine string) bool {
+	markers := []string{
+		"get-ciminstance",
+		"get-wmiobject",
+		"get-process",
+		"win32_process",
+		"wmic process",
+		"tasklist",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lowerCommandLine, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAntigravityServerSignal reports whether a process looks like the language
+// server rather than an editor or helper process. It mirrors the signals the
+// Unix detector requires.
+func hasAntigravityServerSignal(info AntigravityProcessInfo) bool {
+	if info.CSRFToken != "" || info.ExtensionServerPort > 0 {
+		return true
+	}
+	lower := strings.ToLower(info.CommandLine)
+	return strings.Contains(lower, "language_server") ||
+		strings.Contains(lower, "language-server") ||
+		strings.Contains(lower, "exa.language_server_pb") ||
+		strings.Contains(lower, "lsp")
+}
+
 // parseWMICOutput parses WMIC CSV output.
 func (c *AntigravityClient) parseWMICOutput(output string) *AntigravityProcessInfo {
 	lines := strings.Split(output, "\n")
-	var best *AntigravityProcessInfo
-	bestScore := -1
+	candidates := make([]AntigravityProcessInfo, 0, len(lines))
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -469,30 +534,21 @@ func (c *AntigravityClient) parseWMICOutput(output string) *AntigravityProcessIn
 		}
 
 		commandLine := strings.Join(parts[1:len(parts)-1], ",")
-		if !strings.Contains(strings.ToLower(commandLine), "antigravity") {
-			continue
-		}
 
 		pid, err := strconv.Atoi(strings.TrimSpace(parts[len(parts)-1]))
 		if err != nil {
 			continue
 		}
 
-		info := &AntigravityProcessInfo{
+		candidates = append(candidates, AntigravityProcessInfo{
 			PID:                 pid,
 			CSRFToken:           extractArgument(commandLine, "--csrf_token"),
 			ExtensionServerPort: extractPortArgument(commandLine, "--extension_server_port"),
 			CommandLine:         commandLine,
-		}
-
-		score := scoreWindowsCandidate(info)
-		if score > bestScore {
-			best = info
-			bestScore = score
-		}
+		})
 	}
 
-	return best
+	return selectAntigravityProcess(candidates, 0)
 }
 
 // detectProcessWindowsPowerShell uses PowerShell as fallback.
@@ -525,8 +581,7 @@ func (c *AntigravityClient) detectProcessWindowsPowerShell(ctx context.Context) 
 		processes = append(processes, single)
 	}
 
-	var best *AntigravityProcessInfo
-	bestScore := -1
+	candidates := make([]AntigravityProcessInfo, 0, len(processes))
 
 	for _, proc := range processes {
 		cmdLineCmd := exec.CommandContext(ctx, "powershell", "-Command",
@@ -538,24 +593,16 @@ func (c *AntigravityClient) detectProcessWindowsPowerShell(ctx context.Context) 
 		}
 
 		commandLine := strings.TrimSpace(string(cmdOutput))
-		if !strings.Contains(strings.ToLower(commandLine), "antigravity") {
-			continue
-		}
 
-		info := &AntigravityProcessInfo{
+		candidates = append(candidates, AntigravityProcessInfo{
 			PID:                 proc.Id,
 			CSRFToken:           extractArgument(commandLine, "--csrf_token"),
 			ExtensionServerPort: extractPortArgument(commandLine, "--extension_server_port"),
 			CommandLine:         commandLine,
-		}
-
-		score := scoreWindowsCandidate(info)
-		if score > bestScore {
-			best = info
-			bestScore = score
-		}
+		})
 	}
 
+	best := selectAntigravityProcess(candidates, 0)
 	if best == nil {
 		return nil, ErrAntigravityProcessNotFound
 	}

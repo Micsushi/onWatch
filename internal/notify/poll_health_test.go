@@ -54,6 +54,9 @@ func newPollHealthEngine(t *testing.T) (*NotificationEngine, *store.Store, *time
 	engine.pollHealthGrace = 0
 	engine.pollHealthAsync = false
 	engine.cfg.PollFailureThreshold = 3
+	// These cases cover failure-count semantics, so the outage window is
+	// disabled here. It has dedicated coverage in poll_health_min_outage_test.go.
+	engine.cfg.PollFailureMinOutage = 0
 	engine.cfg.PollFailureRepeat = 6 * time.Hour
 	engine.cfg.NotifyPollFailure = true
 	engine.cfg.NotifyPollRecovery = true

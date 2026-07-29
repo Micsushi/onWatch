@@ -6408,6 +6408,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			NotifyAuthError      *bool                        `json:"notify_auth_error"`
 			NotifyPollFailure    *bool                        `json:"notify_poll_failure"`
 			PollFailureThreshold *int                         `json:"poll_failure_threshold"`
+			PollFailureMinOutage *int                         `json:"poll_failure_min_outage_minutes"`
 			PollFailureRepeatHrs *int                         `json:"poll_failure_repeat_hours"`
 			NotifyPollRecovery   *bool                        `json:"notify_poll_recovery"`
 			CooldownMinutes      int                          `json:"cooldown_minutes"`
@@ -6457,6 +6458,13 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			notif.PollFailureThreshold = &value
 		} else if *notif.PollFailureThreshold < 2 {
 			respondError(w, http.StatusBadRequest, "poll failure threshold must be at least 2")
+			return
+		}
+		if notif.PollFailureMinOutage == nil {
+			value := 30
+			notif.PollFailureMinOutage = &value
+		} else if *notif.PollFailureMinOutage < 0 {
+			respondError(w, http.StatusBadRequest, "poll failure minimum outage minutes cannot be negative")
 			return
 		}
 		if notif.PollFailureRepeatHrs == nil {

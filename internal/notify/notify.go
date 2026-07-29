@@ -47,6 +47,7 @@ type NotificationConfig struct {
 	UnderuseTimes        []string                     // local times for severe under-usage checks
 	OveruseRepeatPercent float64                      // extra utilization before repeating a red pace alert
 	PollFailureThreshold int                          // failures before external escalation
+	PollFailureMinOutage time.Duration                // minimum outage length before external escalation
 	PollFailureRepeat    time.Duration                // repeat interval for active externally announced failures
 	NotifyPollFailure    bool                         // external poll failure notifications enabled
 	NotifyPollRecovery   bool                         // external poll recovery notifications enabled
@@ -151,6 +152,7 @@ func New(s *store.Store, logger *slog.Logger) *NotificationEngine {
 			UnderuseTimes:        []string{"10:00", "22:00"},
 			OveruseRepeatPercent: 10,
 			PollFailureThreshold: 3,
+			PollFailureMinOutage: 30 * time.Minute,
 			PollFailureRepeat:    6 * time.Hour,
 			NotifyPollFailure:    true,
 			NotifyPollRecovery:   true,
@@ -211,6 +213,7 @@ type notificationSettingsJSON struct {
 	NotifyAuthError      *bool                 `json:"notify_auth_error,omitempty"`
 	NotifyPollFailure    *bool                 `json:"notify_poll_failure,omitempty"`
 	PollFailureThreshold int                   `json:"poll_failure_threshold,omitempty"`
+	PollFailureMinOutage *int                  `json:"poll_failure_min_outage_minutes,omitempty"`
 	PollFailureRepeatHrs int                   `json:"poll_failure_repeat_hours,omitempty"`
 	NotifyPollRecovery   *bool                 `json:"notify_poll_recovery,omitempty"`
 	CooldownMinutes      int                   `json:"cooldown_minutes"`
@@ -286,6 +289,12 @@ func (e *NotificationEngine) Reload() error {
 	if notif.PollFailureRepeatHrs >= 1 {
 		pollFailureRepeat = time.Duration(notif.PollFailureRepeatHrs) * time.Hour
 	}
+	// Absent means "not configured yet", which keeps the default window.
+	// An explicit zero disables the window.
+	pollFailureMinOutage := 30 * time.Minute
+	if notif.PollFailureMinOutage != nil && *notif.PollFailureMinOutage >= 0 {
+		pollFailureMinOutage = time.Duration(*notif.PollFailureMinOutage) * time.Minute
+	}
 	e.cfg.Types = NotificationTypes{
 		Warning:       notif.NotifyWarning,
 		Critical:      notif.NotifyCritical,
@@ -299,6 +308,7 @@ func (e *NotificationEngine) Reload() error {
 	e.cfg.OveruseRepeatPercent = overuseRepeatPercent
 	e.cfg.NotifyPollFailure = notifyPollFailure
 	e.cfg.PollFailureThreshold = pollFailureThreshold
+	e.cfg.PollFailureMinOutage = pollFailureMinOutage
 	e.cfg.PollFailureRepeat = pollFailureRepeat
 	e.cfg.NotifyPollRecovery = notifyPollRecovery
 

@@ -4,11 +4,37 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// discordWebhookURL matches a webhook URL anywhere in free text. Errors from
+// net/http and net/url quote the request URL, and for a webhook that URL is
+// the credential, so it must be stripped before the error reaches a log.
+var discordWebhookURL = regexp.MustCompile(
+	`https://discord(?:app)?\.com/api/webhooks/[^\s"'\\]+`,
+)
+
+func redactDiscordWebhook(message string) string {
+	return discordWebhookURL.ReplaceAllString(message, "https://discord.com/api/webhooks/[REDACTED]")
+}
+
+// redactErr strips this sender's webhook URL from an error, including hosts
+// the generic pattern does not cover such as a test server.
+func (d *DiscordSender) redactErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	if d != nil && d.webhookURL != "" {
+		message = strings.ReplaceAll(message, d.webhookURL, "[REDACTED]")
+	}
+	return errors.New(redactDiscordWebhook(message))
+}
 
 // DiscordSender delivers notifications to a Discord webhook.
 type DiscordSender struct {
@@ -65,12 +91,12 @@ func (d *DiscordSender) SendContext(ctx context.Context, subject, body string) e
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.webhookURL, bytes.NewReader(data))
 	if err != nil {
-		return err
+		return d.redactErr(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return err
+		return d.redactErr(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

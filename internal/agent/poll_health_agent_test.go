@@ -570,7 +570,9 @@ func TestAnthropicAgentInvalidGrantAllowsMonitorEscalationPastAuthPause(t *testi
 	for _, testCase := range cases {
 		st := newAgentTestStore(t)
 		settings := fmt.Sprintf(
-			`{"notify_auth_error":true,"notify_poll_failure":true,"poll_failure_threshold":%d,"channels":{"email":false,"push":false,"discord":false}}`,
+			// This case covers escalation past an auth pause, so the minimum
+			// outage window is disabled to keep the run short.
+			`{"notify_auth_error":true,"notify_poll_failure":true,"poll_failure_threshold":%d,"poll_failure_min_outage_minutes":0,"channels":{"email":false,"push":false,"discord":false}}`,
 			testCase.threshold,
 		)
 		if err := st.SetSetting("notifications", settings); err != nil {

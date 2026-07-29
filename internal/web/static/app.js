@@ -11441,6 +11441,9 @@ async function loadSettings() {
         : (n.notify_auth_error !== undefined ? !!n.notify_auth_error : true);
       if (pollFailureCheck) pollFailureCheck.checked = pollFailureEnabled;
       setVal('poll-failure-threshold', n.poll_failure_threshold || 3);
+      // Zero is a valid choice here, so it must survive the default.
+      setVal('poll-failure-min-outage',
+        Number.isFinite(n.poll_failure_min_outage_minutes) ? n.poll_failure_min_outage_minutes : 30);
       setVal('poll-failure-repeat-hours', n.poll_failure_repeat_hours || 6);
       const pollRecoveryCheck = document.getElementById('notify-poll-recovery');
       if (pollRecoveryCheck) pollRecoveryCheck.checked = n.notify_poll_recovery !== false;
@@ -12764,6 +12767,9 @@ function gatherSettings() {
     });
 
     const notifyPollFailure = document.getElementById('notify-poll-failure')?.checked ?? true;
+    // Zero means "no minimum outage", so it must not fall back to the default.
+    const parsedMinOutage = parseInt(document.getElementById('poll-failure-min-outage')?.value);
+    const pollFailureMinOutage = Number.isFinite(parsedMinOutage) && parsedMinOutage >= 0 ? parsedMinOutage : 30;
     settings.notifications = {
       warning_threshold: parseFloat(warningInput.value) || 80,
       critical_threshold: parseFloat(document.getElementById('threshold-critical')?.value) || 95,
@@ -12781,6 +12787,7 @@ function gatherSettings() {
       notify_poll_failure: notifyPollFailure,
       notify_auth_error: notifyPollFailure,
       poll_failure_threshold: parseInt(document.getElementById('poll-failure-threshold')?.value) || 3,
+      poll_failure_min_outage_minutes: pollFailureMinOutage,
       poll_failure_repeat_hours: parseInt(document.getElementById('poll-failure-repeat-hours')?.value) || 6,
       notify_poll_recovery: document.getElementById('notify-poll-recovery')?.checked ?? true,
       cooldown_minutes: parseInt(document.getElementById('notify-cooldown')?.value) || 30,

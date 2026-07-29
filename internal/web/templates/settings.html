@@ -228,6 +228,11 @@
                         <span class="settings-field-hint">The first failure still appears in onWatch.</span>
                     </div>
                     <div class="settings-field settings-field-half">
+                        <label for="poll-failure-min-outage">Minimum outage before external alert (minutes)</label>
+                        <input type="number" id="poll-failure-min-outage" class="settings-input" min="0" step="1" value="30">
+                        <span class="settings-field-hint">Both this and the failure count must be met. Set 0 to alert as soon as the count is reached.</span>
+                    </div>
+                    <div class="settings-field settings-field-half">
                         <label for="poll-failure-repeat-hours">Repeat active failure every (hours)</label>
                         <input type="number" id="poll-failure-repeat-hours" class="settings-input" min="1" step="1" value="6">
                     </div>

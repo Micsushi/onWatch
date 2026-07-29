@@ -519,6 +519,13 @@ func (e *NotificationEngine) claimPollFailureDeliveryLocked(
 	if !cfg.NotifyPollFailure || state.ConsecutiveFailures < threshold {
 		return nil
 	}
+	// An external alert should mean the provider has been down long enough to
+	// act on. The in-app alert is raised on the first failure regardless, so
+	// the dashboard stays current while short blips stay silent.
+	if cfg.PollFailureMinOutage > 0 && state.FirstFailureAt != nil &&
+		now.Sub(*state.FirstFailureAt) < cfg.PollFailureMinOutage {
+		return nil
+	}
 	identity := PollIdentity{Provider: state.Provider, AccountID: state.AccountID}
 	if _, inFlight := e.pollHealthAttempts[identity]; inFlight {
 		return nil

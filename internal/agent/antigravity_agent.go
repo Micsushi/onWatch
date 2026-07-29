@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"time"
@@ -68,6 +69,30 @@ func (a *AntigravityAgent) recordPollSuccess() {
 func (a *AntigravityAgent) recordPollSkipped() {
 	if a.notifier != nil {
 		a.notifier.RecordPollSkipped("antigravity", "default")
+	}
+}
+
+// pollOutcome describes how one failed fetch should be reported to poll health.
+type pollOutcome struct {
+	skip     bool
+	category string
+	message  string
+}
+
+// antigravityPollOutcome classifies a fetch error.
+//
+// Antigravity is served by a local process, so a missing language server means
+// the IDE is closed. That is an expected absence, not an outage: recording it
+// as a failure opens an incident that nothing but reopening the IDE can clear,
+// producing repeat alerts and no recovery notice. Errors that mean "running
+// but unreachable" stay failures.
+func antigravityPollOutcome(err error) pollOutcome {
+	if errors.Is(err, api.ErrAntigravityProcessNotFound) {
+		return pollOutcome{skip: true}
+	}
+	return pollOutcome{
+		category: "provider_request",
+		message:  "Antigravity quotas could not be fetched. Check the local service connection and provider availability.",
 	}
 }
 
@@ -174,9 +199,14 @@ func (a *AntigravityAgent) poll(ctx context.Context) {
 			a.recordPollSkipped()
 			return
 		}
+		outcome := antigravityPollOutcome(err)
+		if outcome.skip {
+			a.logger.Info("Antigravity not running, skipping poll", "error", err)
+			a.recordPollSkipped()
+			return
+		}
 		a.logger.Error("Failed to fetch Antigravity quotas", "error", err)
-		a.recordPollFailure("provider_request",
-			"Antigravity quotas could not be fetched. Check the local service connection and provider availability.")
+		a.recordPollFailure(outcome.category, outcome.message)
 		return
 	}
 
