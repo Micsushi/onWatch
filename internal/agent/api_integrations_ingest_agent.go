@@ -159,6 +159,25 @@ func (a *APIIntegrationsIngestAgent) scanFile(path string) error {
 		return fmt.Errorf("open file: %w", err)
 	}
 
+	// With no carried partial line the cursor must sit on a line boundary. If
+	// it does not, the file it was recorded against is gone and this is a
+	// different file reusing the name, so resuming would parse a line fragment.
+	if state.Offset > 0 && state.PartialLine == "" {
+		atBoundary, boundaryErr := offsetFollowsNewline(file, state.Offset)
+		if boundaryErr != nil {
+			_ = file.Close()
+			return fmt.Errorf("check line boundary: %w", boundaryErr)
+		}
+		if !atBoundary {
+			a.logger.Warn(
+				"API integrations ingester restarting file whose cursor is not on a line boundary",
+				"path", path,
+				"offset", state.Offset,
+			)
+			state.Offset = 0
+		}
+	}
+
 	if _, err := file.Seek(state.Offset, io.SeekStart); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("seek file: %w", err)
@@ -253,12 +272,31 @@ func (a *APIIntegrationsIngestAgent) removeConsumedAgentUsageFile(path string, s
 		a.logger.Debug("API integrations ingester left consumed agent usage file in place", "path", path, "error", err)
 		return
 	}
+	// The cursor describes offsets inside the file just deleted. The collector
+	// recreates the same name for the rest of the day, so a surviving cursor
+	// would resume partway into the new file's first line.
+	if err := a.store.DeleteAPIIntegrationIngestState(path); err != nil {
+		a.logger.Warn("API integrations ingester could not clear cursor for removed file", "path", path, "error", err)
+	}
 	a.logger.Debug("API integrations ingester removed consumed agent usage file", "path", path)
 }
 
 func isAgentUsageQueueFile(path string) bool {
 	name := filepath.Base(path)
 	return name == "agent-usage.jsonl" || (strings.HasPrefix(name, "agent-usage-") && strings.HasSuffix(name, ".jsonl"))
+}
+
+// offsetFollowsNewline reports whether the byte before offset is a newline,
+// which is the invariant a resumed cursor relies on.
+func offsetFollowsNewline(file *os.File, offset int64) (bool, error) {
+	previous := make([]byte, 1)
+	if _, err := file.ReadAt(previous, offset-1); err != nil {
+		if errors.Is(err, io.EOF) {
+			return false, nil
+		}
+		return false, err
+	}
+	return previous[0] == '\n', nil
 }
 
 func splitCompleteLines(data string) ([]string, string) {

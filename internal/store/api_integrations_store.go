@@ -1264,6 +1264,19 @@ func (s *Store) GetAPIIntegrationIngestState(sourcePath string) (*apiintegration
 	return &state, nil
 }
 
+// DeleteAPIIntegrationIngestState removes the persisted tail cursor for a
+// source file. The cursor describes byte offsets inside one specific file, so
+// it must not outlive that file. A queue file is deleted once drained and then
+// recreated under the same name, and a stale cursor would resume partway into
+// the new file's first line.
+func (s *Store) DeleteAPIIntegrationIngestState(sourcePath string) error {
+	_, err := s.db.Exec(`DELETE FROM api_integration_ingest_state WHERE source_path = ?`, sourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to delete API integration ingest state: %w", err)
+	}
+	return nil
+}
+
 // UpsertAPIIntegrationIngestState persists the current tail cursor for a source file.
 func (s *Store) UpsertAPIIntegrationIngestState(state *apiintegrations.IngestState) error {
 	if state == nil {
