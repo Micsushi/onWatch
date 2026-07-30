@@ -1788,6 +1788,20 @@ function freshnessLabel(quota) {
   return `${src} - ${Math.floor(age / 86400)}d ago`;
 }
 
+function cardFreshnessLabel(quota) {
+  const label = freshnessLabel(quota);
+  return quota.isStale ? `Stale data - ${label.replace(' - ', ' last updated ')}` : label;
+}
+
+function updateQuotaFreshness(cardId, freshnessId, quota) {
+  const card = document.getElementById(cardId);
+  if (card) card.classList.toggle('stale-card', Boolean(quota.isStale));
+  const freshness = document.getElementById(freshnessId);
+  if (!freshness) return;
+  freshness.classList.toggle('stale', Boolean(quota.isStale));
+  freshness.textContent = cardFreshnessLabel(quota);
+}
+
 // Anthropic display names (mirrors backend anthropicDisplayNames)
 const anthropicDisplayNames = {
   five_hour: '5-Hour Limit',
@@ -2161,7 +2175,7 @@ function renderAnthropicQuotaCards(quotas, containerId) {
     const statusId = `status-anth-${q.name}`;
     const resetId = `reset-anth-${q.name}`;
 
-    return `<article class="quota-card anthropic-card${q.isStale ? ' stale-card' : ''}" data-quota="${q.name}" data-provider="anthropic" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
+    return `<article class="quota-card anthropic-card${q.isStale ? ' stale-card' : ''}" id="card-anth-${q.name}" data-quota="${q.name}" data-provider="anthropic" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
       <header class="card-header">
         <h2 class="quota-title">
           <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icon}</svg>
@@ -2178,7 +2192,7 @@ function renderAnthropicQuotaCards(quotas, containerId) {
           <div class="progress-fill" id="${progressId}" style="width: ${utilPct}%" data-status="${status}"></div>
         </div>
       </div>
-      ${q.ageSeconds != null ? `<div class="card-freshness${q.isStale ? ' stale' : ''}">${freshnessLabel(q)}</div>` : ''}
+      ${q.ageSeconds != null ? `<div class="card-freshness${q.isStale ? ' stale' : ''}" id="freshness-anth-${q.name}">${cardFreshnessLabel(q)}</div>` : ''}
       <footer class="card-footer">
         <span class="status-badge" id="${statusId}" data-status="${status}">
           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
@@ -2227,6 +2241,7 @@ function updateAnthropicCard(quota) {
   const statusEl = document.getElementById(`status-anth-${quota.name}`);
   const resetEl = document.getElementById(`reset-anth-${quota.name}`);
   const countdownEl = document.getElementById(`countdown-anth-${quota.name}`);
+  updateQuotaFreshness(`card-anth-${quota.name}`, `freshness-anth-${quota.name}`, quota);
 
   const displayPct = quota.cardPercent != null ? quota.cardPercent : (quota.utilization || 0);
   const utilPct = displayPct.toFixed(1);
@@ -3479,7 +3494,7 @@ function renderCodexQuotaCards(quotas, containerId, planType) {
     const statusId = `status-codex-${q.name}`;
     const resetId = `reset-codex-${q.name}`;
 
-    return `<article class="quota-card codex-card${q.isStale ? ' stale-card' : ''}" data-quota="${q.name}" data-provider="codex" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
+    return `<article class="quota-card codex-card${q.isStale ? ' stale-card' : ''}" id="card-codex-${q.name}" data-quota="${q.name}" data-provider="codex" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
       <header class="card-header">
         <h2 class="quota-title">
           <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icon}</svg>
@@ -3496,7 +3511,7 @@ function renderCodexQuotaCards(quotas, containerId, planType) {
           <div class="progress-fill" id="${progressId}" style="width: ${utilPct}%" data-status="${status}"></div>
         </div>
       </div>
-      ${q.ageSeconds != null ? `<div class="card-freshness${q.isStale ? ' stale' : ''}">${freshnessLabel(q)}</div>` : ''}
+      ${q.ageSeconds != null ? `<div class="card-freshness${q.isStale ? ' stale' : ''}" id="freshness-codex-${q.name}">${cardFreshnessLabel(q)}</div>` : ''}
       <footer class="card-footer">
         <span class="status-badge" id="${statusId}" data-status="${status}">
           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
@@ -3577,7 +3592,7 @@ function renderCodexQuotaCardsForAccount(quotas, container, accountName, planTyp
           <div class="progress-fill" id="progress-${cardKey}" style="width: ${utilPct}%" data-status="${status}"></div>
         </div>
       </div>
-      ${q.ageSeconds != null ? `<div class="card-freshness${q.isStale ? ' stale' : ''}">${freshnessLabel(q)}</div>` : ''}
+      ${q.ageSeconds != null ? `<div class="card-freshness${q.isStale ? ' stale' : ''}" id="freshness-${cardKey}">${cardFreshnessLabel(q)}</div>` : ''}
       <footer class="card-footer">
         <span class="status-badge" id="status-${cardKey}" data-status="${status}">
           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
@@ -3642,6 +3657,7 @@ function updateCodexCard(quota) {
   const statusEl = document.getElementById(`status-codex-${quota.name}`);
   const resetEl = document.getElementById(`reset-codex-${quota.name}`);
   const countdownEl = document.getElementById(`countdown-codex-${quota.name}`);
+  updateQuotaFreshness(`card-codex-${quota.name}`, `freshness-codex-${quota.name}`, quota);
 
   const utilPct = cardPercent.toFixed(1);
   const status = quota.status || 'healthy';
@@ -6768,8 +6784,10 @@ function renderProviderKPIHTML(quotas, cardKey) {
     const statusId     = stateKey ? ` id="status-${stateKey}"` : '';
     const resetId      = stateKey ? ` id="reset-${stateKey}"` : '';
     const paceTargetId = stateKey ? ` id="pace-target-${stateKey}"` : '';
+    const cardId       = stateKey ? ` id="card-${stateKey}"` : '';
+    const freshnessId  = stateKey ? ` id="freshness-${stateKey}"` : '';
 
-    return `<article class="quota-card provider-kpi-card" data-quota="${escapeHTML(quota.name || '')}">
+    return `<article class="quota-card provider-kpi-card${quota.isStale ? ' stale-card' : ''}"${cardId} data-quota="${escapeHTML(quota.name || '')}">
       <header class="card-header">
         <div class="quota-title-block">
           <h2 class="quota-title">
@@ -6790,6 +6808,7 @@ function renderProviderKPIHTML(quotas, cardKey) {
           <div class="progress-fill"${progressId} style="width: ${Math.max(0, Math.min(percent, 100)).toFixed(1)}%" data-status="${status}"></div>
         </div>
       </div>
+      ${quota.ageSeconds != null ? `<div class="card-freshness${quota.isStale ? ' stale' : ''}"${freshnessId}>${escapeHTML(cardFreshnessLabel(quota))}</div>` : ''}
       <footer class="card-footer">
         <span class="status-badge"${statusId} data-status="${status}">
           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
@@ -6836,6 +6855,7 @@ function updateProviderKPICard(quota, cardKey) {
   const resetEl    = document.getElementById(`reset-${stateKey}`);
   const countdownEl = document.getElementById(`countdown-${stateKey}`);
   const paceTargetEl = document.getElementById(`pace-target-${stateKey}`);
+  updateQuotaFreshness(`card-${stateKey}`, `freshness-${stateKey}`, quota);
 
   if (progressEl) {
     progressEl.style.width = `${Math.max(0, Math.min(percent, 100)).toFixed(1)}%`;

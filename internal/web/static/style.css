@@ -1708,15 +1708,19 @@ body.all-density-comfortable .provider-kpi-card {
   background: var(--surface-container);
 }
 .card-freshness.stale {
-  color: var(--outline);
-  font-style: italic;
+  color: var(--status-warning);
+  background: var(--status-warning-bg);
+  border: 1px solid color-mix(in srgb, var(--status-warning) 35%, transparent);
+  font-weight: 600;
+  margin-bottom: 12px;
 }
 .card-freshness.stale::before {
   content: '\231B'; /* hourglass */
   margin-right: 2px;
 }
 .quota-card.stale-card {
-  opacity: 0.7;
+  border-color: color-mix(in srgb, var(--status-warning) 55%, var(--border-default));
+  box-shadow: inset 3px 0 0 var(--status-warning), var(--shadow-card);
 }
 
 /* Per-tool usage breakdown (Z.ai Time Limit card) */

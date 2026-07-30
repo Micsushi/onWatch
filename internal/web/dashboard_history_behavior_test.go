@@ -350,3 +350,139 @@ if (updates !== 13) throw new Error('every material render-state change must upd
 `, guard)
 	runDashboardNodeTest(t, script)
 }
+
+func TestStaleQuotaStateStaysVisibleOnCards(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	freshness := dashboardJavaScriptBetween(t, source, "function freshnessLabel(", "// Anthropic display names")
+	renderAll := dashboardJavaScriptBetween(t, source, "function renderProviderKPIHTML(", "// In-place update for a single KPI card")
+	updateAnthropic := dashboardJavaScriptBetween(t, source, "function updateAnthropicCard(", "// Anthropic quota detail modal")
+	updateCodex := dashboardJavaScriptBetween(t, source, "function updateCodexCard(", "function openCodexModal(")
+	updateAll := dashboardJavaScriptBetween(t, source, "function updateProviderKPICard(", "function sortItemsByPreference(")
+
+	script := fmt.Sprintf(`
+const State = { currentQuotas: {} };
+const statusConfig = { healthy: { icon: '' } };
+const anthropicQuotaIcons = { seven_day: '' };
+const quotaIcons = {};
+function statusLabelFor() { return 'Healthy'; }
+function minimaxSharedSubtitle() { return ''; }
+function paceTargetLabelFor() { return ''; }
+function formatDateTime(value) { return value; }
+function formatDuration() { return '2h'; }
+function formatNumber(value) { return String(value); }
+function escapeHTML(value) { return String(value); }
+function sanitizeProviderCardKey(value) { return String(value).replace(/[^a-z0-9_-]+/gi, '-'); }
+function animateValue(element, _from, to, _duration, formatter) {
+  element.textContent = formatter(to);
+}
+function makeClassList() {
+  const values = new Set();
+  return {
+    toggle(name, enabled) {
+      if (enabled) values.add(name);
+      else values.delete(name);
+    },
+    contains(name) { return values.has(name); },
+  };
+}
+function makeElement() {
+  return {
+    classList: makeClassList(),
+    style: {},
+    textContent: '',
+    innerHTML: '',
+    setAttribute() {},
+  };
+}
+const elements = new Map();
+function addElement(id, element = makeElement()) {
+  elements.set(id, element);
+  return element;
+}
+const anthropicProgress = addElement('progress-anth-seven_day');
+anthropicProgress.parentElement = makeElement();
+addElement('percent-anth-seven_day');
+addElement('status-anth-seven_day');
+addElement('reset-anth-seven_day');
+addElement('countdown-anth-seven_day');
+const anthropicCard = addElement('card-anth-seven_day');
+const anthropicFreshness = addElement('freshness-anth-seven_day');
+
+const codexProgress = addElement('progress-codex-seven_day');
+codexProgress.parentElement = makeElement();
+addElement('percent-codex-seven_day');
+addElement('status-codex-seven_day');
+addElement('reset-codex-seven_day');
+addElement('countdown-codex-seven_day');
+const codexCard = addElement('card-codex-seven_day');
+const codexFreshness = addElement('freshness-codex-seven_day');
+
+const allProgress = addElement('progress-kpiv-anthropic-seven_day');
+allProgress.parentElement = makeElement();
+addElement('percent-kpiv-anthropic-seven_day');
+addElement('status-kpiv-anthropic-seven_day');
+addElement('reset-kpiv-anthropic-seven_day');
+addElement('countdown-kpiv-anthropic-seven_day');
+addElement('pace-target-kpiv-anthropic-seven_day');
+const allCard = addElement('card-kpiv-anthropic-seven_day');
+const allFreshness = addElement('freshness-kpiv-anthropic-seven_day');
+
+const document = {
+  getElementById(id) { return elements.get(id) || null; },
+};
+%s
+%s
+%s
+%s
+%s
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+const staleQuota = {
+  name: 'seven_day',
+  displayName: 'Weekly All-Model',
+  utilization: 40,
+  cardPercent: 40,
+  status: 'healthy',
+  source: 'api',
+  ageSeconds: 7200,
+  isStale: true,
+  timeUntilResetSeconds: 7200,
+  resetsAt: '2026-07-31T03:00:00Z',
+};
+const html = renderProviderKPIHTML([staleQuota], 'anthropic');
+assert(html.includes('stale-card'), 'All dashboard card must render stale-card');
+assert(html.includes('card-freshness stale'), 'All dashboard card must render stale freshness');
+assert(html.includes('Stale data'), 'All dashboard card must label stale data explicitly');
+
+updateAnthropicCard(staleQuota);
+assert(anthropicCard.classList.contains('stale-card'), 'Anthropic card must become stale in place');
+assert(anthropicFreshness.classList.contains('stale'), 'Anthropic freshness must become stale in place');
+assert(anthropicFreshness.textContent.includes('Stale data'), 'Anthropic card must say stale data');
+
+updateCodexCard(staleQuota);
+assert(codexCard.classList.contains('stale-card'), 'Codex card must become stale in place');
+assert(codexFreshness.classList.contains('stale'), 'Codex freshness must become stale in place');
+assert(codexFreshness.textContent.includes('Stale data'), 'Codex card must say stale data');
+
+updateProviderKPICard(staleQuota, 'anthropic');
+assert(allCard.classList.contains('stale-card'), 'All dashboard card must become stale in place');
+assert(allFreshness.classList.contains('stale'), 'All dashboard freshness must become stale in place');
+assert(allFreshness.textContent.includes('Stale data'), 'All dashboard card must say stale data after refresh');
+
+const freshQuota = { ...staleQuota, ageSeconds: 0, isStale: false };
+updateAnthropicCard(freshQuota);
+updateCodexCard(freshQuota);
+updateProviderKPICard(freshQuota, 'anthropic');
+assert(!anthropicCard.classList.contains('stale-card'), 'Anthropic card must clear stale state');
+assert(!codexCard.classList.contains('stale-card'), 'Codex card must clear stale state');
+assert(!allCard.classList.contains('stale-card'), 'All dashboard card must clear stale state');
+assert(!anthropicFreshness.textContent.includes('Stale data'), 'Anthropic stale label must clear');
+assert(!codexFreshness.textContent.includes('Stale data'), 'Codex stale label must clear');
+assert(!allFreshness.textContent.includes('Stale data'), 'All dashboard stale label must clear');
+`, freshness, renderAll, updateAnthropic, updateCodex, updateAll)
+
+	runDashboardNodeTest(t, script)
+}

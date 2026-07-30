@@ -155,6 +155,28 @@ func TestHasFlagAndHasCommand(t *testing.T) {
 	}
 }
 
+func TestAnthropicClaudeCodeDetectionEnabled(t *testing.T) {
+	tests := []struct {
+		name      string
+		rotation  bool
+		configDir string
+		want      bool
+	}{
+		{name: "shared credentials", rotation: true, want: true},
+		{name: "isolated read only", configDir: `C:\Claude\isolated`, want: true},
+		{name: "isolated rotation", rotation: true, configDir: `C:\Claude\isolated`, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := anthropicClaudeCodeDetectionEnabled(tt.rotation, tt.configDir); got != tt.want {
+				t.Fatalf("anthropicClaudeCodeDetectionEnabled(%v, %q) = %v, want %v",
+					tt.rotation, tt.configDir, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSha256hexAndDeriveEncryptionKey(t *testing.T) {
 	input := "onwatch"
 	want := sha256.Sum256([]byte(input))

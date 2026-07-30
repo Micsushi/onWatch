@@ -286,6 +286,10 @@ func deriveLegacyEncryptionKey(passwordHash string) string {
 	return fmt.Sprintf("%x", h)
 }
 
+func anthropicClaudeCodeDetectionEnabled(tokenRotation bool, claudeConfigDir string) bool {
+	return !tokenRotation || strings.TrimSpace(claudeConfigDir) == ""
+}
+
 // migrateDBLocation moves the database from old default locations to the new one.
 // Only runs when no explicit --db or ONWATCH_DB_PATH was set.
 func migrateDBLocation(newPath string, logger *slog.Logger) {
@@ -1028,6 +1032,13 @@ func run() error {
 				anthropicAg.SetCredentialsRefresh(func() *api.AnthropicCredentials {
 					return api.DetectAnthropicCredentials(logger)
 				})
+				if !anthropicClaudeCodeDetectionEnabled(
+					cfg.AnthropicTokenRotation,
+					os.Getenv("CLAUDE_CONFIG_DIR"),
+				) {
+					anthropicAg.SetCCDetectionEnabled(false)
+					logger.Info("Anthropic isolated credential rotation enabled")
+				}
 			} else {
 				logger.Info("Anthropic token rotation disabled - read-only token mode (no 429 bypass)")
 			}
