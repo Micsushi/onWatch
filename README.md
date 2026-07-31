@@ -36,8 +36,8 @@ On macOS, the installer downloads the standard binary with menubar support.
 - The menubar/tray companion is macOS-only. On Linux it is a no-op stub; use the
   web dashboard on port 9211 instead.
 - Optional packages improve auto-detection (core polling works without them):
-  - `libsecret-tools` — `secret-tool` for reading the GNOME/KDE keyring
-  - `iproute2` (`ss`) or `net-tools` (`netstat`) — Antigravity local port discovery
+  - `libsecret-tools` - `secret-tool` for reading the GNOME/KDE keyring
+  - `iproute2` (`ss`) or `net-tools` (`netstat`) - Antigravity local port discovery
   ```bash
   sudo apt install libsecret-tools iproute2   # Debian/Ubuntu
   ```
