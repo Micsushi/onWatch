@@ -10,6 +10,32 @@ import (
 	"time"
 )
 
+func TestAnthropicOAuthDefaultsMatchCurrentClaudeCode(t *testing.T) {
+	const want = "https://platform.claude.com/v1/oauth/token"
+	if AnthropicOAuthTokenURL != want {
+		t.Fatalf("AnthropicOAuthTokenURL = %q, want %q", AnthropicOAuthTokenURL, want)
+	}
+}
+
+func TestRefreshAnthropicToken_UsesCurrentClaudeCodeUserAgent(t *testing.T) {
+	var gotUserAgent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserAgent = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(oauthErrorResponse{Error: "invalid_grant"})
+	}))
+	defer server.Close()
+
+	origURL := AnthropicOAuthTokenURL
+	defer func() { resetOAuthURL(origURL) }()
+	setOAuthURL(server.URL)
+
+	_, _ = RefreshAnthropicToken(context.Background(), "test-refresh-token")
+	if gotUserAgent != "claude-code/2.1.220" {
+		t.Fatalf("User-Agent = %q, want %q", gotUserAgent, "claude-code/2.1.220")
+	}
+}
+
 func TestRefreshAnthropicToken_Returns_ErrOAuthRateLimited_On429(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)

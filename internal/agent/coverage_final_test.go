@@ -25,7 +25,7 @@ type oauthRedirectTransport struct {
 }
 
 func (t oauthRedirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Host == "console.anthropic.com" && req.URL.Path == "/v1/oauth/token" {
+	if req.URL.Host == "platform.claude.com" && req.URL.Path == "/v1/oauth/token" {
 		cloned := req.Clone(req.Context())
 		newURL := *cloned.URL
 		newURL.Scheme = t.target.Scheme

@@ -20,10 +20,10 @@ const (
 
 // anthropicOAuthTokenURL is the endpoint for OAuth token operations.
 // Variable (not const) to allow test overrides.
-var anthropicOAuthTokenURL = "https://console.anthropic.com/v1/oauth/token"
+var anthropicOAuthTokenURL = "https://platform.claude.com/v1/oauth/token"
 
 // AnthropicOAuthTokenURL is the public accessor for the OAuth token URL.
-const AnthropicOAuthTokenURL = "https://console.anthropic.com/v1/oauth/token"
+const AnthropicOAuthTokenURL = "https://platform.claude.com/v1/oauth/token"
 
 // setOAuthURL overrides the OAuth token URL (for testing).
 func setOAuthURL(url string) { anthropicOAuthTokenURL = url }
@@ -131,7 +131,7 @@ func RefreshAnthropicToken(ctx context.Context, refreshToken string) (*OAuthToke
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "claude-code/2.1.69")
+	req.Header.Set("User-Agent", anthropicUserAgent)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)

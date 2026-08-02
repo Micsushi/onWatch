@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -319,10 +320,9 @@ func TestAnthropicAgent_InvalidGrant_PausesPolling(t *testing.T) {
 	}
 }
 
-// TestAnthropicAgent_RateLimitBackoff_DecaysOnBackoffExpiry verifies that when the
-// backoff window expires and the agent retries, rateLimitFailCount is decremented
-// first so that repeated failures don't escalate forever.
-func TestAnthropicAgent_RateLimitBackoff_DecaysOnBackoffExpiry(t *testing.T) {
+// TestAnthropicAgent_RateLimitBackoff_EscalatesOnRepeatedOAuth429 verifies that
+// another OAuth 429 after backoff expiry increases the failure count.
+func TestAnthropicAgent_RateLimitBackoff_EscalatesOnRepeatedOAuth429(t *testing.T) {
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte(`{"error":"rate_limited"}`))
@@ -368,16 +368,14 @@ func TestAnthropicAgent_RateLimitBackoff_DecaysOnBackoffExpiry(t *testing.T) {
 	ctx := context.Background()
 	agent.poll(ctx)
 
-	// failCount should be 5 (decremented to 4 on expiry, then incremented back to 5
-	// by the new 429). NOT 6 - that's the bug we fixed.
-	if agent.rateLimitFailCount != 5 {
-		t.Errorf("rateLimitFailCount = %d, want 5 (decayed then re-incremented, not escalated to 6)", agent.rateLimitFailCount)
+	if agent.rateLimitFailCount != 6 {
+		t.Errorf("rateLimitFailCount = %d, want 6 after another OAuth 429", agent.rateLimitFailCount)
 	}
 }
 
-// TestAnthropicAgent_RateLimitBackoff_DecaysOnSuccessfulPoll verifies that successful
-// polls gradually decay the rateLimitFailCount even when no 429 is encountered.
-func TestAnthropicAgent_RateLimitBackoff_DecaysOnSuccessfulPoll(t *testing.T) {
+// TestAnthropicAgent_RateLimitBackoff_PreservedOnSuccessfulUsagePoll verifies that
+// an unrelated usage API success does not clear OAuth refresh failures.
+func TestAnthropicAgent_RateLimitBackoff_PreservedOnSuccessfulUsagePoll(t *testing.T) {
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(anthropicResponse(25.0, 10.0)))
@@ -401,26 +399,37 @@ func TestAnthropicAgent_RateLimitBackoff_DecaysOnSuccessfulPoll(t *testing.T) {
 	agent.lastToken = "test-token"
 
 	ctx := context.Background()
-	agent.poll(ctx)
+	for range 3 {
+		agent.poll(ctx)
+	}
+	if agent.rateLimitFailCount != 3 {
+		t.Errorf("rateLimitFailCount = %d, want 3 after successful usage polls", agent.rateLimitFailCount)
+	}
+}
 
-	if agent.rateLimitFailCount != 2 {
-		t.Errorf("rateLimitFailCount = %d, want 2 (decayed by 1 after success)", agent.rateLimitFailCount)
+func TestAnthropicAgent_RateLimitBackoff_PreservedOnStatuslinePoll(t *testing.T) {
+	str, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer str.Close()
+
+	statuslinePath := t.TempDir() + "/anthropic-statusline.json"
+	statusline := `{"rate_limits":{"five_hour":{"used_percentage":25,"resets_at":1785684844}}}`
+	if err := os.WriteFile(statuslinePath, []byte(statusline), 0o600); err != nil {
+		t.Fatalf("write statusline: %v", err)
 	}
 
-	agent.poll(ctx)
-	if agent.rateLimitFailCount != 1 {
-		t.Errorf("rateLimitFailCount = %d, want 1 after second success", agent.rateLimitFailCount)
-	}
+	logger := slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))
+	agent := NewAnthropicAgent(nil, str, tracker.NewAnthropicTracker(str, logger), time.Minute, logger, nil)
+	agent.statuslinePath = statuslinePath
+	agent.statuslineStaleness = time.Hour
+	agent.apiPollCycleInterval = 0
+	agent.rateLimitFailCount = 3
 
-	agent.poll(ctx)
-	if agent.rateLimitFailCount != 0 {
-		t.Errorf("rateLimitFailCount = %d, want 0 after third success", agent.rateLimitFailCount)
-	}
-
-	// Should not go below 0
-	agent.poll(ctx)
-	if agent.rateLimitFailCount != 0 {
-		t.Errorf("rateLimitFailCount = %d, want 0 (floor)", agent.rateLimitFailCount)
+	agent.poll(context.Background())
+	if agent.rateLimitFailCount != 3 {
+		t.Errorf("rateLimitFailCount = %d, want 3 after successful statusline poll", agent.rateLimitFailCount)
 	}
 }
 

@@ -406,9 +406,6 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 				"source", "statusline",
 				"quota_count", len(snapshot.Quotas),
 				"cycle", a.pollCycleCount)
-			if a.rateLimitFailCount > 0 {
-				a.rateLimitFailCount--
-			}
 			// Hybrid: periodically do a full API poll for supplementary quotas
 			// (seven_day_sonnet, extra_usage, etc.) that statusline doesn't provide.
 			if a.apiPollCycleInterval > 0 && a.pollCycleCount%a.apiPollCycleInterval == 0 {
@@ -511,12 +508,8 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 						"Claude quota polling is rate limited and waiting for the configured retry window.")
 					return
 				}
-				// Backoff expired - decay failCount so retries don't escalate forever.
-				// If retry succeeds, failCount resets to 0. If retry fails,
-				// failCount stays flat (decremented here, incremented below).
-				if a.rateLimitFailCount > 0 {
-					a.rateLimitFailCount--
-				}
+				// Backoff expired. A repeated OAuth failure must increase the
+				// failure count so the next retry window grows exponentially.
 				a.rateLimitPaused = false
 				a.logger.Info("OAuth rate limit backoff expired, retrying refresh",
 					"fail_count", a.rateLimitFailCount)
@@ -722,11 +715,9 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 			return
 		}
 	} else {
-		// Success - reset auth failure count and decay rate limit backoff
+		// A usage API success clears usage authentication failures only.
+		// OAuth refresh failures reset only after OAuth succeeds or credentials change.
 		a.authFailCount = 0
-		if a.rateLimitFailCount > 0 {
-			a.rateLimitFailCount--
-		}
 	}
 
 processResponse:

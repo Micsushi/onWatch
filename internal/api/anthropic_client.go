@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const anthropicUserAgent = "claude-code/2.1.220"
+
 // Custom errors for Anthropic API failures.
 var (
 	ErrAnthropicUnauthorized    = errors.New("anthropic: unauthorized - invalid API key")
@@ -109,7 +111,7 @@ func (c *AnthropicClient) FetchQuotas(ctx context.Context) (*AnthropicQuotaRespo
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
-	req.Header.Set("User-Agent", "claude-code/2.1.69")
+	req.Header.Set("User-Agent", anthropicUserAgent)
 
 	// Log request (with redacted token)
 	c.logger.Debug("fetching Anthropic quotas",
