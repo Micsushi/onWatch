@@ -182,7 +182,7 @@ func newRemainingPollHealthHarness(t *testing.T, provider string, fail *atomic.B
 
 func TestRemainingProviderPollHealthFailureAndRecovery(t *testing.T) {
 	for _, provider := range []string{
-		"synthetic", "zai", "copilot", "antigravity", "minimax", "openrouter", "gemini", "cursor",
+		"synthetic", "zai", "copilot", "minimax", "openrouter", "gemini", "cursor",
 	} {
 		t.Run(provider, func(t *testing.T) {
 			var fail atomic.Bool
@@ -209,7 +209,7 @@ func TestRemainingProviderPollHealthFailureAndRecovery(t *testing.T) {
 
 func TestRemainingProviderPollHealthRegistersAndSkipsDisabled(t *testing.T) {
 	for _, provider := range []string{
-		"synthetic", "zai", "copilot", "antigravity", "minimax", "openrouter", "gemini", "cursor",
+		"synthetic", "zai", "copilot", "minimax", "openrouter", "gemini", "cursor",
 	} {
 		t.Run(provider, func(t *testing.T) {
 			var fail atomic.Bool
@@ -248,7 +248,7 @@ func TestRemainingProviderPollHealthRegistersAndSkipsDisabled(t *testing.T) {
 
 func TestRemainingProviderPollHealthCanceledPollIsSkipped(t *testing.T) {
 	for _, provider := range []string{
-		"synthetic", "zai", "copilot", "antigravity", "minimax", "openrouter", "gemini", "cursor",
+		"synthetic", "zai", "copilot", "minimax", "openrouter", "gemini", "cursor",
 	} {
 		t.Run(provider, func(t *testing.T) {
 			var fail atomic.Bool
@@ -268,13 +268,12 @@ func TestRemainingProviderPollHealthCanceledPollIsSkipped(t *testing.T) {
 
 func TestRemainingProviderPollHealthStoreFailurePreservesExistingDownstreamFlow(t *testing.T) {
 	preservesDownstream := map[string]bool{
-		"antigravity": true,
-		"copilot":     true,
-		"minimax":     true,
-		"cursor":      true,
+		"copilot": true,
+		"minimax": true,
+		"cursor":  true,
 	}
 	for _, provider := range []string{
-		"synthetic", "zai", "copilot", "antigravity", "minimax", "openrouter", "gemini", "cursor",
+		"synthetic", "zai", "copilot", "minimax", "openrouter", "gemini", "cursor",
 	} {
 		t.Run(provider, func(t *testing.T) {
 			var fail atomic.Bool
@@ -293,6 +292,33 @@ func TestRemainingProviderPollHealthStoreFailurePreservesExistingDownstreamFlow(
 				t.Fatalf("quota checks = 0, want preexisting downstream processing after %s storage failure", provider)
 			}
 		})
+	}
+}
+
+func TestAntigravityDoesNotReportPollHealth(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	h := newRemainingPollHealthHarness(t, "antigravity", &fail)
+
+	h.poll(context.Background())
+	fail.Store(false)
+	h.poll(context.Background())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := h.run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got := h.spy.snapshot()
+	if len(got.registered)+len(got.unregistered)+len(got.failures)+len(got.successes)+len(got.skips) != 0 {
+		t.Fatalf(
+			"poll health calls = registered:%d unregistered:%d failures:%d successes:%d skips:%d, want none",
+			len(got.registered), len(got.unregistered), len(got.failures), len(got.successes), len(got.skips),
+		)
+	}
+	if len(got.checks) == 0 {
+		t.Fatal("quota notifications were disabled with poll health")
 	}
 }
 

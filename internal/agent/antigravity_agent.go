@@ -54,48 +54,6 @@ func (a *AntigravityAgent) SetNotifier(n *notify.NotificationEngine) {
 	a.notifier = n
 }
 
-func (a *AntigravityAgent) recordPollFailure(category, message string) {
-	if a.notifier != nil {
-		a.notifier.RecordPollFailure("antigravity", "default", category, message)
-	}
-}
-
-func (a *AntigravityAgent) recordPollSuccess() {
-	if a.notifier != nil {
-		a.notifier.RecordPollSuccess("antigravity", "default")
-	}
-}
-
-func (a *AntigravityAgent) recordPollSkipped() {
-	if a.notifier != nil {
-		a.notifier.RecordPollSkipped("antigravity", "default")
-	}
-}
-
-// pollOutcome describes how one failed fetch should be reported to poll health.
-type pollOutcome struct {
-	skip     bool
-	category string
-	message  string
-}
-
-// antigravityPollOutcome classifies a fetch error.
-//
-// Antigravity is served by a local process, so a missing language server means
-// the IDE is closed. That is an expected absence, not an outage: recording it
-// as a failure opens an incident that nothing but reopening the IDE can clear,
-// producing repeat alerts and no recovery notice. Errors that mean "running
-// but unreachable" stay failures.
-func antigravityPollOutcome(err error) pollOutcome {
-	if errors.Is(err, api.ErrAntigravityProcessNotFound) {
-		return pollOutcome{skip: true}
-	}
-	return pollOutcome{
-		category: "provider_request",
-		message:  "Antigravity quotas could not be fetched. Check the local service connection and provider availability.",
-	}
-}
-
 // NewAntigravityAgent creates a new AntigravityAgent with the given dependencies.
 // For Docker environments, use WithAntigravityManualConfig to set connection details.
 func NewAntigravityAgent(
@@ -152,14 +110,8 @@ func NewAntigravityAgent(
 // then continues at the configured interval until the context is cancelled.
 func (a *AntigravityAgent) Run(ctx context.Context) error {
 	a.logger.Info("Antigravity agent started", "interval", a.interval)
-	if a.notifier != nil {
-		a.notifier.RegisterPoller("antigravity", "default", a.interval)
-	}
 
 	defer func() {
-		if a.notifier != nil {
-			a.notifier.UnregisterPoller("antigravity", "default")
-		}
 		if a.sm != nil {
 			a.sm.Close()
 		}
@@ -185,28 +137,22 @@ func (a *AntigravityAgent) Run(ctx context.Context) error {
 // poll performs a single poll cycle: detect process, fetch quotas, store snapshot, update tracker.
 func (a *AntigravityAgent) poll(ctx context.Context) {
 	if ctx.Err() != nil {
-		a.recordPollSkipped()
 		return
 	}
 	if a.pollingCheck != nil && !a.pollingCheck() {
-		a.recordPollSkipped()
 		return
 	}
 
 	resp, err := a.client.FetchQuotas(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
-			a.recordPollSkipped()
 			return
 		}
-		outcome := antigravityPollOutcome(err)
-		if outcome.skip {
+		if errors.Is(err, api.ErrAntigravityProcessNotFound) {
 			a.logger.Info("Antigravity not running, skipping poll", "error", err)
-			a.recordPollSkipped()
 			return
 		}
 		a.logger.Error("Failed to fetch Antigravity quotas", "error", err)
-		a.recordPollFailure(outcome.category, outcome.message)
 		return
 	}
 
@@ -217,10 +163,6 @@ func (a *AntigravityAgent) poll(ctx context.Context) {
 	// Store snapshot
 	if _, err := a.store.InsertAntigravitySnapshot(snapshot); err != nil {
 		a.logger.Error("Failed to insert Antigravity snapshot", "error", err)
-		a.recordPollFailure("storage",
-			"Antigravity usage was fetched but could not be saved. Check onWatch database access.")
-	} else {
-		a.recordPollSuccess()
 	}
 
 	// Process with tracker
