@@ -155,22 +155,22 @@ func TestHasFlagAndHasCommand(t *testing.T) {
 	}
 }
 
-func TestAnthropicClaudeCodeDetectionEnabled(t *testing.T) {
+func TestAnthropicUsesIsolatedCredentialOwner(t *testing.T) {
 	tests := []struct {
 		name      string
 		rotation  bool
 		configDir string
 		want      bool
 	}{
-		{name: "shared credentials", rotation: true, want: true},
-		{name: "isolated read only", configDir: `C:\Claude\isolated`, want: true},
-		{name: "isolated rotation", rotation: true, configDir: `C:\Claude\isolated`, want: false},
+		{name: "rotation disabled", configDir: `C:\Claude\onwatch`, want: false},
+		{name: "shared default profile", rotation: true, want: false},
+		{name: "isolated profile", rotation: true, configDir: `C:\Claude\onwatch`, want: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := anthropicClaudeCodeDetectionEnabled(tt.rotation, tt.configDir); got != tt.want {
-				t.Fatalf("anthropicClaudeCodeDetectionEnabled(%v, %q) = %v, want %v",
+			if got := anthropicUsesIsolatedCredentialOwner(tt.rotation, tt.configDir); got != tt.want {
+				t.Fatalf("anthropicUsesIsolatedCredentialOwner(%v, %q) = %v, want %v",
 					tt.rotation, tt.configDir, got, tt.want)
 			}
 		})

@@ -143,6 +143,8 @@ SYNTHETIC_API_KEY=syn_your_actual_key
 ZAI_API_KEY=your_zai_key
 ANTHROPIC_TOKEN=your_anthropic_token      # Auto-detected from Claude Code if not set
 ANTHROPIC_TOKEN_ROTATION=off              # Enable only with isolated credentials
+CLAUDE_CONFIG_DIR=/path/to/onwatch-profile # Dedicated profile when rotation is on
+ANTHROPIC_CLAUDE_PATH=/path/to/claude     # Optional executable override
 CODEX_TOKEN=your_codex_token              # Recommended for Codex-only setups
 COPILOT_TOKEN=ghp_your_github_token       # GitHub PAT with 'copilot' scope (Beta)
 ```

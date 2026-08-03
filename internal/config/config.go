@@ -33,11 +33,11 @@ type Config struct {
 	AnthropicToken     string // ANTHROPIC_TOKEN or auto-detected
 	AnthropicAutoToken bool   // true if token was auto-detected
 	AnthropicSource    string // ANTHROPIC_SOURCE: "auto" (default), "statusline", "api"
-	// AnthropicTokenRotation controls whether onWatch may refresh/rotate Claude
-	// Code's OAuth token to bypass 429 rate limits. Default false so onWatch
-	// cannot invalidate Claude Code's shared session. Set
-	// ANTHROPIC_TOKEN_ROTATION=on only when using isolated credentials.
+	// AnthropicTokenRotation controls whether onWatch may refresh/rotate an
+	// isolated Claude profile. Default false so onWatch cannot invalidate a
+	// shared Claude Code session.
 	AnthropicTokenRotation bool
+	AnthropicClaudePath    string // optional ANTHROPIC_CLAUDE_PATH override
 
 	// Copilot provider configuration
 	CopilotToken string // COPILOT_TOKEN (GitHub PAT with copilot scope)
@@ -287,6 +287,7 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 	case "on", "true", "1", "yes":
 		cfg.AnthropicTokenRotation = true
 	}
+	cfg.AnthropicClaudePath = strings.TrimSpace(os.Getenv("ANTHROPIC_CLAUDE_PATH"))
 
 	// Copilot provider
 	cfg.CopilotToken = os.Getenv("COPILOT_TOKEN")

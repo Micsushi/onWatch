@@ -77,6 +77,8 @@ Create a `.env` file at `%USERPROFILE%\.onwatch\.env` with your API keys.
 # ANTHROPIC_TOKEN=your_token_here
 # Keep shared Claude Code credentials read-only (safe default)
 # ANTHROPIC_TOKEN_ROTATION=off
+# CLAUDE_CONFIG_DIR=C:\Users\you\AppData\Local\onWatch\claude-profile
+# ANTHROPIC_CLAUDE_PATH=C:\Users\you\.local\bin\claude.exe
 
 # Codex OAuth token (see "Retrieving Tokens" below)
 # CODEX_TOKEN=your_token_here
@@ -128,10 +130,35 @@ Get your key at: https://www.z.ai/api-keys
 
 #### Anthropic (Claude Code)
 ```env
-ANTHROPIC_TOKEN=your_token_here
-ANTHROPIC_TOKEN_ROTATION=off
+ANTHROPIC_TOKEN_ROTATION=on
+CLAUDE_CONFIG_DIR=C:\Users\you\AppData\Local\onWatch\claude-profile
+# Optional when claude.exe is not on PATH:
+ANTHROPIC_CLAUDE_PATH=C:\Users\you\.local\bin\claude.exe
 ```
-See [Retrieving Anthropic Token](#retrieving-anthropic-token) below. Token rotation is disabled by default because rotating Claude Code's one-time-use refresh token can sign Claude Code out. Only set `ANTHROPIC_TOKEN_ROTATION=on` when onWatch uses isolated credentials.
+Authenticate that dedicated profile once before starting onWatch:
+
+```powershell
+$env:CLAUDE_CONFIG_DIR = "$env:LOCALAPPDATA\onWatch\claude-profile"
+claude auth login
+Remove-Item Env:CLAUDE_CONFIG_DIR
+```
+
+onWatch then uses the official Claude executable to refresh its expired credential with one restricted Haiku probe. The probe consumes a small amount of Claude usage. Do not point onWatch at a profile owned by another application.
+
+To keep the official Claude VS Code extension independent too, add a different profile to VS Code's `settings.json`, reload VS Code, and sign in through the extension:
+
+```json
+{
+  "claudeCode.environmentVariables": [
+    {
+      "name": "CLAUDE_CONFIG_DIR",
+      "value": "C:\\Users\\you\\AppData\\Local\\ClaudeCode\\vscode-profile"
+    }
+  ]
+}
+```
+
+Give every other Claude application, such as QuotaWake, its own third `CLAUDE_CONFIG_DIR` and authenticate it separately. The applications can run alone and refresh only their own credentials. They still share the Anthropic account's usage quota when signed into the same account.
 
 #### Codex
 ```env

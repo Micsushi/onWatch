@@ -292,6 +292,20 @@ func TestConfig_AnthropicTokenRotationRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestConfig_AnthropicClaudePathLoadsFromEnv(t *testing.T) {
+	clearEnvForTest()
+	defer clearEnvForTest()
+	t.Setenv("ANTHROPIC_CLAUDE_PATH", `C:\tools\claude.exe`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.AnthropicClaudePath != `C:\tools\claude.exe` {
+		t.Fatalf("AnthropicClaudePath = %q, want configured path", cfg.AnthropicClaudePath)
+	}
+}
+
 func TestConfig_APIIntegrationsRetention_LoadsFromEnv(t *testing.T) {
 	clearEnvForTest()
 	os.Setenv("ONWATCH_API_INTEGRATIONS_RETENTION", "168h")

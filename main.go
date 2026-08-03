@@ -286,8 +286,8 @@ func deriveLegacyEncryptionKey(passwordHash string) string {
 	return fmt.Sprintf("%x", h)
 }
 
-func anthropicClaudeCodeDetectionEnabled(tokenRotation bool, claudeConfigDir string) bool {
-	return !tokenRotation || strings.TrimSpace(claudeConfigDir) == ""
+func anthropicUsesIsolatedCredentialOwner(tokenRotation bool, claudeConfigDir string) bool {
+	return tokenRotation && strings.TrimSpace(claudeConfigDir) != ""
 }
 
 // migrateDBLocation moves the database from old default locations to the new one.
@@ -1029,15 +1029,22 @@ func run() error {
 			// Claude Code maintains but never refreshes/rotates it, so it can't
 			// invalidate Claude Code's session and force daily re-authentication.
 			if cfg.AnthropicTokenRotation {
-				anthropicAg.SetCredentialsRefresh(func() *api.AnthropicCredentials {
-					return api.DetectAnthropicCredentials(logger)
-				})
-				if !anthropicClaudeCodeDetectionEnabled(
-					cfg.AnthropicTokenRotation,
-					os.Getenv("CLAUDE_CONFIG_DIR"),
-				) {
+				claudeConfigDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
+				if anthropicUsesIsolatedCredentialOwner(cfg.AnthropicTokenRotation, claudeConfigDir) {
+					anthropicAg.SetCredentialsRefresh(func() *api.AnthropicCredentials {
+						return api.DetectAnthropicCredentials(logger)
+					})
+					anthropicAg.SetCredentialOwnerRefresh(func(ctx context.Context) error {
+						return api.RefreshAnthropicCredentialsWithClaude(
+							ctx,
+							cfg.AnthropicClaudePath,
+							claudeConfigDir,
+						)
+					})
 					anthropicAg.SetCCDetectionEnabled(false)
-					logger.Info("Anthropic isolated credential rotation enabled")
+					logger.Info("Anthropic isolated credential owner enabled", "profile", claudeConfigDir)
+				} else {
+					logger.Warn("Anthropic token rotation ignored because CLAUDE_CONFIG_DIR is not isolated")
 				}
 			} else {
 				logger.Info("Anthropic token rotation disabled - read-only token mode (no 429 bypass)")

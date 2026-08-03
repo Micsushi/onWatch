@@ -22,6 +22,11 @@ type TokenRefreshFunc func() string
 // CredentialsRefreshFunc returns the full credentials for proactive OAuth refresh.
 type CredentialsRefreshFunc func() *api.AnthropicCredentials
 
+// CredentialOwnerRefreshFunc asks the process that owns an isolated Claude
+// profile to refresh its credentials. The owner is responsible for updating
+// the credential store before returning.
+type CredentialOwnerRefreshFunc func(context.Context) error
+
 // maxAuthFailures is the number of consecutive auth failures before pausing polling.
 const maxAuthFailures = 3
 
@@ -67,6 +72,7 @@ type AnthropicAgent struct {
 	sm           *SessionManager
 	tokenRefresh TokenRefreshFunc
 	credsRefresh CredentialsRefreshFunc
+	ownerRefresh CredentialOwnerRefreshFunc
 	lastToken    string
 	notifier     agentNotifier
 	pollingCheck func() bool
@@ -153,6 +159,13 @@ func (a *AnthropicAgent) SetTokenRefresh(fn TokenRefreshFunc) {
 // proactive OAuth token refresh before expiry.
 func (a *AnthropicAgent) SetCredentialsRefresh(fn CredentialsRefreshFunc) {
 	a.credsRefresh = fn
+}
+
+// SetCredentialOwnerRefresh configures an isolated profile owner that can
+// refresh expired credentials without rotating another Claude application's
+// refresh token.
+func (a *AnthropicAgent) SetCredentialOwnerRefresh(fn CredentialOwnerRefreshFunc) {
+	a.ownerRefresh = fn
 }
 
 // EnableStatuslineBridge activates the statusline file bridge for zero-429
@@ -422,11 +435,19 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 
 	wasAuthPaused := a.authPaused
 
-	// Proactive OAuth refresh
+	// Let an isolated credential owner refresh only after expiry. Calling the
+	// OAuth endpoint early is aggressively rate limited, while the official
+	// Claude process can safely rotate the profile it owns.
 	if a.credsRefresh != nil {
 		if creds := a.credsRefresh(); creds != nil {
-			// Check if token is expiring soon or already expired
-			if creds.IsExpiringSoon(tokenRefreshThreshold) && creds.RefreshToken != "" {
+			if a.ownerRefresh != nil {
+				if creds.IsExpired() {
+					a.logger.Info("Anthropic token expired, asking isolated credential owner to refresh")
+					if err := a.ownerRefresh(ctx); err != nil {
+						a.logger.Warn("Anthropic isolated credential owner refresh failed", "error", err)
+					}
+				}
+			} else if creds.IsExpiringSoon(tokenRefreshThreshold) && creds.RefreshToken != "" {
 				a.proactiveRefresh(ctx, creds)
 			}
 		}
@@ -496,6 +517,13 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 		//
 		// See: https://github.com/anthropics/claude-code/issues/31021
 		if errors.Is(err, api.ErrAnthropicRateLimited) {
+			if a.ownerRefresh != nil {
+				a.logger.Warn("Anthropic usage API rate limited; isolated credential owner will not rotate a valid token")
+				reportFailure("rate_limit",
+					"Claude quota polling is rate limited. onWatch will retry without rotating valid isolated credentials.")
+				return
+			}
+
 			a.logger.Warn("Anthropic rate limited (429), attempting token refresh bypass")
 
 			// If in rate limit backoff, skip the OAuth refresh to avoid burning tokens
