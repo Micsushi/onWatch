@@ -5369,25 +5369,20 @@ func (h *Handler) historyAnthropic(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	snapshots, err := h.store.QueryAnthropicRange(window.Start, window.End)
+	snapshots, err := h.store.QueryAnthropicRangeSampled(window.Start, window.End, maxChartPoints)
 	if err != nil {
 		h.logger.Error("failed to query Anthropic history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")
 		return
 	}
-	step := downsampleStep(len(snapshots), maxChartPoints)
-	last := len(snapshots) - 1
 	// Track last known value for each quota so statusline snapshots (which only
 	// have five_hour + seven_day) don't chart supplementary quotas as 0.
 	lastKnown := make(map[string]float64)
 	response := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-	for i, snap := range snapshots {
+	for _, snap := range snapshots {
 		// Update lastKnown for all quotas in this snapshot
 		for _, q := range snap.Quotas {
 			lastKnown[q.Name] = q.Utilization
-		}
-		if step > 1 && i != 0 && i != last && i%step != 0 {
-			continue
 		}
 		entry := map[string]interface{}{
 			"capturedAt": snap.CapturedAt.Format(time.RFC3339),
@@ -8660,19 +8655,14 @@ func (h *Handler) historyCodex(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	snapshots, err := h.store.QueryCodexRange(accountID, window.Start, window.End)
+	snapshots, err := h.store.QueryCodexRangeSampled(accountID, window.Start, window.End, maxChartPoints)
 	if err != nil {
 		h.logger.Error("failed to query Codex history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")
 		return
 	}
-	step := downsampleStep(len(snapshots), maxChartPoints)
-	last := len(snapshots) - 1
 	response := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-	for i, snap := range snapshots {
-		if step > 1 && i != 0 && i != last && i%step != 0 {
-			continue
-		}
+	for _, snap := range snapshots {
 		entry := map[string]interface{}{"capturedAt": snap.CapturedAt.Format(time.RFC3339)}
 		for _, q := range snap.Quotas {
 			name := codexNormalizedQuotaName(snap.PlanType, q.Name)

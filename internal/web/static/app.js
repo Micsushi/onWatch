@@ -277,7 +277,7 @@ function updateChartWhenChanged(signatureKey, renderState, update) {
 
 const API_INTEGRATIONS_CURRENT_CACHE_KEY = 'onwatch-api-integrations-current-v1';
 const PLATFORM_COST_HISTORY_CACHE_KEY = 'onwatch-platform-cost-history-v2';
-const PROVIDER_DATA_CACHE_KEY = 'onwatch-provider-data-cache-v2';
+const PROVIDER_DATA_CACHE_KEY = 'onwatch-provider-data-cache-v4';
 const API_INTEGRATIONS_CURRENT_CACHE_TTL_MS = 120000;
 const PLATFORM_COST_HISTORY_CACHE_TTL_MS = 120000;
 const PROVIDER_CURRENT_CACHE_TTL_MS = 120000;
@@ -3874,7 +3874,12 @@ function formatDateTime(isoString) {
 
 function platformCostTimeScale(range) {
   if (range === 'custom') {
-    const duration = graphRangeDurationMs(range);
+    const duration = graphRangeDurationMs(
+      range,
+      [],
+      State.platformCostWindowStart,
+      State.platformCostWindowEnd,
+    );
     if (duration <= 2 * 60 * 60 * 1000) {
       return { unit: 'minute', displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' } };
     }
@@ -5386,7 +5391,12 @@ function graphBucketMaxCount(mode = State.graphMode) {
   return Math.ceil(graphBucketTargetCount(mode) * 1.2);
 }
 
-function graphRangeDurationMs(range, points = []) {
+function graphRangeDurationMs(
+  range,
+  points = [],
+  windowStart = State.historyWindowStart,
+  windowEnd = State.historyWindowEnd,
+) {
   const rangeKey = String(range || '6h').toLowerCase();
   const hour = 60 * 60 * 1000;
   const durations = {
@@ -5397,9 +5407,9 @@ function graphRangeDurationMs(range, points = []) {
     '15d': 15 * 24 * hour,
     '30d': 30 * 24 * hour,
   };
-  if (rangeKey === 'custom' && State.historyWindowStart && State.historyWindowEnd) {
-    const start = Date.parse(State.historyWindowStart);
-    const end = Date.parse(State.historyWindowEnd);
+  if (rangeKey === 'custom' && windowStart && windowEnd) {
+    const start = Date.parse(windowStart);
+    const end = Date.parse(windowEnd);
     if (Number.isFinite(start) && Number.isFinite(end) && end > start) return end - start;
   }
   if (rangeKey !== 'all') return durations[rangeKey] || durations['6h'];
@@ -5410,9 +5420,15 @@ function graphRangeDurationMs(range, points = []) {
   return Math.max(hour, Math.max(...validTimes) - Math.min(...validTimes));
 }
 
-function graphBucketIntervalMs(range, mode = State.graphMode, points = []) {
+function graphBucketIntervalMs(
+  range,
+  mode = State.graphMode,
+  points = [],
+  windowStart = State.historyWindowStart,
+  windowEnd = State.historyWindowEnd,
+) {
   const target = graphBucketTargetCount(mode);
-  const duration = graphRangeDurationMs(range, points);
+  const duration = graphRangeDurationMs(range, points, windowStart, windowEnd);
   const idealInterval = Math.max(1000, Math.ceil(duration / Math.max(1, target - 1)));
   const minCount = graphBucketMinCount(mode);
   const maxCount = graphBucketMaxCount(mode);
@@ -5431,9 +5447,15 @@ function graphBucketIntervalMs(range, mode = State.graphMode, points = []) {
   return Math.ceil(idealInterval / 1000) * 1000;
 }
 
-function graphBucketCount(range, mode = State.graphMode, points = []) {
-  const intervalMs = graphBucketIntervalMs(range, mode, points);
-  const count = Math.ceil(graphRangeDurationMs(range, points) / intervalMs);
+function graphBucketCount(
+  range,
+  mode = State.graphMode,
+  points = [],
+  windowStart = State.historyWindowStart,
+  windowEnd = State.historyWindowEnd,
+) {
+  const intervalMs = graphBucketIntervalMs(range, mode, points, windowStart, windowEnd);
+  const count = Math.ceil(graphRangeDurationMs(range, points, windowStart, windowEnd) / intervalMs);
   return Math.max(1, Math.min(graphBucketMaxCount(mode), count));
 }
 
@@ -5452,8 +5474,14 @@ function graphBucketUnit(range, mode = State.graphMode) {
   return graphBucketIntervalMs(range, mode) >= 24 * 60 * 60 * 1000 ? 'day' : 'hour';
 }
 
-function graphBucketTimeUnit(range, mode = State.graphMode, points = []) {
-  const intervalMs = graphBucketIntervalMs(range, mode, points);
+function graphBucketTimeUnit(
+  range,
+  mode = State.graphMode,
+  points = [],
+  windowStart = State.historyWindowStart,
+  windowEnd = State.historyWindowEnd,
+) {
+  const intervalMs = graphBucketIntervalMs(range, mode, points, windowStart, windowEnd);
   if (intervalMs < 60 * 1000) return 'second';
   if (intervalMs < 60 * 60 * 1000) return 'minute';
   if (intervalMs < 24 * 60 * 60 * 1000) return 'hour';
@@ -5476,8 +5504,14 @@ function graphBucketEnd(date, range) {
   return start ? new Date(start.getTime() + graphBucketIntervalMs(range)) : null;
 }
 
-function graphBucketRange(range, points = [], mode = State.graphMode) {
-  const intervalMs = graphBucketIntervalMs(range, mode, points);
+function graphBucketRange(
+  range,
+  points = [],
+  mode = State.graphMode,
+  windowStart = State.historyWindowStart,
+  windowEnd = State.historyWindowEnd,
+) {
+  const intervalMs = graphBucketIntervalMs(range, mode, points, windowStart, windowEnd);
   const maxCount = graphBucketMaxCount(mode);
   const rangeKey = String(range || '6h').toLowerCase();
   const now = Date.now();
@@ -5486,11 +5520,16 @@ function graphBucketRange(range, points = [], mode = State.graphMode) {
     .filter(time => Number.isFinite(time) && time <= now);
   let start;
   let end;
-  if (rangeKey === 'all' && validTimes.length > 0) {
+  const selectedStart = Date.parse(windowStart);
+  const selectedEnd = Date.parse(windowEnd);
+  if (rangeKey === 'custom' && Number.isFinite(selectedStart) && Number.isFinite(selectedEnd) && selectedEnd > selectedStart) {
+    start = new Date(selectedStart);
+    end = new Date(selectedEnd - 1);
+  } else if (rangeKey === 'all' && validTimes.length > 0) {
     start = new Date(Math.min(...validTimes));
     end = new Date(Math.max(...validTimes, now));
   } else {
-    const count = graphBucketCount(range, mode, points) || 6;
+    const count = graphBucketCount(range, mode, points, windowStart, windowEnd) || 6;
     end = graphBucketStart(new Date(), range, mode, intervalMs) || new Date();
     start = new Date(end.getTime() - (count - 1) * intervalMs);
   }
@@ -7752,6 +7791,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const title = document.getElementById('platform-cost-chart-title');
   const graphMode = normalizeGraphMode(State.platformCostGraphMode);
   const periodMode = isPeriodGraphMode(graphMode);
+  const costTimeBounds = platformCostChartTimeBounds(range);
   if (title) {
     title.textContent = periodMode
       ? 'Token & Cost per Period'
@@ -7765,7 +7805,13 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const bucketed = buildPlatformBucketSeries(rows, range, graphMode);
   const timeScale = periodMode
     ? {
-      unit: graphBucketTimeUnit(range, graphMode, rows.map(row => ({ x: new Date(row.capturedAt) }))),
+      unit: graphBucketTimeUnit(
+        range,
+        graphMode,
+        rows.map(row => ({ x: new Date(row.capturedAt) })),
+        State.platformCostWindowStart,
+        State.platformCostWindowEnd,
+      ),
       displayFormats: { second: 'HH:mm:ss', minute: 'HH:mm', hour: 'MMM d, HH:mm', day: 'MMM d' },
     }
     : platformCostTimeScale(range);
@@ -7909,8 +7955,8 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
         x: {
           type: 'time',
           offset: false,
-          min: periodMode && bucketed.cost.length > 0 ? bucketed.cost[0].periodStart : undefined,
-          max: periodMode && bucketed.cost.length > 0 ? bucketed.cost[bucketed.cost.length - 1].periodEnd : undefined,
+          min: costTimeBounds?.min ?? (periodMode && bucketed.cost.length > 0 ? bucketed.cost[0].periodStart : undefined),
+          max: costTimeBounds?.max ?? (periodMode && bucketed.cost.length > 0 ? bucketed.cost[bucketed.cost.length - 1].periodEnd : undefined),
           time: timeScale,
           grid: { color: colors.grid, drawBorder: false },
           ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' },
@@ -7963,7 +8009,7 @@ function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || 
   let tokens = 0;
   const costPoints = [];
   const tokenPoints = [];
-  const startTime = platformCostRangeStartTime(range);
+  const startTime = range === 'custom' ? null : platformCostRangeStartTime(range);
   if (startTime) {
     costPoints.push({ x: startTime, y: 0 });
     tokenPoints.push({ x: startTime, y: 0 });
@@ -7983,8 +8029,20 @@ function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || 
       costPoints.push({ x, y: cost });
       tokenPoints.push({ x, y: tokens });
     });
-  const costSeries = downsamplePointSeriesForCumulative(costPoints, range);
-  const tokenSeries = downsamplePointSeriesForCumulative(tokenPoints, range);
+  const costSeries = downsamplePointSeriesForCumulative(
+    costPoints,
+    range,
+    'bucket',
+    State.platformCostWindowStart,
+    State.platformCostWindowEnd,
+  );
+  const tokenSeries = downsamplePointSeriesForCumulative(
+    tokenPoints,
+    range,
+    'bucket',
+    State.platformCostWindowStart,
+    State.platformCostWindowEnd,
+  );
   return {
     cost: costSeries,
     tokens: tokenSeries,
@@ -7993,7 +8051,13 @@ function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || 
   };
 }
 
-function downsamplePointSeriesForCumulative(points, range, mode = 'bucket') {
+function downsamplePointSeriesForCumulative(
+  points,
+  range,
+  mode = 'bucket',
+  windowStart = State.historyWindowStart,
+  windowEnd = State.historyWindowEnd,
+) {
   const cleanPoints = [...(points || [])]
     .filter(point => point && point.x != null && point.y != null && Number.isFinite(Number(point.y)))
     .map(point => ({ ...point, x: point.x instanceof Date ? point.x : new Date(point.x), y: Number(point.y) }))
@@ -8001,7 +8065,7 @@ function downsamplePointSeriesForCumulative(points, range, mode = 'bucket') {
     .sort((a, b) => a.x.getTime() - b.x.getTime());
   if (cleanPoints.length <= 1) return cleanPoints;
 
-  const buckets = graphBucketRange(range, cleanPoints, mode);
+  const buckets = graphBucketRange(range, cleanPoints, mode, windowStart, windowEnd);
   if (buckets.length === 0) return cleanPoints;
 
   const sampled = [];
@@ -8034,8 +8098,20 @@ function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h'
     .filter(row => row && row.capturedAt)
     .map(row => ({ x: new Date(row.capturedAt) }))
     .filter(point => !Number.isNaN(point.x.getTime()));
-  const intervalMs = graphBucketIntervalMs(range, mode, rowPoints);
-  const buckets = new Map(graphBucketRange(range, rowPoints, mode).map(bucket => [bucket.periodStart.toISOString(), {
+  const intervalMs = graphBucketIntervalMs(
+    range,
+    mode,
+    rowPoints,
+    State.platformCostWindowStart,
+    State.platformCostWindowEnd,
+  );
+  const buckets = new Map(graphBucketRange(
+    range,
+    rowPoints,
+    mode,
+    State.platformCostWindowStart,
+    State.platformCostWindowEnd,
+  ).map(bucket => [bucket.periodStart.toISOString(), {
     ...bucket,
     cost: 0,
     tokens: 0,
@@ -8081,6 +8157,13 @@ function platformCostRangeStartTime(range) {
   };
   const duration = durations[range];
   return duration ? new Date(Date.now() - duration) : null;
+}
+
+function platformCostChartTimeBounds(range) {
+  if (normalizePlatformCostRange(range) !== 'custom') return null;
+  const min = Date.parse(State.platformCostWindowStart || '');
+  const max = Date.parse(State.platformCostWindowEnd || '');
+  return Number.isFinite(min) && Number.isFinite(max) && min < max ? { min, max } : null;
 }
 
 function platformCostRangeLabel(range) {
@@ -9043,15 +9126,23 @@ function updateTimeScale(chart, range) {
   const points = (chart.data?.datasets || [])
     .flatMap(dataset => Array.isArray(dataset.data) ? dataset.data : [])
     .filter(point => point && point.x);
+  const customDuration = rangeKey === 'custom' ? graphRangeDurationMs(range, points) : 0;
+  const cumulativeTimeUnit = rangeKey === 'custom'
+    ? (customDuration <= 2 * 60 * 60 * 1000 ? 'minute'
+      : customDuration <= 2 * 24 * 60 * 60 * 1000 ? 'hour'
+        : 'day')
+    : (['7d', '30d', '15d', 'all'].includes(rangeKey) ? 'day' : 'hour');
   const timeUnit = isPeriodGraphMode(graphMode)
     ? graphBucketTimeUnit(range, graphMode, points)
-    : (['7d', '30d', '15d', 'all'].includes(rangeKey) ? 'day' : 'hour');
+    : cumulativeTimeUnit;
   chart.options.scales.x.time = {
     unit: timeUnit,
     displayFormats: {
       second: 'HH:mm:ss',
       minute: 'HH:mm',
-      hour: ['7d', '30d', '15d', '24h', '3d', 'all'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm',
+      hour: rangeKey === 'custom' || ['7d', '30d', '15d', '24h', '3d', 'all'].includes(rangeKey)
+        ? 'MMM d, HH:mm'
+        : 'HH:mm',
       day: 'MMM d'
     }
   };

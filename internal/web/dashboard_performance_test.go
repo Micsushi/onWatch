@@ -57,6 +57,40 @@ func TestCombinedHistorySamplesExpensiveQuotaProvidersInSQL(t *testing.T) {
 	}
 }
 
+func TestCodexHistorySamplesByTimeInSQL(t *testing.T) {
+	t.Parallel()
+	source := dashboardHandlerSource(t)
+	start := strings.Index(source, "func (h *Handler) historyCodex(")
+	end := strings.Index(source[start:], "\nfunc (h *Handler) cyclesCodex(")
+	if start < 0 || end < 0 {
+		t.Fatal("could not isolate historyCodex")
+	}
+	historyCodex := source[start : start+end]
+	if !strings.Contains(historyCodex, "h.store.QueryCodexRangeSampled(accountID, window.Start, window.End, maxChartPoints)") {
+		t.Fatal("Codex history still drops sparse old snapshots by row-sampling dense recent history")
+	}
+	if strings.Contains(historyCodex, "downsampleStep(") {
+		t.Fatal("Codex history is sampled twice after the time-aware SQL query")
+	}
+}
+
+func TestAnthropicHistorySamplesByTimeInSQL(t *testing.T) {
+	t.Parallel()
+	source := dashboardHandlerSource(t)
+	start := strings.Index(source, "func (h *Handler) historyAnthropic(")
+	end := strings.Index(source[start:], "\nfunc (h *Handler) cyclesAnthropic(")
+	if start < 0 || end < 0 {
+		t.Fatal("could not isolate historyAnthropic")
+	}
+	historyAnthropic := source[start : start+end]
+	if !strings.Contains(historyAnthropic, "h.store.QueryAnthropicRangeSampled(window.Start, window.End, maxChartPoints)") {
+		t.Fatal("Anthropic history still drops sparse old snapshots by row-sampling dense recent history")
+	}
+	if strings.Contains(historyAnthropic, "downsampleStep(") {
+		t.Fatal("Anthropic history is sampled twice after the time-aware SQL query")
+	}
+}
+
 func TestDashboardDoesNotWarmEveryProviderAndRange(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
@@ -89,6 +123,14 @@ func TestDashboardPersistsLastSuccessfulGraphsAcrossPageLoads(t *testing.T) {
 		if !strings.Contains(source, marker) {
 			t.Errorf("dashboard cache is not page-load persistent: missing %q", marker)
 		}
+	}
+}
+
+func TestDashboardInvalidatesHistoryCachedBeforeTimeBalancedSampling(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	if !strings.Contains(source, "const PROVIDER_DATA_CACHE_KEY = 'onwatch-provider-data-cache-v4';") {
+		t.Fatal("dashboard can reuse history cached before time-balanced sampling was deployed")
 	}
 }
 

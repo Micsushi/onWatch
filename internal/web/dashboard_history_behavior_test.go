@@ -257,6 +257,117 @@ if (!applyCustomHistoryDates('chart', '1970-01-01', '1970-01-01')) {
 	runDashboardNodeTest(t, script)
 }
 
+func TestCustomGraphBucketsUseSelectedWindow(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	buckets := dashboardJavaScriptBetween(t, source, "const graphBucketTargets =", "function formatPeriodTooltipTitle(")
+	buildCumulative := dashboardJavaScriptBetween(t, source, "function buildPlatformCumulativeSeries(", "function downsamplePointSeriesForCumulative(")
+	downsample := dashboardJavaScriptBetween(t, source, "function downsamplePointSeriesForCumulative(", "function processCappedDataWithGaps(")
+	rangeStart := dashboardJavaScriptBetween(t, source, "function platformCostRangeStartTime(", "function platformCostRangeLabel(")
+	script := fmt.Sprintf(`
+const State = {
+  graphMode: 'cumulative',
+  historyWindowStart: '2026-04-30T00:00:00.000Z',
+  historyWindowEnd: '2026-07-01T00:00:00.000Z',
+  platformCostRange: 'custom',
+  platformCostWindowStart: '2026-03-01T00:00:00.000Z',
+  platformCostWindowEnd: '2026-07-01T00:00:00.000Z',
+};
+function normalizeGraphMode(value) { return value || 'cumulative'; }
+%s
+%s
+%s
+%s
+function assertWindow(buckets, startValue, endValue, label) {
+  const start = Date.parse(startValue);
+  const end = Date.parse(endValue);
+  const first = buckets[0];
+  const last = buckets[buckets.length - 1];
+  if (!(first.periodStart.getTime() <= start && first.periodEnd.getTime() > start)) {
+    throw new Error(label + ' buckets must include the selected start');
+  }
+  if (!(last.periodStart.getTime() < end && last.periodEnd.getTime() >= end)) {
+    throw new Error(label + ' buckets must include the selected end');
+  }
+}
+
+assertWindow(
+  graphBucketRange('custom', [{ x: new Date('2026-05-17T23:59:19.707Z') }], 'bucket'),
+  State.historyWindowStart,
+  State.historyWindowEnd,
+  'usage',
+);
+
+const costStart = '2026-03-01T00:00:00.000Z';
+const costEnd = '2026-07-01T00:00:00.000Z';
+assertWindow(
+  graphBucketRange('custom', [{ x: new Date('2026-04-04T19:00:00.000Z') }], 'bucket', costStart, costEnd),
+  costStart,
+  costEnd,
+  'cost',
+);
+
+const costSeries = buildPlatformCumulativeSeries([
+  { capturedAt: '2026-04-04T19:00:00.000Z', totalCostUsd: 100, totalTokens: 1000 },
+  { capturedAt: '2026-06-01T00:00:00.000Z', totalCostUsd: 4400, totalTokens: 44000 },
+  { capturedAt: '2026-06-30T00:00:00.000Z', totalCostUsd: 1100, totalTokens: 11000 },
+], 'custom').cost;
+if (costSeries[0].y !== 100) {
+  throw new Error('custom cumulative cost must begin with the first real data');
+}
+if (costSeries.some(point => point.y === 0)) {
+  throw new Error('custom cumulative cost must stay blank before the first real data');
+}
+if (costSeries[0].x.getTime() >= Date.parse('2026-06-06T00:00:00.000Z')) {
+  throw new Error('cumulative cost must retain earlier in-window history');
+}
+`, buckets, buildCumulative, downsample, rangeStart)
+
+	runDashboardNodeTest(t, script)
+}
+
+func TestCustomPlatformCostChartPinsSelectedXAxis(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	for _, expected := range []string{
+		"const costTimeBounds = platformCostChartTimeBounds(range);",
+		"min: costTimeBounds?.min ??",
+		"max: costTimeBounds?.max ??",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("platform cost chart must preserve the custom selected window: missing %q", expected)
+		}
+	}
+}
+
+func TestCustomGraphTimeScaleUsesSelectedDuration(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	duration := dashboardJavaScriptBetween(t, source, "function graphRangeDurationMs(", "function graphBucketIntervalMs(")
+	timeScale := dashboardJavaScriptBetween(t, source, "function updateTimeScale(", "// Cycles Table")
+	script := fmt.Sprintf(`
+const State = {
+  graphMode: 'cumulative',
+  historyWindowStart: '2026-04-30T00:00:00.000Z',
+  historyWindowEnd: '2026-07-01T00:00:00.000Z',
+};
+function normalizeGraphMode(value) { return value || 'cumulative'; }
+function isPeriodGraphMode() { return false; }
+%s
+%s
+const chart = {
+  data: { datasets: [{ data: [{ x: new Date('2026-05-17T23:59:19.707Z'), y: 2 }] }] },
+  options: { scales: { x: {} } },
+};
+updateTimeScale(chart, 'custom');
+if (chart.options.scales.x.time.unit !== 'day') {
+  throw new Error('multi-day custom history must use a date axis');
+}
+`, duration, timeScale)
+
+	runDashboardNodeTest(t, script)
+}
+
 func TestCombinedHistoryRendersPrimaryBeforeOptionalCostHistory(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)

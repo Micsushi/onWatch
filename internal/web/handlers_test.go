@@ -5430,7 +5430,7 @@ func TestHandler_History_Anthropic(t *testing.T) {
 
 	resetsAt := time.Now().Add(5 * time.Hour)
 	snapshot := &api.AnthropicSnapshot{
-		CapturedAt: time.Now().UTC(),
+		CapturedAt: time.Now().UTC().Add(-time.Second),
 		Quotas: []api.AnthropicQuota{
 			{Name: "five_hour", Utilization: 45.2, ResetsAt: &resetsAt},
 		},

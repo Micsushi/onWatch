@@ -247,7 +247,7 @@ func (s *Store) QueryCodexRange(accountID int64, start, end time.Time, limit ...
 	return snapshots, nil
 }
 
-// QueryCodexRangeSampled returns evenly sampled Codex snapshots and their quota
+// QueryCodexRangeSampled returns time-sampled Codex snapshots and their quota
 // values in one query. The first and last snapshots are always retained.
 func (s *Store) QueryCodexRangeSampled(accountID int64, start, end time.Time, maxPoints int) ([]*api.CodexSnapshot, error) {
 	if maxPoints < 2 {
@@ -258,20 +258,34 @@ func (s *Store) QueryCodexRangeSampled(accountID int64, start, end time.Time, ma
 	}
 
 	rows, err := s.db.Query(`
-		WITH ranked AS (
+		WITH bounded AS (
 			SELECT id, captured_at, plan_type, credits_balance, account_id,
-				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC) AS row_number,
+				julianday(captured_at) AS captured_day,
+				MIN(julianday(captured_at)) OVER () AS first_day,
+				MAX(julianday(captured_at)) OVER () AS last_day,
 				COUNT(*) OVER () AS total_rows
 			FROM codex_snapshots
 			WHERE account_id = ? AND captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+		),
+		bucketed AS (
+			SELECT id, captured_at, plan_type, credits_balance, account_id, total_rows,
+				CASE WHEN last_day = first_day THEN 0 ELSE
+					MIN(? - 1, CAST((captured_day - first_day) * (? - 1) / (last_day - first_day) AS INTEGER))
+				END AS time_bucket
+			FROM bounded
+		),
+		ranked AS (
+			SELECT id, captured_at, plan_type, credits_balance, account_id, total_rows, time_bucket,
+				ROW_NUMBER() OVER (PARTITION BY time_bucket ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC) AS bucket_rank,
+				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC) AS overall_rank
+			FROM bucketed
 		),
 		sampled AS (
 			SELECT id, captured_at, plan_type, credits_balance, account_id
 			FROM ranked
 			WHERE total_rows <= ?
-				OR row_number = 1
-				OR ((row_number - 1) * (? - 1)) / (total_rows - 1)
-					> ((row_number - 2) * (? - 1)) / (total_rows - 1)
+				OR (time_bucket = 0 AND overall_rank = 1)
+				OR (time_bucket > 0 AND bucket_rank = 1)
 		)
 		SELECT sampled.id, sampled.captured_at, sampled.plan_type, sampled.credits_balance, sampled.account_id,
 			quota.quota_name, quota.utilization, quota.resets_at, quota.status

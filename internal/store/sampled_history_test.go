@@ -91,6 +91,156 @@ func TestSampledQuotaHistoryBoundsRowsAndPreservesEndpoints(t *testing.T) {
 	}
 }
 
+func TestCodexSampledHistoryPreservesSparseEarlyRows(t *testing.T) {
+	t.Parallel()
+
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	base := time.Date(2026, 5, 17, 0, 0, 0, 0, time.UTC)
+	const sparseDays = 10
+	for day := range sparseDays {
+		capturedAt := base.Add(time.Duration(day) * 24 * time.Hour)
+		resetAt := capturedAt.Add(5 * time.Hour)
+		if _, err := s.InsertCodexSnapshot(newTestCodexSnapshot(capturedAt, &resetAt)); err != nil {
+			t.Fatalf("InsertCodexSnapshot sparse[%d]: %v", day, err)
+		}
+	}
+
+	denseStart := base.Add(20 * 24 * time.Hour)
+	const denseRows = 600
+	for index := range denseRows {
+		capturedAt := denseStart.Add(time.Duration(index) * time.Minute)
+		resetAt := capturedAt.Add(5 * time.Hour)
+		if _, err := s.InsertCodexSnapshot(newTestCodexSnapshot(capturedAt, &resetAt)); err != nil {
+			t.Fatalf("InsertCodexSnapshot dense[%d]: %v", index, err)
+		}
+	}
+
+	const maxPoints = 50
+	rows, err := s.QueryCodexRangeSampled(
+		DefaultCodexAccountID,
+		base.Add(-time.Hour),
+		denseStart.Add((denseRows+1)*time.Minute),
+		maxPoints,
+	)
+	if err != nil {
+		t.Fatalf("QueryCodexRangeSampled: %v", err)
+	}
+	if len(rows) > maxPoints {
+		t.Fatalf("sampled rows=%d want <=%d", len(rows), maxPoints)
+	}
+
+	seen := make(map[time.Time]bool, len(rows))
+	for _, row := range rows {
+		seen[row.CapturedAt] = true
+	}
+	for day := range sparseDays {
+		capturedAt := base.Add(time.Duration(day) * 24 * time.Hour)
+		if !seen[capturedAt] {
+			t.Fatalf("sparse Codex history lost day %d at %v", day, capturedAt)
+		}
+	}
+}
+
+func TestAnthropicSampledHistoryPreservesSparseEarlyRows(t *testing.T) {
+	t.Parallel()
+
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	base := time.Date(2026, 5, 17, 0, 0, 0, 0, time.UTC)
+	const sparseDays = 10
+	for day := range sparseDays {
+		capturedAt := base.Add(time.Duration(day) * 24 * time.Hour)
+		resetAt := capturedAt.Add(5 * time.Hour)
+		if _, err := s.InsertAnthropicSnapshot(&api.AnthropicSnapshot{
+			CapturedAt: capturedAt,
+			Quotas: []api.AnthropicQuota{{
+				Name:        "five_hour",
+				Utilization: float64(day),
+				ResetsAt:    &resetAt,
+			}},
+		}); err != nil {
+			t.Fatalf("InsertAnthropicSnapshot sparse[%d]: %v", day, err)
+		}
+	}
+
+	denseStart := base.Add(20 * 24 * time.Hour)
+	const denseRows = 600
+	for index := range denseRows {
+		capturedAt := denseStart.Add(time.Duration(index) * time.Minute)
+		resetAt := capturedAt.Add(5 * time.Hour)
+		if _, err := s.InsertAnthropicSnapshot(&api.AnthropicSnapshot{
+			CapturedAt: capturedAt,
+			Quotas: []api.AnthropicQuota{{
+				Name:        "five_hour",
+				Utilization: float64(index),
+				ResetsAt:    &resetAt,
+			}},
+		}); err != nil {
+			t.Fatalf("InsertAnthropicSnapshot dense[%d]: %v", index, err)
+		}
+	}
+
+	const maxPoints = 50
+	rows, err := s.QueryAnthropicRangeSampled(
+		base.Add(-time.Hour),
+		denseStart.Add((denseRows+1)*time.Minute),
+		maxPoints,
+	)
+	if err != nil {
+		t.Fatalf("QueryAnthropicRangeSampled: %v", err)
+	}
+	if len(rows) > maxPoints {
+		t.Fatalf("sampled rows=%d want <=%d", len(rows), maxPoints)
+	}
+
+	seen := make(map[time.Time]bool, len(rows))
+	for _, row := range rows {
+		seen[row.CapturedAt] = true
+	}
+	for day := range sparseDays {
+		capturedAt := base.Add(time.Duration(day) * 24 * time.Hour)
+		if !seen[capturedAt] {
+			t.Fatalf("sparse Anthropic history lost day %d at %v", day, capturedAt)
+		}
+	}
+}
+
+func TestCodexSampledHistoryKeepsAllRowsBelowLimit(t *testing.T) {
+	t.Parallel()
+
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	base := time.Date(2026, 5, 17, 0, 0, 0, 0, time.UTC)
+	for _, offset := range []time.Duration{0, time.Minute, 24 * time.Hour} {
+		capturedAt := base.Add(offset)
+		resetAt := capturedAt.Add(5 * time.Hour)
+		if _, err := s.InsertCodexSnapshot(newTestCodexSnapshot(capturedAt, &resetAt)); err != nil {
+			t.Fatalf("InsertCodexSnapshot[%s]: %v", offset, err)
+		}
+	}
+
+	rows, err := s.QueryCodexRangeSampled(DefaultCodexAccountID, base, base.Add(25*time.Hour), 5)
+	if err != nil {
+		t.Fatalf("QueryCodexRangeSampled: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("sampled rows=%d want every row below the limit", len(rows))
+	}
+}
+
 func assertSampledCodexRows(t *testing.T, rows []*api.CodexSnapshot, base time.Time, total, max int) {
 	t.Helper()
 	if len(rows) > max {
