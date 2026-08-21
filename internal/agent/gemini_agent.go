@@ -79,34 +79,6 @@ func (a *GeminiAgent) SetNotifier(n *notify.NotificationEngine) {
 	a.notifier = n
 }
 
-func (a *GeminiAgent) recordPollFailure(category, message string) {
-	if a.notifier != nil {
-		a.notifier.RecordPollFailure("gemini", "default", category, message)
-	}
-}
-
-func (a *GeminiAgent) recordPollSuccess() {
-	if a.notifier != nil {
-		a.notifier.RecordPollSuccess("gemini", "default")
-	}
-}
-
-func (a *GeminiAgent) recordPollSkipped() {
-	if a.notifier != nil {
-		a.notifier.RecordPollSkipped("gemini", "default")
-	}
-}
-
-func (a *GeminiAgent) recordRequestFailure(err error) {
-	if isGeminiAuthError(err) {
-		a.recordPollFailure("authentication",
-			"Gemini authentication failed. Re-authenticate with 'gemini auth' to resume polling.")
-		return
-	}
-	a.recordPollFailure("provider_request",
-		"Gemini quotas could not be fetched. Check connectivity and provider availability.")
-}
-
 // SetCredentialsRefresh sets a function that returns fresh credentials for proactive OAuth refresh.
 func (a *GeminiAgent) SetCredentialsRefresh(fn GeminiCredentialsRefreshFunc) {
 	a.credsRefresh = fn
@@ -120,14 +92,8 @@ func (a *GeminiAgent) SetClientCredentials(creds *api.GeminiClientCredentials) {
 // Run starts the agent polling loop.
 func (a *GeminiAgent) Run(ctx context.Context) error {
 	a.logger.Info("Gemini agent started", "interval", a.interval)
-	if a.notifier != nil {
-		a.notifier.RegisterPoller("gemini", "default", a.interval)
-	}
 
 	defer func() {
-		if a.notifier != nil {
-			a.notifier.UnregisterPoller("gemini", "default")
-		}
 		if a.sm != nil {
 			a.sm.Close()
 		}
@@ -151,11 +117,9 @@ func (a *GeminiAgent) Run(ctx context.Context) error {
 
 func (a *GeminiAgent) poll(ctx context.Context) {
 	if ctx.Err() != nil {
-		a.recordPollSkipped()
 		return
 	}
 	if a.pollingCheck != nil && !a.pollingCheck() {
-		a.recordPollSkipped()
 		return
 	}
 
@@ -221,7 +185,6 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 		tierResp, err := a.client.FetchTier(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				a.recordPollSkipped()
 				return
 			}
 			a.logger.Warn("Failed to fetch Gemini tier", "error", err)
@@ -239,7 +202,6 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 	resp, err := a.client.FetchQuotas(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
-			a.recordPollSkipped()
 			return
 		}
 
@@ -264,7 +226,6 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 					resp, err = a.client.FetchQuotas(ctx)
 					if err != nil {
 						if ctx.Err() != nil {
-							a.recordPollSkipped()
 							return
 						}
 						if isGeminiAuthError(err) {
@@ -282,13 +243,11 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 						} else {
 							a.logger.Error("Gemini retry failed with non-auth error", "error", err)
 						}
-						a.recordRequestFailure(err)
 						return
 					}
 					a.authFailCount = 0
 				} else {
 					if ctx.Err() != nil {
-						a.recordPollSkipped()
 						return
 					}
 					a.logger.Error("Gemini OAuth refresh failed on auth error", "error", refreshErr)
@@ -297,19 +256,14 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 						a.authPaused = true
 						a.logger.Error("Gemini polling PAUSED due to repeated auth failures")
 					}
-					a.recordPollFailure("authentication",
-						"Gemini authentication refresh failed. Re-authenticate with 'gemini auth' to resume polling.")
 					return
 				}
 			} else {
 				a.logger.Error("No Gemini refresh token available for retry")
-				a.recordPollFailure("missing_credentials",
-					"No Gemini refresh credentials are available. Re-authenticate with 'gemini auth' to resume polling.")
 				return
 			}
 		} else {
 			a.logger.Error("Failed to fetch Gemini quotas", "error", err)
-			a.recordRequestFailure(err)
 			return
 		}
 	} else {
@@ -321,11 +275,8 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 
 	if _, err := a.store.InsertGeminiSnapshot(snapshot); err != nil {
 		a.logger.Error("Failed to insert Gemini snapshot", "error", err)
-		a.recordPollFailure("storage",
-			"Gemini usage was fetched but could not be saved. Check onWatch database access.")
 		return
 	}
-	a.recordPollSuccess()
 
 	if a.tracker != nil {
 		if err := a.tracker.Process(snapshot); err != nil {
