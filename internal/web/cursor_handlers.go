@@ -301,7 +301,7 @@ func (h *Handler) historyCursor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshots, err := h.store.QueryCursorRange(window.Start, window.End, 200)
+	snapshots, err := h.store.QueryCursorRangeSampled(window.Start, window.End, maxChartPoints)
 	if err != nil {
 		h.logger.Error("failed to query Cursor history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")

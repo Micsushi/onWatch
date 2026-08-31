@@ -1317,6 +1317,13 @@ body.all-density-comfortable .provider-kpi-card {
   margin-top: 2px;
 }
 
+.chart-coverage-note {
+  margin: -2px 0 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
 .platform-cost-metric {
   display: flex;
   min-width: 0;
@@ -2263,6 +2270,22 @@ body.all-density-comfortable .provider-kpi-card {
   font-weight: 650;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.chart-refresh-message {
+  color: var(--status-danger);
+}
+
 .range-selector {
   display: flex;
   gap: 4px;
@@ -2947,6 +2970,9 @@ body.all-density-comfortable .provider-kpi-card {
   .api-integrations-card-stats, .api-integrations-summary-grid, .api-integrations-health-grid { grid-template-columns: 1fr; }
   .platform-cost-summary,
   .usage-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-cost-chart-header { flex-direction: column; align-items: stretch; }
+  .platform-cost-chart-controls { width: 100%; align-items: stretch; justify-content: flex-start; }
+  .platform-cost-chart-subtitle { text-align: left; min-height: 0; }
   .provider-chart canvas { height: 170px !important; max-height: 170px; }
   .quota-card { padding: 18px; }
   .range-selector { width: 100%; }
@@ -2959,7 +2985,7 @@ body.all-density-comfortable .provider-kpi-card {
   .range-btn,
   .chart-range-btn,
   .platform-cost-range-btn,
-  .platform-cost-breakdown-range-btn { flex: 1; padding: 8px; font-size: 12px; }
+  .platform-cost-breakdown-range-btn { flex: 1; min-height: 44px; padding: 8px; font-size: 12px; }
   .login-card { padding: 32px 24px; }
   .table-controls { flex-direction: column; align-items: stretch; }
   .section-header { flex-direction: column; align-items: flex-start; }

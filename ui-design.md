@@ -19,6 +19,16 @@ dashboard.
 - Swap history graph datasets and axis scales atomically without transition
   animation. Cached and refreshed payloads may arrive close together, so range
   changes must not interpolate from the old graph or restart an animation.
+- Preserve observed usage points and timestamps through client rendering.
+  Summary values use observed response data, and collection gaps must not be
+  filled with synthetic usage points, connecting lines, or shaded areas. Leave
+  unobserved time blank in cumulative usage and cost graphs.
+- When collection gaps split a dense usage series, remove area fill and point
+  markers, and explain that blank spans mean no samples were collected.
+- Per-period usage keeps unobserved buckets unknown, never assigns usage across
+  a collection gap to a later bucket, and clamps partial edge buckets to the
+  exact selected window without clipping. All-zero token and cost periods use
+  the normal empty state.
 - Do not repaint a visible history chart when startup or refresh paths produce
   an identical render state. Cards and freshness may update independently.
 - Keep the sticky header height stable while refresh status appears. The active

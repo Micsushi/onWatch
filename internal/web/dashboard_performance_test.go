@@ -183,7 +183,7 @@ func TestPlatformCostRequestsAreSharedAndWarmLikelyRangesInBackground(t *testing
 		"enqueueGraphRefresh(job, { foreground: false });",
 		"function platformCostHistoryRequestQuery(range, scope = 'platformCost')",
 		"const windowRange = presetHistoryWindow(normalized, new Date());",
-		"const query = platformCostHistoryRequestQuery(range, scope);",
+		"const query = queryOverride || platformCostHistoryRequestQuery(range, scope);",
 		"setCachedPlatformCostHistory(job.provider, job.range, payload, job.scope);",
 		"setCachedPlatformCostHistory(job.provider, job.range, payload, alternateScope);",
 	} {
@@ -251,7 +251,7 @@ func TestDashboardHasIndependentGraphCustomDateRangeControls(t *testing.T) {
 		`id="platform-cost-history-end-date"`,
 		`id="platform-cost-breakdown-history-start-date"`,
 		`id="platform-cost-breakdown-history-end-date"`,
-		`data-range="custom">Custom`,
+		`data-range="custom"`,
 	} {
 		if !strings.Contains(template, marker) {
 			t.Errorf("graph-local custom range is missing template marker %q", marker)
@@ -260,13 +260,13 @@ func TestDashboardHasIndependentGraphCustomDateRangeControls(t *testing.T) {
 	if strings.Contains(template, `id="history-range-toolbar"`) {
 		t.Fatal("date controls must not render as a page-level toolbar")
 	}
-	if strings.Count(template, `data-range="custom">Custom`) != 3 {
+	if strings.Count(template, `data-range="custom"`) != 3 {
 		t.Fatal("each of the two graphs and the cost breakdown must have its own Custom option")
 	}
 	for _, marker := range []string{
 		"function setupGraphHistoryRangeControls(",
 		"function historyRequestQuery(range, scope = 'chart')",
-		"fetchPlatformCostPayload(job.provider, job.range, signal, job.scope)",
+		"fetchPlatformCostPayload(job.provider, job.range, signal, job.scope, job.query)",
 		"createPlatformCostRefreshJob(range, provider, 'platformCost')",
 		"createPlatformCostRefreshJob(range, provider, 'platformCostBreakdown')",
 		"State.platformCostRange = 'custom'",
@@ -478,7 +478,7 @@ func TestDashboardUsageChartKeepsSelectedPresetOnTimeAxis(t *testing.T) {
 		"const windowState = historyScopeWindow('chart');",
 		"chart.options.scales.x.min = bounds.min;",
 		"chart.options.scales.x.max = bounds.max;",
-		"const xBounds = usageChartTimeBounds(range);",
+		"const xBounds = options.xBounds || usageChartTimeBounds(range);",
 		"xBounds,",
 	} {
 		if !strings.Contains(source, marker) {
@@ -502,6 +502,29 @@ func TestDashboardRefreshStatusDoesNotResizeTheStickyHeader(t *testing.T) {
 	} {
 		if !strings.Contains(styles, marker) {
 			t.Errorf("refresh status can still wrap and resize the header: missing %q", marker)
+		}
+	}
+}
+
+func TestPlatformCostChartControlsStackOnNarrowScreens(t *testing.T) {
+	t.Parallel()
+	styles := dashboardStyleSource(t)
+	mediaStart := strings.Index(styles, "@media (max-width: 768px)")
+	if mediaStart < 0 {
+		t.Fatal("could not find narrow dashboard styles")
+	}
+	mediaEnd := strings.Index(styles[mediaStart:], "@media (max-width: 480px)")
+	if mediaEnd < 0 {
+		t.Fatal("could not isolate narrow dashboard styles")
+	}
+	narrowStyles := styles[mediaStart : mediaStart+mediaEnd]
+	for _, marker := range []string{
+		".platform-cost-chart-header { flex-direction: column; align-items: stretch; }",
+		".platform-cost-chart-controls { width: 100%; align-items: stretch; justify-content: flex-start; }",
+		".platform-cost-chart-subtitle { text-align: left; min-height: 0; }",
+	} {
+		if !strings.Contains(narrowStyles, marker) {
+			t.Errorf("platform cost chart controls can overflow a narrow card: missing %q", marker)
 		}
 	}
 }

@@ -253,6 +253,9 @@ function syncGraphHistoryRangeControl() {}
 if (!applyCustomHistoryDates('chart', '1970-01-01', '1970-01-01')) {
   throw new Error('Unix epoch is a valid date inside the supported history range');
 }
+if (applyCustomHistoryDates('chart', '1900-01-01', '2026-08-31')) {
+  throw new Error('custom history must not submit a range beyond the server limit');
+}
 `, apply)
 	runDashboardNodeTest(t, script)
 }
@@ -326,17 +329,339 @@ if (costSeries[0].x.getTime() >= Date.parse('2026-06-06T00:00:00.000Z')) {
 	runDashboardNodeTest(t, script)
 }
 
+func TestCustomCumulativeCostPointsStayInsideSelectedWindow(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	buckets := dashboardJavaScriptBetween(t, source, "const graphBucketTargets =", "function formatPeriodTooltipTitle(")
+	buildCumulative := dashboardJavaScriptBetween(t, source, "function buildPlatformCumulativeSeries(", "function downsamplePointSeriesForCumulative(")
+	downsample := dashboardJavaScriptBetween(t, source, "function downsamplePointSeriesForCumulative(", "function processCappedDataWithGaps(")
+
+	script := fmt.Sprintf(`
+const State = {
+  graphMode: 'cumulative',
+  historyWindowStart: '2026-08-27T07:00:00.000Z',
+  historyWindowEnd: '2026-08-30T07:00:00.000Z',
+  platformCostRange: 'custom',
+  platformCostWindowStart: '2026-08-27T07:00:00.000Z',
+  platformCostWindowEnd: '2026-08-30T07:00:00.000Z',
+};
+function normalizeGraphMode(value) { return value || 'cumulative'; }
+function getPollIntervalMs() { return 5 * 60 * 1000; }
+%s
+%s
+%s
+const start = Date.parse(State.platformCostWindowStart);
+const end = Date.parse(State.platformCostWindowEnd);
+const series = buildPlatformCumulativeSeries([
+  { capturedAt: State.platformCostWindowStart, totalCostUsd: 1, totalTokens: 100 },
+  { capturedAt: '2026-08-29T23:45:00.000Z', totalCostUsd: 2, totalTokens: 200 },
+], 'custom').cost;
+if (series.some(point => point.x.getTime() < start || point.x.getTime() >= end)) {
+  throw new Error('custom cumulative cost points must stay inside the selected axis window');
+}
+`, buckets, buildCumulative, downsample)
+
+	runDashboardNodeTest(t, script)
+}
+
+func TestCumulativeUsageGraphKeepsReturnedObservations(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	style := dashboardJavaScriptBetween(t, source, "function graphLineStyle(", "function applyGraphModeToDatasets(")
+	applyMode := dashboardJavaScriptBetween(t, source, "function applyGraphModeToDatasets(", "function formatUsagePercent(")
+
+	script := fmt.Sprintf(`
+const State = { graphMode: 'cumulative' };
+function normalizeGraphMode(value) { return value || 'cumulative'; }
+function isPeriodGraphMode(value) { return value === 'bucket'; }
+%s
+%s
+const observed = Array.from({ length: 189 }, (_, index) => ({
+  x: new Date(Date.UTC(2026, 7, 26, 0, index)),
+  y: index %% 56,
+}));
+const segment = () => 'gap-style';
+const [dataset] = applyGraphModeToDatasets([{
+  label: 'Weekly All-Model',
+  data: observed,
+  pointRadius: observed.map(() => 2),
+  segment,
+}], '7d', 'cumulative');
+if (dataset.data.length !== observed.length) {
+  throw new Error('cumulative usage must keep every observation returned by the sampled history API');
+}
+if (dataset.data[0].x.getTime() !== observed[0].x.getTime()
+  || dataset.data[dataset.data.length - 1].x.getTime() !== observed[observed.length - 1].x.getTime()) {
+  throw new Error('cumulative usage must preserve real observation timestamps');
+}
+if (dataset.segment !== segment) {
+  throw new Error('cumulative usage must preserve data-gap styling');
+}
+`, style, applyMode)
+
+	runDashboardNodeTest(t, script)
+
+	setDatasets := dashboardJavaScriptBetween(t, source, "function setMainChartDatasets(", "function initChart(")
+	if !strings.Contains(setDatasets, "const summaryDatasets = isPeriodGraphMode(mode) ? chartDatasets : datasets;") ||
+		!strings.Contains(setDatasets, "renderUsageSummary(summaryDatasets, range, mode);") {
+		t.Fatal("cumulative usage summary must use observed API points, not reduced display points")
+	}
+	if !strings.Contains(source, "const countLabel = periodMode ? 'Periods' : 'Observed Samples';") {
+		t.Fatal("cumulative usage summary must label its sample count as observed data")
+	}
+}
+
+func TestUsageAndCostGraphsShareLineRendering(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	style := dashboardJavaScriptBetween(t, source, "function graphLineStyle(", "function applyGraphModeToDatasets(")
+
+	script := fmt.Sprintf(`
+%s
+const cumulative = graphLineStyle(false);
+if (!cumulative.fill || cumulative.tension !== 0.4 || cumulative.borderWidth !== 2
+    || cumulative.pointRadius !== 2 || cumulative.pointHoverRadius !== 4
+    || cumulative.spanGaps !== false) {
+  throw new Error('cumulative usage and cost graphs must share the same line rendering');
+}
+const period = graphLineStyle(true);
+if (period.fill || period.tension !== 0.25 || period.borderWidth !== 2
+    || period.pointRadius !== 2 || period.pointHoverRadius !== 4
+    || period.spanGaps !== false) {
+  throw new Error('period usage and cost graphs must share the same line rendering');
+}
+`, style)
+
+	runDashboardNodeTest(t, script)
+	for _, expected := range []string{
+		"...graphLineStyle(false)",
+		"...graphLineStyle(periodMode)",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("usage and cost datasets must use the shared line rendering: missing %q", expected)
+		}
+	}
+}
+
+func TestSparseUsageCoverageStaysReadable(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	template := dashboardTemplateSource(t)
+	styles := dashboardStyleSource(t)
+	lineStyle := dashboardJavaScriptBetween(t, source, "function graphLineStyle(", "function applyGraphModeToDatasets(")
+	usageDataset := dashboardJavaScriptBetween(t, source, "function usageLineDataset(", "function buildFlatUsageDatasets(")
+
+	script := fmt.Sprintf(`
+const State = { hiddenQuotas: new Set() };
+%s
+function processDataWithGaps(rawData) {
+  const hasGap = rawData.length > 100;
+  return {
+    data: rawData,
+    gapSegments: hasGap ? new Set([50]) : new Set(),
+    pointRadii: rawData.map(() => 2),
+  };
+}
+function getSegmentStyle() { return {}; }
+%s
+const dense = usageLineDataset('Weekly', 'weekly', Array.from({ length: 101 }, (_, index) => ({ x: index, y: index })), '#14B8A6', '7d');
+if (dense.fill !== false) {
+  throw new Error('disconnected usage coverage must not render heavy filled islands');
+}
+if (dense.pointRadius.some(radius => radius !== 0)) {
+  throw new Error('dense usage history must hide point beads while preserving the line');
+}
+const short = usageLineDataset('Weekly', 'weekly', [{ x: 1, y: 1 }, { x: 2, y: 2 }], '#14B8A6', '1h');
+if (short.fill !== true || short.pointRadius.join(',') !== '2,2') {
+  throw new Error('short continuous usage history must keep cost-style fill and points');
+}
+`, lineStyle, usageDataset)
+
+	runDashboardNodeTest(t, script)
+	if !strings.Contains(template, `id="usage-chart-coverage-note"`) {
+		t.Fatal("usage graph must provide an inline explanation for blank coverage")
+	}
+	if !strings.Contains(source, "Blank spans mean no samples were collected.") {
+		t.Fatal("usage graph must explain blank collection spans")
+	}
+	if !strings.Contains(styles, ".chart-coverage-note") {
+		t.Fatal("usage graph coverage explanation must use the dashboard visual system")
+	}
+}
+
+func TestCappedUsageSeriesPreservesObservedTimesAndGaps(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	processCapped := dashboardJavaScriptBetween(t, source, "function processCappedDataWithGaps(", "function buildPlatformBucketSeries(")
+
+	script := fmt.Sprintf(`
+function graphBucketMaxCount() { return 3; }
+function graphBucketIntervalMs() { return 60 * 60 * 1000; }
+function graphBucketStart(date, range, mode, intervalMs) {
+  return new Date(Math.floor(new Date(date).getTime() / intervalMs) * intervalMs);
+}
+function processDataWithGaps(points) {
+  return { data: points, gapSegments: new Set(), pointRadii: points.map(() => 2) };
+}
+%s
+const observations = [
+  { x: new Date('2026-08-26T00:01:00.000Z'), y: 10 },
+  { x: new Date('2026-08-26T00:59:00.000Z'), y: 20 },
+  { x: new Date('2026-08-26T01:59:00.000Z'), y: 30 },
+  { x: new Date('2026-08-26T02:30:00.000Z'), y: null },
+  { x: new Date('2026-08-26T05:01:00.000Z'), y: 40 },
+];
+const result = processCappedDataWithGaps(observations, '7d');
+const times = result.data.map(point => point.x.toISOString());
+if (times[0] !== observations[0].x.toISOString() || times[times.length - 1] !== observations[4].x.toISOString()) {
+  throw new Error('capped quota series must preserve real endpoint timestamps');
+}
+const observedNonNullTimes = new Set(observations.filter(point => point.y != null).map(point => point.x.toISOString()));
+if (result.data.some(point => point.y != null && !observedNonNullTimes.has(point.x.toISOString()))) {
+  throw new Error('capped quota series must not create synthetic observation timestamps');
+}
+if (!times.includes(observations[2].x.toISOString())) {
+  throw new Error('capped quota series must preserve the last observation in each occupied bucket');
+}
+if (!result.data.some(point => point.y === null)) {
+  throw new Error('capped quota series must retain an explicit unknown observation');
+}
+`, processCapped)
+
+	runDashboardNodeTest(t, script)
+}
+
+func TestMissingQuotaValuesStayUnknown(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	if !strings.Contains(source, "y: row[key] ?? null") {
+		t.Fatal("missing quota values must stay unknown instead of rendering as zero usage")
+	}
+}
+
+func TestEventCostSeriesDoesNotInventCollectionGaps(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	buildDatasets := dashboardJavaScriptBetween(t, source, "function buildAPIIntegrationsChartDatasets(", "function renderAPIIntegrationsChart(")
+	if strings.Contains(buildDatasets, "processDataWithGaps(rawData, range)") {
+		t.Fatal("event-driven cost history must not treat time without requests as a collector outage")
+	}
+	for _, expected := range []string{
+		"data: rawData",
+		"gapSegments: new Set()",
+		"pointRadii: rawData.map(() => 2)",
+	} {
+		if !strings.Contains(buildDatasets, expected) {
+			t.Fatalf("event-driven cost history must keep observed request points: missing %q", expected)
+		}
+	}
+}
+
+func TestUsageRefreshUsesItsExactRequestWindow(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	createJob := dashboardJavaScriptBetween(t, source, "function createUsageGraphRefreshJob(", "function scheduleUsageGraphWarmup(")
+	applyJob := dashboardJavaScriptBetween(t, source, "function applyUsageGraphJob(", "async function runUsageGraphRefreshJob(")
+	for _, expected := range []string{
+		"const requestWindow = historyRequestWindow(range);",
+		"windowStart: requestWindow.start",
+		"windowEnd: requestWindow.end",
+		"xBounds: Number.isFinite(min)",
+	} {
+		if !strings.Contains(createJob+applyJob, expected) {
+			t.Fatalf("usage refresh and axis must share one exact request window: missing %q", expected)
+		}
+	}
+}
+
+func TestPerPeriodEventTotalsKeepVisibleBaseline(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	buckets := dashboardJavaScriptBetween(t, source, "const graphBucketTargets =", "function formatPeriodTooltipTitle(")
+	aggregate := dashboardJavaScriptBetween(t, source, "function aggregateDatasetForBuckets(", "function graphLineStyle(")
+	script := fmt.Sprintf(`
+const State = {
+  graphMode: 'bucket',
+  historyWindowStart: '2026-08-29T00:00:00.000Z',
+  historyWindowEnd: '2026-08-29T01:00:00.000Z',
+};
+function normalizeGraphMode(value) { return value || 'bucket'; }
+function getPollIntervalMs() { return 5 * 60 * 1000; }
+%s
+%s
+const periods = aggregateDatasetForBuckets({
+  data: [
+    { x: new Date('2026-08-29T00:05:00.000Z'), y: 110 },
+    { x: new Date('2026-08-29T00:10:00.000Z'), y: 130 },
+  ],
+  _barStrategy: 'delta',
+  _deltaBaseline: 100,
+}, 'custom', 'bucket');
+const total = periods.reduce((sum, point) => sum + Number(point.y || 0), 0);
+if (total !== 30) throw new Error('per-period total must include the first visible 10-unit delta');
+`, buckets, aggregate)
+	runDashboardNodeTest(t, script)
+}
+
 func TestCustomPlatformCostChartPinsSelectedXAxis(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
 	for _, expected := range []string{
 		"const costTimeBounds = platformCostChartTimeBounds(range);",
-		"min: costTimeBounds?.min ??",
-		"max: costTimeBounds?.max ??",
+		"const costPeriodBounds = periodMode && bucketed.cost.length > 0",
+		"min: costTimeBounds?.min ?? costPeriodBounds?.min,",
+		"max: costTimeBounds?.max ?? costPeriodBounds?.max,",
 	} {
 		if !strings.Contains(source, expected) {
-			t.Fatalf("platform cost chart must preserve the custom selected window: missing %q", expected)
+			t.Fatalf("platform cost chart must preserve exact selected bounds in both modes: missing %q", expected)
 		}
+	}
+}
+
+func TestGraphRefreshFailuresKeepDisplayedLabelsHonest(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	for _, expected := range []string{
+		"function handleGraphRefreshFailure(job)",
+		"restoreDisplayedUsageGraphSelection(job);",
+		"restoreDisplayedCostGraphSelection(job);",
+		"syncGraphHistoryRangeControl('chart');",
+		"Showing saved ${shownLabel} data.",
+		"setDashboardFreshness({ stale: true });",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("failed graph refresh must keep the last successful range visible: missing %q", expected)
+		}
+	}
+}
+
+func TestGraphControlsAndCanvasesExposeAccessibleState(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	template := dashboardTemplateSource(t)
+	styles := dashboardStyleSource(t)
+	for _, expected := range []string{
+		`id="usage-chart" role="img"`,
+		`id="usage-chart-accessible-summary"`,
+		`id="platform-cost-chart" role="img"`,
+		`id="platform-cost-chart-accessible-summary"`,
+		`aria-pressed="true">Cumulative`,
+	} {
+		if !strings.Contains(template, expected) {
+			t.Fatalf("graph canvas and controls need accessible state: missing %q", expected)
+		}
+	}
+	for _, expected := range []string{
+		"function renderUsageAccessibleSummary(",
+		"function renderPlatformCostAccessibleSummary(",
+		"button.setAttribute('aria-pressed', active ? 'true' : 'false');",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("graph accessibility state must update with rendered data: missing %q", expected)
+		}
+	}
+	if !strings.Contains(styles, ".sr-only") {
+		t.Fatal("accessible graph summaries must remain available to assistive technology")
 	}
 }
 
@@ -366,6 +691,296 @@ if (chart.options.scales.x.time.unit !== 'day') {
 `, duration, timeScale)
 
 	runDashboardNodeTest(t, script)
+}
+
+func TestAllPeriodBucketsReachTheCurrentTime(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	buckets := dashboardJavaScriptBetween(t, source, "const graphBucketTargets =", "function formatPeriodTooltipTitle(")
+	script := fmt.Sprintf(`
+const State = { graphMode: 'bucket', historyWindowStart: null, historyWindowEnd: null };
+function normalizeGraphMode(value) { return value || 'bucket'; }
+function getPollIntervalMs() { return 5 * 60 * 1000; }
+const realDateNow = Date.now;
+Date.now = () => Date.parse('2026-08-31T12:00:00.000Z');
+%s
+const result = graphBucketRange('all', [
+  { x: new Date('2025-08-31T12:00:00.000Z'), y: 10 },
+], 'bucket');
+Date.now = realDateNow;
+if (result.length === 0 || result.length > graphBucketMaxCount('bucket')) {
+  throw new Error('All period buckets must remain bounded');
+}
+const finalPeriod = result[result.length - 1];
+if (finalPeriod.periodStart.getTime() > Date.parse('2026-08-31T12:00:00.000Z')
+    || finalPeriod.periodEnd.getTime() < Date.parse('2026-08-31T12:00:00.000Z')) {
+  throw new Error('All period buckets must cover the current time even when the newest observation is stale');
+}
+`, buckets)
+	runDashboardNodeTest(t, script)
+}
+
+func TestPeriodBucketsClampToExactSelectedWindow(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	buckets := dashboardJavaScriptBetween(t, source, "const graphBucketTargets =", "function formatPeriodTooltipTitle(")
+	script := fmt.Sprintf(`
+const State = {
+  graphMode: 'bucket',
+  historyWindowStart: '2026-08-29T00:02:00.000Z',
+  historyWindowEnd: '2026-08-29T00:58:00.000Z',
+};
+function normalizeGraphMode(value) { return value || 'bucket'; }
+function getPollIntervalMs() { return 5 * 60 * 1000; }
+%s
+const start = Date.parse(State.historyWindowStart);
+const end = Date.parse(State.historyWindowEnd);
+const result = graphBucketRange('custom', [
+  { x: new Date('2026-08-29T00:05:00.000Z'), y: 1 },
+  { x: new Date('2026-08-29T00:55:00.000Z'), y: 2 },
+], 'bucket');
+if (result[0].periodStart.getTime() !== start
+    || result[result.length - 1].periodEnd.getTime() !== end) {
+  throw new Error('partial edge periods must use the exact selected boundaries');
+}
+if (result.some(period => period.x.getTime() < start || period.x.getTime() > end)) {
+  throw new Error('period centers must stay inside the selected chart window');
+}
+const cost = graphBucketRange(
+  'custom',
+  [{ x: new Date('2026-08-29T00:55:00.000Z'), y: 2 }],
+  'bucket',
+  State.historyWindowStart,
+  State.historyWindowEnd,
+);
+if (cost[0].periodStart.getTime() !== start || cost[cost.length - 1].periodEnd.getTime() !== end) {
+  throw new Error('cost and usage periods must share exact edge boundaries');
+}
+`, buckets)
+	runDashboardNodeTest(t, script)
+}
+
+func TestPeriodUsageGraphKeepsMissingCoverageUnknown(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	buckets := dashboardJavaScriptBetween(t, source, "const graphBucketTargets =", "function formatPeriodTooltipTitle(")
+	aggregate := dashboardJavaScriptBetween(t, source, "function aggregateDatasetForBuckets(", "function applyGraphModeToDatasets(")
+
+	script := fmt.Sprintf(`
+const State = {
+  graphMode: 'bucket',
+  historyWindowStart: '2026-08-29T00:00:00.000Z',
+  historyWindowEnd: '2026-08-29T01:00:00.000Z',
+};
+function normalizeGraphMode(value) { return value || 'cumulative'; }
+function getPollIntervalMs() { return 5 * 60 * 1000; }
+%s
+%s
+const interval = graphBucketIntervalMs('custom', 'bucket');
+if (interval < getPollIntervalMs()) {
+  throw new Error('period buckets must not be shorter than the collection interval');
+}
+const result = aggregateDatasetForBuckets({
+  label: 'Weekly All-Model',
+  data: [
+    { x: new Date('2026-08-29T00:00:00.000Z'), y: 10 },
+    { x: new Date('2026-08-29T00:05:00.000Z'), y: 20 },
+    { x: new Date('2026-08-29T00:55:00.000Z'), y: 30 },
+  ],
+}, 'custom', 'bucket');
+const observedDelta = result.find(point => point.periodStart.getTime() === Date.parse('2026-08-29T00:05:00.000Z'));
+if (!observedDelta || observedDelta.y !== 10) {
+  throw new Error('continuous observed usage must remain attributed to its period');
+}
+const emptyPeriod = result.find(point => point.periodStart.getTime() === Date.parse('2026-08-29T00:10:00.000Z'));
+if (!emptyPeriod || emptyPeriod.y !== null) {
+  throw new Error('an unobserved usage period must stay unknown instead of becoming zero');
+}
+const firstAfterGap = result.find(point => point.periodStart.getTime() === Date.parse('2026-08-29T00:55:00.000Z'));
+if (!firstAfterGap || firstAfterGap.y !== null) {
+  throw new Error('usage accumulated across a collection gap must not be assigned to the first later period');
+}
+`, buckets, aggregate)
+
+	runDashboardNodeTest(t, script)
+}
+
+func TestPeriodUsageGraphMarksObservedResets(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	buckets := dashboardJavaScriptBetween(t, source, "const graphBucketTargets =", "function formatPeriodTooltipTitle(")
+	aggregate := dashboardJavaScriptBetween(t, source, "function aggregateDatasetForBuckets(", "function applyGraphModeToDatasets(")
+
+	script := fmt.Sprintf(`
+const State = {
+  graphMode: 'bucket',
+  historyWindowStart: '2026-08-29T00:00:00.000Z',
+  historyWindowEnd: '2026-08-29T01:00:00.000Z',
+};
+function normalizeGraphMode(value) { return value || 'bucket'; }
+function getPollIntervalMs() { return 5 * 60 * 1000; }
+%s
+%s
+const result = aggregateDatasetForBuckets({
+  label: 'Weekly All-Model',
+  data: [
+    { x: new Date('2026-08-29T00:00:00.000Z'), y: 50 },
+    { x: new Date('2026-08-29T00:05:00.000Z'), y: 0 },
+    { x: new Date('2026-08-29T00:10:00.000Z'), y: 5 },
+  ],
+}, 'custom', 'bucket');
+const resetPeriod = result.find(point => point.periodStart.getTime() === Date.parse('2026-08-29T00:05:00.000Z'));
+if (!resetPeriod || resetPeriod.y !== 0 || !resetPeriod.resetObserved) {
+  throw new Error('an observed quota drop must remain visible as a reset marker');
+}
+const postReset = result.find(point => point.periodStart.getTime() === Date.parse('2026-08-29T00:10:00.000Z'));
+if (!postReset || postReset.y !== 5) {
+  throw new Error('post-reset usage must be attributed to its visible period');
+}
+`, buckets, aggregate)
+
+	runDashboardNodeTest(t, script)
+}
+
+func TestCumulativeGraphLeavesCollectionGapsBlank(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	if strings.Contains(source, "spanGaps: true") {
+		t.Fatal("line datasets must not reconnect across collection-gap markers")
+	}
+	gapProcessing := dashboardJavaScriptBetween(t, source, "function processDataWithGaps(", "function getSegmentStyle(")
+
+	script := fmt.Sprintf(`
+const document = {
+  querySelector() { return { dataset: { pollInterval: '120' } }; },
+};
+function getPollIntervalMs() { return 2 * 60 * 1000; }
+function graphBucketIntervalMs() { return 3 * 60 * 60 * 1000; }
+%s
+const beforeGap = { x: new Date('2026-08-27T17:01:53.540Z'), y: 0 };
+const afterGap = { x: new Date('2026-08-29T20:25:45.041Z'), y: 35 };
+for (const range of ['1h', '6h', '24h', '7d', '30d', 'all', 'custom']) {
+  const rangeResult = processDataWithGaps([beforeGap, afterGap], range);
+  if (rangeResult.data.length !== 3 || rangeResult.data[1].y !== null) {
+    throw new Error(range + ' must leave the observed collection gap blank');
+  }
+}
+const result = processDataWithGaps([beforeGap, afterGap], '7d');
+if (result.data.length !== 3) {
+  throw new Error('a collection gap must insert one non-observation break point');
+}
+if (result.data[0] !== beforeGap || result.data[2] !== afterGap) {
+  throw new Error('observed points and timestamps must remain unchanged around a gap');
+}
+const breakPoint = result.data[1];
+if (breakPoint.y !== null
+    || breakPoint.x.getTime() <= beforeGap.x.getTime()
+    || breakPoint.x.getTime() >= afterGap.x.getTime()) {
+  throw new Error('the inserted point must break the line inside the unobserved interval');
+}
+if (result.pointRadii.join(',') !== '2,0,2') {
+  throw new Error('the gap marker must stay invisible while observed samples stay visible');
+}
+const continuous = processDataWithGaps([
+  beforeGap,
+  { x: new Date(beforeGap.x.getTime() + (2 * 60 * 1000)), y: 1 },
+], '1h');
+if (continuous.data.length !== 2 || continuous.data.some(point => point.y === null)) {
+  throw new Error('normal adjacent observations must remain connected');
+}
+const withinBucket = processDataWithGaps([
+  beforeGap,
+  { x: new Date(beforeGap.x.getTime() + (150 * 60 * 1000)), y: 1 },
+], '7d');
+if (withinBucket.data.length !== 2 || withinBucket.data.some(point => point.y === null)) {
+  throw new Error('server sampling inside one display bucket must not create a false gap');
+}
+const missingBucket = processDataWithGaps([
+  beforeGap,
+  { x: new Date(beforeGap.x.getTime() + (3.2 * 60 * 60 * 1000)), y: 1 },
+], '7d');
+if (missingBucket.data.length !== 3 || missingBucket.data[1].y !== null) {
+  throw new Error('a gap beyond the selected bucket width must remain blank');
+}
+`, gapProcessing)
+
+	runDashboardNodeTest(t, script)
+}
+
+func TestPeriodGraphKeepsExactSelectedBounds(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	applyBounds := dashboardJavaScriptBetween(t, source, "function applyChartGraphMode(", "function setMainChartDatasets(")
+
+	script := fmt.Sprintf(`
+function normalizeGraphMode(value) { return value || 'cumulative'; }
+function isPeriodGraphMode(value) { return normalizeGraphMode(value) === 'bucket'; }
+function usageChartTimeBounds() { return null; }
+%s
+const firstStart = new Date('2026-08-29T00:00:00.000Z');
+const lastEnd = new Date('2026-08-29T01:00:00.000Z');
+const chart = {
+  config: { type: 'line' },
+  options: { scales: { x: {} } },
+  data: { datasets: [{ data: [
+    { x: new Date('2026-08-29T00:02:30.000Z'), y: 1, periodStart: firstStart, periodEnd: new Date('2026-08-29T00:05:00.000Z') },
+    { x: new Date('2026-08-29T00:57:30.000Z'), y: 2, periodStart: new Date('2026-08-29T00:55:00.000Z'), periodEnd: lastEnd },
+  ] }] },
+};
+applyChartGraphMode(chart, 'custom', 'bucket', {
+  min: Date.parse('2026-08-29T00:02:00.000Z'),
+  max: Date.parse('2026-08-29T00:58:00.000Z'),
+});
+	const selectedStart = Date.parse('2026-08-29T00:02:00.000Z');
+	const selectedEnd = Date.parse('2026-08-29T00:58:00.000Z');
+	if (new Date(chart.options.scales.x.min).getTime() !== selectedStart) {
+  throw new Error('period graph must keep the exact selected start');
+}
+	if (new Date(chart.options.scales.x.max).getTime() !== selectedEnd) {
+  throw new Error('period graph must keep the exact selected end');
+}
+`, applyBounds)
+
+	runDashboardNodeTest(t, script)
+}
+
+func TestEmptyCostPeriodsDoNotCountAsUsage(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	hasUsage := dashboardJavaScriptBetween(t, source, "function pointSeriesHaveUsage(", "function renderPlatformCostChart(")
+
+	script := fmt.Sprintf(`
+%s
+if (pointSeriesHaveUsage([{ y: 0 }], [{ y: 0 }])) {
+  throw new Error('all-zero cost periods must remain an empty range');
+}
+if (!pointSeriesHaveUsage([{ y: 0.01 }], [{ y: 0 }])) {
+  throw new Error('a positive cost period must count as usage');
+}
+`, hasUsage)
+
+	runDashboardNodeTest(t, script)
+}
+
+func TestLargeChartAxisValuesUseCompactLabels(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	formatters := dashboardJavaScriptBetween(t, source, "function formatNumber(", "function formatCurrencyUSD(")
+
+	script := fmt.Sprintf(`
+%s
+if (formatChartAxisNumber(250000000) !== '250M') {
+  throw new Error('large chart ticks must use compact labels');
+}
+if (formatChartAxisNumber(2500) !== '2,500') {
+  throw new Error('small chart ticks must keep their readable full value');
+}
+`, formatters)
+
+	runDashboardNodeTest(t, script)
+	if !strings.Contains(source, "callback: value => formatChartAxisNumber(Number(value || 0))") {
+		t.Fatal("platform token cost axis must use compact labels")
+	}
 }
 
 func TestCombinedHistoryRendersPrimaryBeforeOptionalCostHistory(t *testing.T) {

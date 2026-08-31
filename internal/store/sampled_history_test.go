@@ -241,6 +241,164 @@ func TestCodexSampledHistoryKeepsAllRowsBelowLimit(t *testing.T) {
 	}
 }
 
+func TestSampledQuotaHistoryPreservesObservedResets(t *testing.T) {
+	t.Parallel()
+
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	base := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
+	const snapshotCount = 12
+	const resetIndex = 4
+	const maxPoints = 5
+	for index := range snapshotCount {
+		capturedAt := base.Add(time.Duration(index) * time.Hour)
+		resetAt := base.Add(24 * time.Hour)
+		utilization := float64(index + 10)
+		if index == resetIndex {
+			utilization = 1
+		}
+
+		codex := newTestCodexSnapshot(capturedAt, &resetAt)
+		codex.Quotas[0].Utilization = utilization
+		if _, err := s.InsertCodexSnapshot(codex); err != nil {
+			t.Fatalf("InsertCodexSnapshot[%d]: %v", index, err)
+		}
+
+		anthropic := &api.AnthropicSnapshot{
+			CapturedAt: capturedAt,
+			Quotas: []api.AnthropicQuota{{
+				Name:        "five_hour",
+				Utilization: utilization,
+				ResetsAt:    &resetAt,
+			}},
+		}
+		if _, err := s.InsertAnthropicSnapshot(anthropic); err != nil {
+			t.Fatalf("InsertAnthropicSnapshot[%d]: %v", index, err)
+		}
+
+		cursor := newTestCursorSnapshot(capturedAt, api.CursorAccountIndividual, []api.CursorQuota{{
+			Name:        "total_usage",
+			Used:        utilization,
+			Limit:       100,
+			Utilization: utilization,
+			Format:      api.CursorFormatPercent,
+			ResetsAt:    &resetAt,
+		}})
+		if _, err := s.InsertCursorSnapshot(cursor); err != nil {
+			t.Fatalf("InsertCursorSnapshot[%d]: %v", index, err)
+		}
+	}
+
+	start := base.Add(-time.Hour)
+	end := base.Add(snapshotCount * time.Hour)
+	resetTime := base.Add(resetIndex * time.Hour)
+
+	codexRows, err := s.QueryCodexRangeSampled(DefaultCodexAccountID, start, end, maxPoints)
+	if err != nil {
+		t.Fatalf("QueryCodexRangeSampled: %v", err)
+	}
+	if !sampledCodexContainsTime(codexRows, resetTime) {
+		t.Fatalf("sampled Codex history lost reset at %v", resetTime)
+	}
+
+	anthropicRows, err := s.QueryAnthropicRangeSampled(start, end, maxPoints)
+	if err != nil {
+		t.Fatalf("QueryAnthropicRangeSampled: %v", err)
+	}
+	if !sampledAnthropicContainsTime(anthropicRows, resetTime) {
+		t.Fatalf("sampled Anthropic history lost reset at %v", resetTime)
+	}
+
+	cursorRows, err := s.QueryCursorRangeSampled(start, end, maxPoints)
+	if err != nil {
+		t.Fatalf("QueryCursorRangeSampled: %v", err)
+	}
+	if !sampledCursorContainsTime(cursorRows, resetTime) {
+		t.Fatalf("sampled Cursor history lost reset at %v", resetTime)
+	}
+	if !cursorRows[0].CapturedAt.Equal(base) || !cursorRows[len(cursorRows)-1].CapturedAt.Equal(base.Add((snapshotCount-1)*time.Hour)) {
+		t.Fatalf("sampled Cursor endpoints=%v..%v", cursorRows[0].CapturedAt, cursorRows[len(cursorRows)-1].CapturedAt)
+	}
+}
+
+func TestCursorSampledHistoryPreservesFullSelectedRange(t *testing.T) {
+	t.Parallel()
+
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	resetAt := base.Add(30 * 24 * time.Hour)
+	const snapshotCount = 260
+	const maxPoints = 50
+	for index := range snapshotCount {
+		capturedAt := base.Add(time.Duration(index) * 2 * time.Minute)
+		snapshot := newTestCursorSnapshot(capturedAt, api.CursorAccountIndividual, []api.CursorQuota{{
+			Name:        "total_usage",
+			Used:        float64(index),
+			Limit:       snapshotCount,
+			Utilization: float64(index) / snapshotCount * 100,
+			Format:      api.CursorFormatPercent,
+			ResetsAt:    &resetAt,
+		}})
+		if _, err := s.InsertCursorSnapshot(snapshot); err != nil {
+			t.Fatalf("InsertCursorSnapshot[%d]: %v", index, err)
+		}
+	}
+
+	rows, err := s.QueryCursorRangeSampled(base, base.Add(snapshotCount*2*time.Minute), maxPoints)
+	if err != nil {
+		t.Fatalf("QueryCursorRangeSampled: %v", err)
+	}
+	if len(rows) > maxPoints {
+		t.Fatalf("sampled Cursor rows=%d want <=%d", len(rows), maxPoints)
+	}
+	if len(rows) == 0 || !rows[0].CapturedAt.Equal(base) {
+		t.Fatalf("sampled Cursor history lost first observation: %v", rows)
+	}
+	lastTime := base.Add((snapshotCount - 1) * 2 * time.Minute)
+	if !rows[len(rows)-1].CapturedAt.Equal(lastTime) {
+		t.Fatalf("sampled Cursor history ended at %v want %v", rows[len(rows)-1].CapturedAt, lastTime)
+	}
+	if len(rows[0].Quotas) != 1 {
+		t.Fatalf("sampled Cursor quotas=%d want 1", len(rows[0].Quotas))
+	}
+}
+
+func sampledCodexContainsTime(rows []*api.CodexSnapshot, target time.Time) bool {
+	for _, row := range rows {
+		if row.CapturedAt.Equal(target) {
+			return true
+		}
+	}
+	return false
+}
+
+func sampledAnthropicContainsTime(rows []*api.AnthropicSnapshot, target time.Time) bool {
+	for _, row := range rows {
+		if row.CapturedAt.Equal(target) {
+			return true
+		}
+	}
+	return false
+}
+
+func sampledCursorContainsTime(rows []*api.CursorSnapshot, target time.Time) bool {
+	for _, row := range rows {
+		if row.CapturedAt.Equal(target) {
+			return true
+		}
+	}
+	return false
+}
+
 func assertSampledCodexRows(t *testing.T, rows []*api.CodexSnapshot, base time.Time, total, max int) {
 	t.Helper()
 	if len(rows) > max {

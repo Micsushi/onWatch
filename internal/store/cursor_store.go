@@ -190,6 +190,150 @@ func (s *Store) QueryCursorRange(start, end time.Time, limit ...int) ([]*api.Cur
 	return snapshots, nil
 }
 
+// QueryCursorRangeSampled returns time-sampled Cursor snapshots and their quota
+// values. It retains the range endpoints and any observed quota reset.
+func (s *Store) QueryCursorRangeSampled(start, end time.Time, maxPoints int) ([]*api.CursorSnapshot, error) {
+	if maxPoints < 2 {
+		return nil, fmt.Errorf("cursor sample size must be at least 2")
+	}
+
+	rows, err := s.db.Query(`
+		WITH bounded AS (
+			SELECT id, captured_at, account_type, plan_name,
+				julianday(captured_at) AS captured_day,
+				MIN(julianday(captured_at)) OVER () AS first_day,
+				MAX(julianday(captured_at)) OVER () AS last_day,
+				COUNT(*) OVER () AS total_rows
+			FROM cursor_snapshots
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
+				AND captured_at COLLATE ONWATCH_RFC3339 < ?
+		),
+		bucketed AS (
+			SELECT id, captured_at, account_type, plan_name, total_rows,
+				CASE WHEN last_day = first_day THEN 0 ELSE
+					MIN(? - 1, CAST((captured_day - first_day) * (? - 1) / (last_day - first_day) AS INTEGER))
+				END AS time_bucket
+			FROM bounded
+		),
+		quota_ordered AS (
+			SELECT quota.snapshot_id, quota.quota_name, quota.utilization,
+				LAG(quota.utilization) OVER (
+					PARTITION BY quota.quota_name ORDER BY bounded.captured_at COLLATE ONWATCH_RFC3339 ASC
+				) AS previous_utilization
+			FROM bounded
+			JOIN cursor_quota_values quota ON quota.snapshot_id = bounded.id
+		),
+		reset_ids AS (
+			SELECT DISTINCT snapshot_id
+			FROM quota_ordered
+			WHERE previous_utilization IS NOT NULL AND utilization < previous_utilization
+		),
+		ranked AS (
+			SELECT id, captured_at, account_type, plan_name, total_rows, time_bucket,
+				ROW_NUMBER() OVER (
+					PARTITION BY time_bucket
+					ORDER BY CASE WHEN id IN (SELECT snapshot_id FROM reset_ids) THEN 0 ELSE 1 END,
+						captured_at COLLATE ONWATCH_RFC3339 DESC
+				) AS bucket_rank,
+				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC) AS overall_rank,
+				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC) AS overall_reverse_rank
+			FROM bucketed
+		),
+		sampled AS (
+			SELECT id, captured_at, account_type, plan_name
+			FROM ranked
+			WHERE total_rows <= ?
+				OR overall_rank = 1
+				OR overall_reverse_rank = 1
+				OR (time_bucket > 0 AND time_bucket < ? - 1 AND bucket_rank = 1)
+		)
+		SELECT sampled.id, sampled.captured_at, sampled.account_type, sampled.plan_name,
+			quota.quota_name, quota.used, quota.limit_value, quota.utilization, quota.format, quota.resets_at
+		FROM sampled
+		LEFT JOIN cursor_quota_values quota ON quota.snapshot_id = sampled.id
+		ORDER BY sampled.captured_at COLLATE ONWATCH_RFC3339 ASC, quota.quota_name ASC`,
+		start.UTC().Format(time.RFC3339Nano),
+		end.UTC().Format(time.RFC3339Nano),
+		maxPoints,
+		maxPoints,
+		maxPoints,
+		maxPoints,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sampled cursor range: %w", err)
+	}
+	defer rows.Close()
+
+	var snapshots []*api.CursorSnapshot
+	var current *api.CursorSnapshot
+	for rows.Next() {
+		var (
+			id               int64
+			capturedAt       string
+			accountType      sql.NullString
+			planName         sql.NullString
+			quotaName        sql.NullString
+			quotaUsed        sql.NullFloat64
+			quotaLimit       sql.NullFloat64
+			quotaUtilization sql.NullFloat64
+			quotaFormat      sql.NullString
+			quotaResetsAt    sql.NullString
+		)
+		if err := rows.Scan(
+			&id,
+			&capturedAt,
+			&accountType,
+			&planName,
+			&quotaName,
+			&quotaUsed,
+			&quotaLimit,
+			&quotaUtilization,
+			&quotaFormat,
+			&quotaResetsAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan sampled cursor range: %w", err)
+		}
+
+		if current == nil || current.ID != id {
+			parsedCapturedAt, err := time.Parse(time.RFC3339Nano, capturedAt)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse cursor snapshot captured_at %q: %w", capturedAt, err)
+			}
+			current = &api.CursorSnapshot{ID: id, CapturedAt: parsedCapturedAt}
+			if accountType.Valid {
+				current.AccountType = api.CursorAccountType(accountType.String)
+			}
+			if planName.Valid {
+				current.PlanName = planName.String
+			}
+			snapshots = append(snapshots, current)
+		}
+
+		if !quotaName.Valid {
+			continue
+		}
+		quota := api.CursorQuota{
+			Name:        quotaName.String,
+			Used:        quotaUsed.Float64,
+			Limit:       quotaLimit.Float64,
+			Utilization: quotaUtilization.Float64,
+			Format:      api.CursorQuotaFormat(quotaFormat.String),
+		}
+		if quotaResetsAt.Valid && quotaResetsAt.String != "" {
+			parsedResetsAt, err := time.Parse(time.RFC3339Nano, quotaResetsAt.String)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse cursor quota resets_at %q: %w", quotaResetsAt.String, err)
+			}
+			quota.ResetsAt = &parsedResetsAt
+		}
+		current.Quotas = append(current.Quotas, quota)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate sampled cursor range: %w", err)
+	}
+	return snapshots, nil
+}
+
 func (s *Store) CreateCursorCycle(quotaName string, cycleStart time.Time, resetsAt *time.Time) (int64, error) {
 	var resetsAtVal interface{}
 	if resetsAt != nil {

@@ -211,18 +211,37 @@ func (s *Store) QueryAnthropicRangeSampled(start, end time.Time, maxPoints int) 
 				END AS time_bucket
 			FROM bounded
 		),
+		quota_ordered AS (
+			SELECT quota.snapshot_id, quota.quota_name, quota.utilization,
+				LAG(quota.utilization) OVER (
+					PARTITION BY quota.quota_name ORDER BY bounded.captured_at COLLATE ONWATCH_RFC3339 ASC
+				) AS previous_utilization
+			FROM bounded
+			JOIN anthropic_quota_values quota ON quota.snapshot_id = bounded.id
+		),
+		reset_ids AS (
+			SELECT DISTINCT snapshot_id
+			FROM quota_ordered
+			WHERE previous_utilization IS NOT NULL AND utilization < previous_utilization
+		),
 		ranked AS (
 			SELECT id, captured_at, total_rows, time_bucket,
-				ROW_NUMBER() OVER (PARTITION BY time_bucket ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC) AS bucket_rank,
-				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC) AS overall_rank
+				ROW_NUMBER() OVER (
+					PARTITION BY time_bucket
+					ORDER BY CASE WHEN id IN (SELECT snapshot_id FROM reset_ids) THEN 0 ELSE 1 END,
+						captured_at COLLATE ONWATCH_RFC3339 DESC
+				) AS bucket_rank,
+				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC) AS overall_rank,
+				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC) AS overall_reverse_rank
 			FROM bucketed
 		),
 		sampled AS (
 			SELECT id, captured_at
 			FROM ranked
 			WHERE total_rows <= ?
-				OR (time_bucket = 0 AND overall_rank = 1)
-				OR (time_bucket > 0 AND bucket_rank = 1)
+				OR overall_rank = 1
+				OR overall_reverse_rank = 1
+				OR (time_bucket > 0 AND time_bucket < ? - 1 AND bucket_rank = 1)
 		)
 		SELECT sampled.id, sampled.captured_at,
 			quota.quota_name, quota.utilization, quota.resets_at
@@ -231,6 +250,7 @@ func (s *Store) QueryAnthropicRangeSampled(start, end time.Time, maxPoints int) 
 		ORDER BY sampled.captured_at COLLATE ONWATCH_RFC3339 ASC, quota.quota_name ASC`,
 		start.Format(time.RFC3339Nano),
 		end.Format(time.RFC3339Nano),
+		maxPoints,
 		maxPoints,
 		maxPoints,
 		maxPoints,

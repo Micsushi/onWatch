@@ -2817,7 +2817,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.config.HasProvider("cursor") && providerTelemetryEnabled(visibility, "cursor") && h.store != nil {
-		snapshots, err := h.store.QueryCursorRange(start, now, 200)
+		snapshots, err := h.store.QueryCursorRangeSampled(start, now, maxChartPoints)
 		if err == nil {
 			step := downsampleStep(len(snapshots), maxChartPoints)
 			last := len(snapshots) - 1

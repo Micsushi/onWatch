@@ -260,6 +260,12 @@ const State = {
   dashboardRefreshCount: 0,
   dashboardRefreshMessage: 'Updating data...',
   dashboardToastTimer: null,
+  currentChartWindowStart: null,
+  currentChartWindowEnd: null,
+  platformCostHistoryWindowStart: null,
+  platformCostHistoryWindowEnd: null,
+  platformCostBreakdownHistoryWindowStart: null,
+  platformCostBreakdownHistoryWindowEnd: null,
 };
 
 function updateChartWhenChanged(signatureKey, renderState, update) {
@@ -546,6 +552,106 @@ function finishGraphRefreshJob(job) {
   renderDashboardRefreshStatus();
 }
 
+function setUsageChartRefreshMessage(message = '') {
+  const status = document.getElementById('usage-chart-refresh-message');
+  if (!status) return;
+  status.textContent = message;
+  status.hidden = !message;
+}
+
+function restoreDisplayedUsageGraphSelection(job) {
+  if (!job || job.kind !== 'usage' || getCurrentProvider() !== job.provider) return;
+  if (selectedChartRange() !== job.range || State.currentChartProvider !== job.provider) return;
+
+  const displayedRange = normalizeChartRange(State.currentChartRange || job.range);
+  if (displayedRange !== job.range) {
+    State.currentRange = displayedRange;
+    if (State.currentChartWindowStart && State.currentChartWindowEnd) {
+      State.historyWindowStart = State.currentChartWindowStart;
+      State.historyWindowEnd = State.currentChartWindowEnd;
+      State.historyStartDate = formatHistoryDateInTimezone(new Date(State.currentChartWindowStart));
+      State.historyEndDate = formatHistoryDateInTimezone(new Date(State.currentChartWindowEnd));
+      saveChartRange(displayedRange);
+      persistHistoryWindow('chart');
+    } else {
+      applyPresetHistoryWindow(displayedRange, new Date(), 'chart');
+    }
+  }
+  if (State.currentChartMode) {
+    State.graphMode = normalizeGraphMode(State.currentChartMode);
+    saveGraphMode(State.graphMode);
+  }
+  syncGraphHistoryRangeControl('chart');
+  syncGraphModeButtons('chart-mode-select', State.graphMode);
+  const shownLabel = platformCostRangeLabel(displayedRange);
+  const failedLabel = platformCostRangeLabel(job.range);
+  const message = displayedRange === job.range
+    ? `Could not refresh ${failedLabel} usage. Showing saved data.`
+    : `Could not load ${failedLabel} usage. Showing saved ${shownLabel} data.`;
+  setGraphHistoryRangeError('chart', message);
+  setUsageChartRefreshMessage(message);
+  setDashboardFreshness({ stale: true });
+}
+
+function restoreDisplayedCostGraphSelection(job) {
+  if (!job || job.kind !== 'cost' || getCurrentProvider() !== job.provider) return;
+  const selectedRange = job.scope === 'platformCostBreakdown'
+    ? selectedPlatformCostBreakdownRange()
+    : selectedPlatformCostRange();
+  if (selectedRange !== job.range) return;
+
+  const displayedRange = normalizePlatformCostRange(job.scope === 'platformCostBreakdown'
+    ? State.platformCostBreakdownHistoryRange
+    : State.platformCostHistoryRange);
+  if (displayedRange !== job.range) {
+    const storedStart = job.scope === 'platformCostBreakdown'
+      ? State.platformCostBreakdownHistoryWindowStart
+      : State.platformCostHistoryWindowStart;
+    const storedEnd = job.scope === 'platformCostBreakdown'
+      ? State.platformCostBreakdownHistoryWindowEnd
+      : State.platformCostHistoryWindowEnd;
+    if (storedStart && storedEnd) {
+      if (job.scope === 'platformCostBreakdown') {
+        State.platformCostBreakdownRange = displayedRange;
+        State.platformCostBreakdownWindowStart = storedStart;
+        State.platformCostBreakdownWindowEnd = storedEnd;
+        State.platformCostBreakdownStartDate = formatHistoryDateInTimezone(new Date(storedStart));
+        State.platformCostBreakdownEndDate = formatHistoryDateInTimezone(new Date(storedEnd));
+        savePlatformCostBreakdownRange(displayedRange);
+      } else {
+        State.platformCostRange = displayedRange;
+        State.platformCostWindowStart = storedStart;
+        State.platformCostWindowEnd = storedEnd;
+        State.platformCostStartDate = formatHistoryDateInTimezone(new Date(storedStart));
+        State.platformCostEndDate = formatHistoryDateInTimezone(new Date(storedEnd));
+        savePlatformCostRange(displayedRange);
+      }
+      persistHistoryWindow(job.scope);
+    } else {
+      applyPresetHistoryWindow(displayedRange, new Date(), job.scope);
+    }
+    syncGraphHistoryRangeControl(job.scope);
+    if (job.scope === 'platformCostBreakdown') {
+      bindPlatformCostBreakdownRangeControls(displayedRange);
+    } else {
+      bindPlatformCostRangeControls(displayedRange);
+    }
+  }
+  const shownLabel = platformCostRangeLabel(displayedRange);
+  const failedLabel = platformCostRangeLabel(job.range);
+  const graphLabel = job.scope === 'platformCostBreakdown' ? 'cost breakdown' : 'cost';
+  const message = displayedRange === job.range
+    ? `Could not refresh ${failedLabel} ${graphLabel}. Showing saved data.`
+    : `Could not load ${failedLabel} ${graphLabel}. Showing saved ${shownLabel} data.`;
+  setGraphHistoryRangeError(job.scope, message);
+  setDashboardFreshness({ stale: true });
+}
+
+function handleGraphRefreshFailure(job) {
+  restoreDisplayedUsageGraphSelection(job);
+  restoreDisplayedCostGraphSelection(job);
+}
+
 async function drainGraphRefreshQueue() {
   if (State.graphRefreshDraining) return;
   State.graphRefreshDraining = true;
@@ -558,6 +664,7 @@ async function drainGraphRefreshQueue() {
         await job.run(job.controller.signal);
         job.resolve?.({ ok: true });
       } catch (error) {
+        handleGraphRefreshFailure(job);
         job.resolve?.({ ok: false, error });
       } finally {
         finishGraphRefreshJob(job);
@@ -635,6 +742,7 @@ async function runCustomGraphRefresh(job) {
     return await job.run(job.controller.signal);
   } catch (error) {
     if (!job.controller.signal.aborted) {
+      handleGraphRefreshFailure(job);
       setDashboardFreshness({ stale: true });
       showDashboardToast('Custom graph could not be refreshed.', 'error', 3600);
     }
@@ -736,6 +844,8 @@ function applyPlatformCostHistoryPayload(range, payload) {
   State.platformCostUsesArchivedData = Boolean(payload.usesArchivedData);
   if (payload.apiHistory) State.apiIntegrationsHistory = payload.apiHistory;
   State.platformCostHistoryRange = normalizePlatformCostRange(range);
+  State.platformCostHistoryWindowStart = payload.windowStart || State.platformCostWindowStart;
+  State.platformCostHistoryWindowEnd = payload.windowEnd || State.platformCostWindowEnd;
 }
 
 function abortPlatformCostPrefetches(exceptProvider = '') {
@@ -774,7 +884,7 @@ function platformCostPayloadRequestKey(provider, range, scope = 'platformCost') 
   return `${provider || ''}:${rangeKey}`;
 }
 
-async function fetchPlatformCostPayload(provider, range, signal, scope = 'platformCost') {
+async function fetchPlatformCostPayload(provider, range, signal, scope = 'platformCost', queryOverride = '') {
   range = normalizePlatformCostRange(range);
   const requestKey = platformCostPayloadRequestKey(provider, range, scope);
   const existing = State.platformCostPayloadInflight[requestKey];
@@ -782,12 +892,15 @@ async function fetchPlatformCostPayload(provider, range, signal, scope = 'platfo
 
   const request = (async () => {
     const integration = platformCostIntegrationNames[provider] || '';
-    const query = platformCostHistoryRequestQuery(range, scope);
+    const query = queryOverride || platformCostHistoryRequestQuery(range, scope);
     const requests = [
       authFetch(`${API_BASE}/api/api-integrations/sessions?${query}&integration=${encodeURIComponent(integration)}&includeSessions=false`, { signal }),
       authFetch(`${API_BASE}/api/api-integrations/history?${query}`, { signal }),
     ];
     const [sessionRes, bucketRes] = await Promise.all(requests);
+    if (!sessionRes.ok && !bucketRes.ok) {
+      throw new Error('Failed to fetch cost history');
+    }
     let sessionHistory = {};
     let sessionTotals = {};
     let sessionModels = {};
@@ -1604,22 +1717,31 @@ function historySelectionKey(range, scope = 'chart') {
 }
 
 function historyRequestQuery(range, scope = 'chart') {
-  const normalized = normalizeChartRange(range || historyScopeWindow(scope).range);
-  if (normalized !== 'custom') {
-    const windowRange = presetHistoryWindow(normalized, new Date());
-    return new URLSearchParams({
-      range: normalized,
-      start: windowRange.start.toISOString(),
-      end: windowRange.end.toISOString(),
-    }).toString();
-  }
-  ensureHistoryWindow(scope);
-  const windowState = historyScopeWindow(scope);
+  const windowState = historyRequestWindow(range, scope);
   return new URLSearchParams({
-    range: normalized,
+    range: windowState.range,
     start: windowState.start,
     end: windowState.end,
   }).toString();
+}
+
+function historyRequestWindow(range, scope = 'chart', now = new Date()) {
+  const normalized = normalizeChartRange(range || historyScopeWindow(scope).range);
+  if (normalized !== 'custom') {
+    const windowRange = presetHistoryWindow(normalized, now);
+    return {
+      range: normalized,
+      start: windowRange.start.toISOString(),
+      end: windowRange.end.toISOString(),
+    };
+  }
+  ensureHistoryWindow(scope);
+  const windowState = historyScopeWindow(scope);
+  return {
+    range: normalized,
+    start: windowState.start,
+    end: windowState.end,
+  };
 }
 
 function platformCostHistoryRequestQuery(range, scope = 'platformCost') {
@@ -2356,7 +2478,7 @@ async function loadAnthropicModalChart(quotaName) {
     if (!Array.isArray(data) || data.length === 0) return;
 
     const colors = getThemeColors();
-    const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] || 0 }));
+    const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] ?? null }));
     const processed = processCappedDataWithGaps(rawData, range);
     const maxVal = Math.max(...data.map(d => d[quotaName] || 0), 0);
     let yMax = maxVal <= 0 ? 10 : maxVal < 5 ? 10 : Math.min(Math.max(Math.ceil((maxVal * 1.2) / 5) * 5, 10), 100);
@@ -2374,7 +2496,7 @@ async function loadAnthropicModalChart(quotaName) {
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
-          spanGaps: true,
+          spanGaps: false,
           segment: getSegmentStyle(processed.gapSegments, c.border)
         }; })()]
       },
@@ -2792,7 +2914,7 @@ async function loadCopilotModalChart(quotaName) {
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
-          spanGaps: true,
+          spanGaps: false,
           segment: getSegmentStyle(processed.gapSegments, c.border)
         }; })()]
       },
@@ -3421,7 +3543,7 @@ async function loadAntigravityModalChart(groupKey) {
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
           fill: true,
-          spanGaps: true,
+          spanGaps: false,
           segment: getSegmentStyle(processed.gapSegments, borderColor)
         }]
       },
@@ -3762,7 +3884,7 @@ async function loadCodexModalChart(quotaName) {
     if (!Array.isArray(data) || data.length === 0) return;
 
     const colors = getThemeColors();
-    const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] || 0 }));
+    const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] ?? null }));
     const processed = processCappedDataWithGaps(rawData, range);
     const maxVal = Math.max(...data.map(d => d[quotaName] || 0), 0);
     const yMax = maxVal <= 0 ? 10 : maxVal < 5 ? 10 : Math.min(Math.max(Math.ceil((maxVal * 1.2) / 5) * 5, 10), 100);
@@ -3780,7 +3902,7 @@ async function loadCodexModalChart(quotaName) {
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
-          spanGaps: true,
+          spanGaps: false,
           segment: getSegmentStyle(processed.gapSegments, c.border)
         }; })()]
       },
@@ -3852,6 +3974,15 @@ function formatDurationMins(durationMins) {
 
 function formatNumber(num) {
   return num.toLocaleString('en-US', { maximumFractionDigits: 1 });
+}
+
+function formatChartAxisNumber(num) {
+  const numeric = Number(num || 0);
+  if (Math.abs(numeric) < 10000) return formatNumber(numeric);
+  return new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(numeric);
 }
 
 function formatCurrencyUSD(num) {
@@ -5326,7 +5457,8 @@ function datasetsHaveNonZeroValue(datasets) {
 
 function datasetsHaveFiniteValue(datasets) {
   return (datasets || []).some((dataset) => (dataset.data || []).some((point) => {
-    const value = typeof point === 'number' ? point : Number(point && point.y);
+    if (point == null || (typeof point !== 'number' && point.y == null)) return false;
+    const value = typeof point === 'number' ? point : Number(point.y);
     return Number.isFinite(value);
   }));
 }
@@ -5416,8 +5548,8 @@ function graphRangeDurationMs(
   const validTimes = points
     .map(point => point && point.x instanceof Date ? point.x.getTime() : new Date(point && point.x).getTime())
     .filter(time => Number.isFinite(time) && time <= Date.now());
-  if (validTimes.length < 2) return durations['30d'];
-  return Math.max(hour, Math.max(...validTimes) - Math.min(...validTimes));
+  if (validTimes.length === 0) return durations['30d'];
+  return Math.max(hour, Math.max(Date.now(), ...validTimes) - Math.min(...validTimes));
 }
 
 function graphBucketIntervalMs(
@@ -5429,11 +5561,14 @@ function graphBucketIntervalMs(
 ) {
   const target = graphBucketTargetCount(mode);
   const duration = graphRangeDurationMs(range, points, windowStart, windowEnd);
-  const idealInterval = Math.max(1000, Math.ceil(duration / Math.max(1, target - 1)));
+  const pollInterval = typeof getPollIntervalMs === 'function' ? getPollIntervalMs() : 1000;
+  const minimumInterval = Math.max(1000, Math.min(duration, pollInterval));
+  const idealInterval = Math.max(minimumInterval, Math.ceil(duration / Math.max(1, target - 1)));
   const minCount = graphBucketMinCount(mode);
   const maxCount = graphBucketMaxCount(mode);
   const candidates = graphBucketNiceIntervals
-    .map(interval => ({ interval, count: Math.ceil(duration / interval) }))
+    .map(interval => ({ interval, count: Math.ceil(duration / interval) + 1 }))
+    .filter(candidate => candidate.interval >= minimumInterval)
     .filter(candidate => candidate.count >= minCount && candidate.count <= maxCount);
   if (candidates.length > 0) {
     candidates.sort((a, b) => {
@@ -5444,7 +5579,7 @@ function graphBucketIntervalMs(
     });
     return candidates[0].interval;
   }
-  return Math.ceil(idealInterval / 1000) * 1000;
+  return Math.max(minimumInterval, Math.ceil(idealInterval / 1000) * 1000);
 }
 
 function graphBucketCount(
@@ -5455,7 +5590,7 @@ function graphBucketCount(
   windowEnd = State.historyWindowEnd,
 ) {
   const intervalMs = graphBucketIntervalMs(range, mode, points, windowStart, windowEnd);
-  const count = Math.ceil(graphRangeDurationMs(range, points, windowStart, windowEnd) / intervalMs);
+  const count = Math.ceil(graphRangeDurationMs(range, points, windowStart, windowEnd) / intervalMs) + 1;
   return Math.max(1, Math.min(graphBucketMaxCount(mode), count));
 }
 
@@ -5493,7 +5628,7 @@ function graphBucketStart(date, range, mode = State.graphMode, intervalMs = grap
   if (Number.isNaN(source.getTime())) return null;
   if (intervalMs === 24 * 60 * 60 * 1000) {
     const bucket = new Date(source);
-    bucket.setHours(0, 0, 0, 0);
+    bucket.setUTCHours(0, 0, 0, 0);
     return bucket;
   }
   return new Date(Math.floor(source.getTime() / intervalMs) * intervalMs);
@@ -5522,7 +5657,7 @@ function graphBucketRange(
   let end;
   const selectedStart = Date.parse(windowStart);
   const selectedEnd = Date.parse(windowEnd);
-  if (rangeKey === 'custom' && Number.isFinite(selectedStart) && Number.isFinite(selectedEnd) && selectedEnd > selectedStart) {
+  if (rangeKey !== 'all' && Number.isFinite(selectedStart) && Number.isFinite(selectedEnd) && selectedEnd > selectedStart) {
     start = new Date(selectedStart);
     end = new Date(selectedEnd - 1);
   } else if (rangeKey === 'all' && validTimes.length > 0) {
@@ -5535,16 +5670,24 @@ function graphBucketRange(
   }
   const startBucket = graphBucketStart(start, range, mode, intervalMs) || start;
   const endBucket = graphBucketStart(end, range, mode, intervalMs) || end;
+  const visibleStart = start.getTime();
+  const visibleEnd = rangeKey !== 'all' && Number.isFinite(selectedEnd) && selectedEnd > visibleStart
+    ? selectedEnd
+    : end.getTime() + 1;
   const buckets = [];
   for (let time = startBucket.getTime(); time <= endBucket.getTime(); time += intervalMs) {
-    const periodStart = new Date(time);
-    const periodEnd = new Date(time + intervalMs);
+    const periodStartMs = Math.max(time, visibleStart);
+    const periodEndMs = Math.min(time + intervalMs, visibleEnd);
+    if (periodEndMs <= periodStartMs) continue;
+    const periodStart = new Date(periodStartMs);
+    const periodEnd = new Date(periodEndMs);
     buckets.push({
-      x: new Date(time + intervalMs / 2),
+      x: new Date(periodStartMs + (periodEndMs - periodStartMs) / 2),
       y: 0,
       count: 0,
       periodStart,
       periodEnd,
+      _bucketKey: new Date(time).toISOString(),
     });
     if (buckets.length >= maxCount) break;
   }
@@ -5564,28 +5707,47 @@ function formatPeriodTooltipTitle(point) {
   const startTime = start.toLocaleTimeString([], timeOptions);
   const endDate = end.toLocaleDateString([], dateOptions);
   const endTime = end.toLocaleTimeString([], timeOptions);
-  return sameDay
+  const title = sameDay
     ? `${startDate}, ${startTime} - ${endTime}`
     : `${startDate}, ${startTime} - ${endDate}, ${endTime}`;
+  return point.raw.resetObserved ? `${title} (reset observed)` : title;
 }
 
-function aggregateDatasetForBuckets(dataset, range, mode = State.graphMode) {
+function aggregateDatasetForBuckets(
+  dataset,
+  range,
+  mode = State.graphMode,
+  windowStart = State.historyWindowStart,
+  windowEnd = State.historyWindowEnd,
+) {
   const strategy = dataset._barStrategy || 'delta';
+  const preserveMissingCoverage = dataset._barStrategy == null;
   const points = (dataset.data || [])
     .filter(point => point && point.x != null && point.y != null && Number.isFinite(Number(point.y)))
     .map(point => ({ x: point.x instanceof Date ? point.x : new Date(point.x), y: Number(point.y) }))
     .filter(point => !Number.isNaN(point.x.getTime()))
     .sort((a, b) => a.x.getTime() - b.x.getTime());
-  const intervalMs = graphBucketIntervalMs(range, mode, points);
-  const buckets = new Map(graphBucketRange(range, points, mode).map(bucket => [bucket.periodStart.toISOString(), bucket]));
-  let previous = null;
+  const intervalMs = graphBucketIntervalMs(range, mode, points, windowStart, windowEnd);
+  const continuityWindowMs = Math.max(intervalMs, getPollIntervalMs() * 2.5);
+  const buckets = new Map(graphBucketRange(range, points, mode, windowStart, windowEnd)
+    .map(bucket => [bucket._bucketKey || bucket.periodStart.toISOString(), bucket]));
+  let previous = strategy === 'delta' && Number.isFinite(Number(dataset._deltaBaseline))
+    ? Number(dataset._deltaBaseline)
+    : null;
+  let previousTime = null;
   points.forEach((point) => {
     const bucketStart = graphBucketStart(point.x, range, mode, intervalMs);
     if (!bucketStart) return;
     let value = point.y;
+    let valueIsKnown = true;
+    let resetObserved = false;
     if (strategy === 'delta') {
-      value = previous == null ? 0 : Math.max(0, point.y - previous);
+      valueIsKnown = previous != null
+        && (!preserveMissingCoverage || point.x.getTime() - previousTime <= continuityWindowMs);
+      resetObserved = preserveMissingCoverage && valueIsKnown && point.y < previous;
+      value = valueIsKnown ? (resetObserved ? point.y : Math.max(0, point.y - previous)) : 0;
       previous = point.y;
+      previousTime = point.x.getTime();
     }
     const key = bucketStart.toISOString();
     const existing = buckets.get(key) || {
@@ -5597,56 +5759,72 @@ function aggregateDatasetForBuckets(dataset, range, mode = State.graphMode) {
     };
     existing.y += value;
     existing.count += 1;
+    existing.knownCount = Number(existing.knownCount || 0) + (valueIsKnown ? 1 : 0);
+    existing.resetObserved = Boolean(existing.resetObserved || resetObserved);
     buckets.set(key, existing);
   });
   return [...buckets.values()]
     .sort((a, b) => a.x.getTime() - b.x.getTime())
-    .map(bucket => ({
-      x: bucket.x,
-      y: strategy === 'average' && bucket.count > 0 ? bucket.y / bucket.count : bucket.y,
-      periodStart: bucket.periodStart,
-      periodEnd: bucket.periodEnd,
-    }));
+    .map((bucket) => {
+      let value = bucket.y;
+      if (preserveMissingCoverage && Number(bucket.knownCount || 0) === 0) {
+        value = null;
+      } else if (strategy === 'average' && bucket.count > 0) {
+        value = bucket.y / bucket.count;
+      }
+      return {
+        x: bucket.x,
+        y: value,
+        periodStart: bucket.periodStart,
+        periodEnd: bucket.periodEnd,
+        resetObserved: Boolean(bucket.resetObserved),
+      };
+    });
 }
 
-function downsampleDatasetForCumulative(dataset, range, mode = 'bucket') {
-  const points = (dataset.data || [])
-    .filter(point => point && point.x != null && point.y != null && Number.isFinite(Number(point.y)))
-    .map(point => ({ ...point, x: point.x instanceof Date ? point.x : new Date(point.x), y: Number(point.y) }))
-    .filter(point => !Number.isNaN(point.x.getTime()))
-    .sort((a, b) => a.x.getTime() - b.x.getTime());
-  return downsamplePointSeriesForCumulative(points, range, mode);
+function graphLineStyle(periodMode) {
+  return {
+    fill: !periodMode,
+    tension: periodMode ? 0.25 : 0.4,
+    borderWidth: 2,
+    pointRadius: 2,
+    pointHoverRadius: 4,
+    spanGaps: false,
+  };
 }
 
-function applyGraphModeToDatasets(datasets, range, mode = State.graphMode) {
+function applyGraphModeToDatasets(
+  datasets,
+  range,
+  mode = State.graphMode,
+  windowStart = State.historyWindowStart,
+  windowEnd = State.historyWindowEnd,
+) {
   const graphMode = normalizeGraphMode(mode);
   return (datasets || []).map((dataset) => {
     if (!isPeriodGraphMode(graphMode)) {
-      const sampledData = downsampleDatasetForCumulative(dataset, range);
       return {
         ...dataset,
         type: 'line',
-        data: sampledData,
+        data: dataset.data || [],
+        ...graphLineStyle(false),
         fill: dataset.fill !== undefined ? dataset.fill : true,
         tension: dataset.tension !== undefined ? dataset.tension : 0.4,
-        pointRadius: 2,
+        pointRadius: dataset.pointRadius !== undefined ? dataset.pointRadius : 2,
         pointHoverRadius: dataset.pointHoverRadius !== undefined ? dataset.pointHoverRadius : 4,
       };
     }
     const color = dataset.borderColor || dataset.backgroundColor || '#14B8A6';
-    const bucketData = aggregateDatasetForBuckets(dataset, range, graphMode);
+    const bucketData = aggregateDatasetForBuckets(dataset, range, graphMode, windowStart, windowEnd);
     return {
       ...dataset,
       type: 'line',
       data: bucketData,
-      fill: false,
-      tension: 0.25,
-      borderWidth: 2,
+      ...graphLineStyle(true),
       borderColor: color,
       backgroundColor: dataset.backgroundColor || color,
-      pointRadius: 2,
-      pointHoverRadius: 4,
-      spanGaps: false,
+      pointRadius: bucketData.map(point => point.resetObserved ? 5 : 2),
+      pointBorderWidth: bucketData.map(point => point.resetObserved ? 2 : 1),
       segment: undefined,
     };
   });
@@ -5730,7 +5908,7 @@ function renderUsageSummary(datasets, range, mode = State.graphMode) {
 
   const graphMode = normalizeGraphMode(mode);
   const periodMode = isPeriodGraphMode(graphMode);
-  const countLabel = periodMode ? 'Periods' : 'Samples';
+  const countLabel = periodMode ? 'Periods' : 'Observed Samples';
   const latestLabel = periodMode ? 'Latest Period Used' : 'Current Usage';
   const weeklyAverageLabel = periodMode ? 'Avg Weekly Period' : 'Avg Weekly All-Model';
   const fiveHourAverageLabel = periodMode ? 'Avg 5-Hour Period' : 'Avg 5-Hour Usage';
@@ -5812,12 +5990,18 @@ function applyChartGraphMode(chart, range, mode = State.graphMode, bounds = usag
       chart.options.scales.x.min = bounds.min;
       chart.options.scales.x.max = bounds.max;
     } else if (isPeriodGraphMode(graphMode)) {
-      const datasets = chart.data?.datasets || [];
-      const firstDataset = datasets.find(dataset => Array.isArray(dataset.data) && dataset.data.length > 0);
-      const first = firstDataset?.data?.[0];
-      const last = firstDataset?.data?.[firstDataset.data.length - 1];
-      chart.options.scales.x.min = first?.periodStart;
-      chart.options.scales.x.max = last?.periodEnd;
+      const periods = (chart.data?.datasets || [])
+        .flatMap(dataset => Array.isArray(dataset.data) ? dataset.data : [])
+        .filter(point => point?.periodStart && point?.periodEnd);
+      const starts = periods.map(point => new Date(point.periodStart).getTime()).filter(Number.isFinite);
+      const ends = periods.map(point => new Date(point.periodEnd).getTime()).filter(Number.isFinite);
+      if (starts.length > 0 && ends.length > 0) {
+        chart.options.scales.x.min = Math.min(...starts);
+        chart.options.scales.x.max = Math.max(...ends);
+      } else {
+        delete chart.options.scales.x.min;
+        delete chart.options.scales.x.max;
+      }
     } else {
       delete chart.options.scales.x.min;
       delete chart.options.scales.x.max;
@@ -5825,18 +6009,74 @@ function applyChartGraphMode(chart, range, mode = State.graphMode, bounds = usag
   }
 }
 
+function renderUsageCoverageNote(datasets) {
+  const note = document.getElementById('usage-chart-coverage-note');
+  if (!note) return;
+  const hasCollectionGap = (datasets || []).some(dataset => (dataset.data || [])
+    .some(point => point?._collectionGap));
+  note.hidden = !hasCollectionGap;
+  note.textContent = hasCollectionGap ? 'Blank spans mean no samples were collected.' : '';
+}
+
+function renderUsageAccessibleSummary(datasets, range, mode = State.graphMode) {
+  const summary = document.getElementById('usage-chart-accessible-summary');
+  if (!summary) return;
+  const series = (datasets || []).map((dataset) => {
+    const points = (dataset.data || [])
+      .filter(point => point?.y != null && Number.isFinite(Number(point.y)))
+      .map(point => ({
+        value: Number(point.y),
+        time: new Date(point.periodStart || point.x),
+      }))
+      .filter(point => !Number.isNaN(point.time.getTime()))
+      .sort((left, right) => left.time.getTime() - right.time.getTime());
+    if (points.length === 0) return null;
+    const values = points.map(point => point.value);
+    const formatValue = (value) => {
+      if (dataset._accessibleValueType === 'totalCostUsd') return formatCurrencyUSD(value);
+      if (dataset._accessibleValueType === 'tokenPerCall') return `${formatNumber(value)} tokens per call`;
+      if (dataset._accessibleValueType === 'requestCount') return `${formatNumber(value)} requests`;
+      if (dataset._accessibleValueType === 'accumulatedTokens') return `${formatNumber(value)} tokens`;
+      return `${formatNumber(value)}%`;
+    };
+    return `${dataset.label || 'Series'}: ${formatValue(points[0].value)} first, `
+      + `${formatValue(points[points.length - 1].value)} last, `
+      + `${formatValue(Math.min(...values))} minimum, ${formatValue(Math.max(...values))} maximum`;
+  }).filter(Boolean);
+  const gapCount = (datasets || []).reduce((total, dataset) => total
+    + (dataset.data || []).filter(point => point?._collectionGap).length, 0);
+  const resetCount = (datasets || []).reduce((total, dataset) => total
+    + (dataset.data || []).filter(point => point?.resetObserved).length, 0);
+  const modeLabel = isPeriodGraphMode(mode) ? 'per period' : 'cumulative';
+  summary.textContent = series.length === 0
+    ? `No usage data for ${platformCostRangeLabel(range)} in ${modeLabel} mode.`
+    : `Usage chart for ${platformCostRangeLabel(range)} in ${modeLabel} mode. ${series.join('. ')}. `
+      + `${formatNumber(gapCount)} collection gaps and ${formatNumber(resetCount)} observed resets.`;
+}
+
 function setMainChartDatasets(datasets, range, options = {}) {
   if (!State.chart) return;
   const mode = normalizeGraphMode(options.mode || State.graphMode);
-  const chartDatasets = applyGraphModeToDatasets(datasets, range, mode);
+  const selectedWindowStart = options.windowStart
+    || (options.xBounds ? new Date(options.xBounds.min).toISOString() : State.historyWindowStart);
+  const selectedWindowEnd = options.windowEnd
+    || (options.xBounds ? new Date(options.xBounds.max).toISOString() : State.historyWindowEnd);
+  const chartDatasets = applyGraphModeToDatasets(
+    datasets,
+    range,
+    mode,
+    selectedWindowStart,
+    selectedWindowEnd,
+  );
   const cap = options.cap !== undefined ? options.cap : !isPeriodGraphMode(mode);
   const hasPeriodPoints = isPeriodGraphMode(mode)
-    && chartDatasets.some(dataset => Array.isArray(dataset.data) && dataset.data.length > 0);
+    && datasetsHaveFiniteValue(chartDatasets);
   if (!datasetsHaveFiniteValue(chartDatasets) && !hasPeriodPoints) {
     const existingDatasets = State.chart.data?.datasets || [];
     const canPreserveExisting = options.preserveExistingOnEmpty !== false
       && State.currentChartProvider === getCurrentProvider()
       && State.currentChartRange === range
+      && State.currentChartMode === mode
       && datasetsHaveNonZeroValue(existingDatasets);
     if (canPreserveExisting) {
       setDashboardFreshness({ stale: true });
@@ -5844,6 +6084,8 @@ function setMainChartDatasets(datasets, range, options = {}) {
       return;
     }
     renderUsageSummary([], range, mode);
+    renderUsageCoverageNote([]);
+    renderUsageAccessibleSummary([], range, mode);
     setChartEmptyState('usage-chart', true, options.emptyMessage || noUsageMessage(range));
     updateChartWhenChanged('mainChartRenderSignature', {
       provider: getCurrentProvider(),
@@ -5856,12 +6098,18 @@ function setMainChartDatasets(datasets, range, options = {}) {
       State.chart.data.datasets = [];
       State.chart.update('none');
     });
+    State.currentChartProvider = getCurrentProvider();
+    State.currentChartRange = range;
+    State.currentChartMode = mode;
     return;
   }
   setChartEmptyState('usage-chart', false);
-  renderUsageSummary(chartDatasets, range, mode);
+  renderUsageCoverageNote(datasets);
+  const summaryDatasets = isPeriodGraphMode(mode) ? chartDatasets : datasets;
+  renderUsageSummary(summaryDatasets, range, mode);
+  renderUsageAccessibleSummary(chartDatasets, range, mode);
   const nextYMax = computeYMax(chartDatasets, State.chart, { cap });
-  const xBounds = usageChartTimeBounds(range);
+  const xBounds = options.xBounds || usageChartTimeBounds(range);
   const renderState = {
     provider: getCurrentProvider(),
     range,
@@ -5883,6 +6131,9 @@ function setMainChartDatasets(datasets, range, options = {}) {
   });
   State.currentChartProvider = getCurrentProvider();
   State.currentChartRange = range;
+  State.currentChartMode = mode;
+  State.currentChartWindowStart = selectedWindowStart;
+  State.currentChartWindowEnd = selectedWindowEnd;
   if (State.currentChartProvider && State.currentChartProvider !== 'api-integrations' && State.currentChartProvider !== 'both') {
     updateCachedProviderData('history', State.currentChartProvider, historySelectionKey(range), { chartDatasets: datasets });
   }
@@ -6127,18 +6378,16 @@ function usageLineDataset(label, hiddenKey, rawData, color, range) {
   const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
   const border = color?.border || color || '#0D9488';
   const background = color?.bg || `${border}15`;
+  const hideDensePoints = rawData.length > 100;
   return {
     label,
     data,
     borderColor: border,
     backgroundColor: background,
-    fill: true,
-    tension: 0.4,
-    borderWidth: 2,
-    pointRadius: pointRadii,
-    pointHoverRadius: 4,
+    ...graphLineStyle(false),
+    fill: gapSegments.size === 0,
+    pointRadius: hideDensePoints ? pointRadii.map(() => 0) : pointRadii,
     hidden: State.hiddenQuotas.has(hiddenKey),
-    spanGaps: true,
     segment: getSegmentStyle(gapSegments, border),
   };
 }
@@ -6156,7 +6405,7 @@ function buildFlatUsageDatasets(rows, range, provider, displayNames, colorMap, f
   let fallbackIndex = 0;
   return sortedKeys.map((key) => {
     const color = colorMap[key] || fallbackColors[fallbackIndex++ % fallbackColors.length];
-    const rawData = rows.map((row) => ({ x: new Date(row.capturedAt), y: row[key] ?? 0 }));
+    const rawData = rows.map((row) => ({ x: new Date(row.capturedAt), y: row[key] ?? null }));
     return usageLineDataset(displayNames[key] || key, key, rawData, color, range);
   });
 }
@@ -6188,17 +6437,16 @@ function buildProviderHistoryDatasets(provider, range, data) {
     return buildFlatUsageDatasets(rows, range, provider, geminiDisplayNames, geminiChartColorMap, geminiChartColorFallback);
   }
   if (provider === 'openrouter') {
-    const displayNames = { usage: 'Total Usage', usageDaily: 'Daily Usage', percent: 'Usage %' };
+    const displayNames = { percent: 'Usage %' };
     const colors = {
-      usage: { border: '#0D9488', bg: 'rgba(13, 148, 136, 0.06)' },
-      usageDaily: { border: '#F59E0B', bg: 'rgba(245, 158, 11, 0.06)' },
       percent: { border: '#3B82F6', bg: 'rgba(59, 130, 246, 0.06)' },
     };
     const fallbacks = [
       { border: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.06)' },
       { border: '#EC4899', bg: 'rgba(236, 72, 153, 0.06)' },
     ];
-    return buildFlatUsageDatasets(rows, range, provider, displayNames, colors, fallbacks);
+    const percentageRows = rows.map(row => ({ capturedAt: row.capturedAt, percent: row.percent }));
+    return buildFlatUsageDatasets(percentageRows, range, provider, displayNames, colors, fallbacks);
   }
   if (provider === 'copilot' || provider === 'cursor') {
     const names = provider === 'copilot' ? copilotDisplayNames : cursorDisplayNames;
@@ -6213,7 +6461,7 @@ function buildProviderHistoryDatasets(provider, range, data) {
       const rawData = rows.map((row) => {
         const quota = (row.quotas || []).find((candidate) => candidate.name === key);
         const value = provider === 'copilot' ? quota?.usagePercent : quota?.utilization;
-        return { x: new Date(row.capturedAt), y: value ?? 0 };
+        return { x: new Date(row.capturedAt), y: value ?? null };
       });
       return usageLineDataset(names[key] || key, key, rawData, color, range);
     });
@@ -6259,9 +6507,20 @@ function applyUsageGraphJob(job, payload, options = {}) {
     applyProviderHistoryPayload(job.provider, job.range, payload.data, payload.apiIntegrationsHistory || null);
   } else {
     if (!State.chart) initChart();
-    setMainChartDatasets(payload.chartDatasets || [], job.range, { preserveExistingOnEmpty: true });
+    const windowStart = payload.windowStart || job.windowStart;
+    const windowEnd = payload.windowEnd || job.windowEnd;
+    const min = Date.parse(windowStart || '');
+    const max = Date.parse(windowEnd || '');
+    setMainChartDatasets(payload.chartDatasets || [], job.range, {
+      preserveExistingOnEmpty: true,
+      xBounds: Number.isFinite(min) && Number.isFinite(max) && min < max ? { min, max } : null,
+      windowStart,
+      windowEnd,
+    });
     if (supportsPlatformCost(job.provider)) renderPlatformCostChartForSelectedRange(job.provider);
   }
+  setGraphHistoryRangeError('chart', '');
+  setUsageChartRefreshMessage('');
   setDashboardFreshness({ stale: Boolean(options.stale), ts: options.ts });
 }
 
@@ -6284,7 +6543,14 @@ async function runUsageGraphRefreshJob(job, signal) {
       const cachedCostHistory = State.apiIntegrationsVisibility?.dashboard !== false
         ? getStaleProviderHistory(job.provider, job.range, job.selectionKey, job.accountKey)?.apiIntegrationsHistory || null
         : null;
-      const primaryPayload = { data, apiIntegrationsHistory: cachedCostHistory, chartDatasets: null, usesArchivedData };
+      const primaryPayload = {
+        data,
+        apiIntegrationsHistory: cachedCostHistory,
+        chartDatasets: null,
+        usesArchivedData,
+        windowStart: job.windowStart,
+        windowEnd: job.windowEnd,
+      };
       setCachedProviderData('history', job.provider, job.selectionKey, primaryPayload, job.accountKey);
       applyUsageGraphJob(job, primaryPayload);
 
@@ -6302,7 +6568,14 @@ async function runUsageGraphRefreshJob(job, signal) {
       }
       if (signal.aborted || !apiIntegrationsHistory) return;
 
-      const combinedPayload = { data, apiIntegrationsHistory, chartDatasets: null, usesArchivedData };
+      const combinedPayload = {
+        data,
+        apiIntegrationsHistory,
+        chartDatasets: null,
+        usesArchivedData,
+        windowStart: job.windowStart,
+        windowEnd: job.windowEnd,
+      };
       setCachedProviderData('history', job.provider, job.selectionKey, combinedPayload, job.accountKey);
       applyUsageGraphJob(job, combinedPayload);
       return;
@@ -6313,7 +6586,14 @@ async function runUsageGraphRefreshJob(job, signal) {
   const chartDatasets = job.provider === 'api-integrations' || job.provider === 'both'
     ? null
     : buildProviderHistoryDatasets(job.provider, job.range, data);
-  const payload = { data, apiIntegrationsHistory, chartDatasets, usesArchivedData };
+  const payload = {
+    data,
+    apiIntegrationsHistory,
+    chartDatasets,
+    usesArchivedData,
+    windowStart: job.windowStart,
+    windowEnd: job.windowEnd,
+  };
   setCachedProviderData('history', job.provider, job.selectionKey, payload, job.accountKey);
   applyUsageGraphJob(job, payload);
 }
@@ -6321,6 +6601,7 @@ async function runUsageGraphRefreshJob(job, signal) {
 function createUsageGraphRefreshJob(range, provider = getCurrentProvider(), accountKey = usageGraphAccountKey(provider)) {
   range = normalizeChartRange(range);
   const selectionKey = historySelectionKey(range);
+  const requestWindow = historyRequestWindow(range);
   const job = {
     key: `usage:${provider}:${accountKey}:${selectionKey}`,
     kind: 'usage',
@@ -6329,7 +6610,9 @@ function createUsageGraphRefreshJob(range, provider = getCurrentProvider(), acco
     accountKey,
     range,
     selectionKey,
-    query: historyRequestQuery(range),
+    windowStart: requestWindow.start,
+    windowEnd: requestWindow.end,
+    query: new URLSearchParams(requestWindow).toString(),
     label: `${platformCostRangeLabel(range)} usage`,
   };
   job.run = (signal) => runUsageGraphRefreshJob(job, signal);
@@ -7533,7 +7816,9 @@ function platformCostLoadingLabel(range) {
 function setPlatformCostRangeControlsLoading(range, loading) {
   const selectedRange = selectedPlatformCostRange();
   document.querySelectorAll('.platform-cost-range-btn').forEach((button) => {
-    button.classList.toggle('active', button.dataset.range === selectedRange);
+    const active = button.dataset.range === selectedRange;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
     const isCurrentLoad = Boolean(loading && range === selectedRange);
     button.disabled = isCurrentLoad;
     button.setAttribute('aria-busy', isCurrentLoad ? 'true' : 'false');
@@ -7641,7 +7926,9 @@ function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
 function setPlatformCostBreakdownRangeControlsLoading(range, loading) {
   const selectedRange = selectedPlatformCostBreakdownRange();
   document.querySelectorAll('.platform-cost-breakdown-range-btn').forEach((button) => {
-    button.classList.toggle('active', button.dataset.range === selectedRange);
+    const active = button.dataset.range === selectedRange;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
     const isCurrentLoad = Boolean(loading && range === selectedRange);
     button.disabled = isCurrentLoad;
     button.setAttribute('aria-busy', isCurrentLoad ? 'true' : 'false');
@@ -7650,7 +7937,9 @@ function setPlatformCostBreakdownRangeControlsLoading(range, loading) {
 
 function bindPlatformCostBreakdownRangeControls(range) {
   document.querySelectorAll('.platform-cost-breakdown-range-btn').forEach((button) => {
-    button.classList.toggle('active', button.dataset.range === range);
+    const active = button.dataset.range === range;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
 }
 
@@ -7771,6 +8060,33 @@ function renderPlatformCostBreakdownTable(rows, tableHead, tbody) {
   </tr>`).join('');
 }
 
+function pointSeriesHaveUsage(...series) {
+  return series.some(points => (points || []).some(point => Number(point?.y || 0) > 0));
+}
+
+function renderPlatformCostAccessibleSummary(costPoints, tokenPoints, range, mode) {
+  const summary = document.getElementById('platform-cost-chart-accessible-summary');
+  if (!summary) return;
+  const finiteCosts = (costPoints || []).filter(point => point?.y != null && Number.isFinite(Number(point.y)));
+  const finiteTokens = (tokenPoints || []).filter(point => point?.y != null && Number.isFinite(Number(point.y)));
+  if (finiteCosts.length === 0 && finiteTokens.length === 0) {
+    summary.textContent = `No cost data for ${platformCostRangeLabel(range)}.`;
+    return;
+  }
+  const costValues = finiteCosts.map(point => Number(point.y));
+  const tokenValues = finiteTokens.map(point => Number(point.y));
+  const minCost = costValues.length > 0 ? Math.min(...costValues) : 0;
+  const maxCost = costValues.length > 0 ? Math.max(...costValues) : 0;
+  const minTokens = tokenValues.length > 0 ? Math.min(...tokenValues) : 0;
+  const maxTokens = tokenValues.length > 0 ? Math.max(...tokenValues) : 0;
+  const modeLabel = isPeriodGraphMode(mode) ? 'per period' : 'cumulative';
+  summary.textContent = `Cost chart for ${platformCostRangeLabel(range)} in ${modeLabel} mode. `
+    + `Cost first ${formatCurrencyUSD(costValues[0] || 0)}, last ${formatCurrencyUSD(costValues[costValues.length - 1] || 0)}, `
+    + `minimum ${formatCurrencyUSD(minCost)}, maximum ${formatCurrencyUSD(maxCost)}. `
+    + `Tokens first ${formatNumber(tokenValues[0] || 0)}, last ${formatNumber(tokenValues[tokenValues.length - 1] || 0)}, `
+    + `minimum ${formatNumber(minTokens)}, maximum ${formatNumber(maxTokens)}.`;
+}
+
 function renderPlatformCostChart(provider = getCurrentProvider(), range = State.platformCostRange || DEFAULT_CHART_RANGE) {
   const canvas = document.getElementById('platform-cost-chart');
   if (!canvas || typeof Chart === 'undefined' || !supportsPlatformCost(provider)) return;
@@ -7803,6 +8119,12 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   }
   const cumulative = buildPlatformCumulativeSeries(rows, range);
   const bucketed = buildPlatformBucketSeries(rows, range, graphMode);
+  const costPeriodBounds = periodMode && bucketed.cost.length > 0
+    ? {
+      min: bucketed.cost[0].periodStart,
+      max: bucketed.cost[bucketed.cost.length - 1].periodEnd,
+    }
+    : null;
   const timeScale = periodMode
     ? {
       unit: graphBucketTimeUnit(
@@ -7820,7 +8142,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     || Number(row.requestCount || 0) > 0)
     || hasPlatformCostUsage(rangeTotals);
   const hasPeriodCostPoints = periodMode
-    && ((bucketed.cost || []).length > 0 || (bucketed.tokens || []).length > 0);
+    && pointSeriesHaveUsage(bucketed.cost, bucketed.tokens);
   if (subtitle) {
     subtitle.textContent = hasUsageInRange || hasPeriodCostPoints
       ? (periodMode
@@ -7832,6 +8154,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   setPlatformCostRangeControlsLoading(range, false);
   updatePlatformCostSummaryForRange(provider, range, rows);
   if (!hasUsageInRange && !hasPeriodCostPoints) {
+    renderPlatformCostAccessibleSummary([], [], range, graphMode);
     setChartEmptyState('platform-cost-chart', true, noUsageMessage(range));
     if (State.platformCostChart) {
       updateChartWhenChanged('platformCostChartRenderSignature', {
@@ -7862,6 +8185,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const yMaxTokens = niceAxisMax(activeMaxTokens * 1.18);
   const costPoints = periodMode ? bucketed.cost : cumulative.cost;
   const tokenPoints = periodMode ? bucketed.tokens : cumulative.tokens;
+  renderPlatformCostAccessibleSummary(costPoints, tokenPoints, range, graphMode);
   const renderState = {
     provider,
     range,
@@ -7885,12 +8209,8 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           backgroundColor: costFill,
           hoverBackgroundColor: costFill,
           hoverBorderColor: costColor,
-          fill: !periodMode,
-          tension: periodMode ? 0.25 : 0.4,
-          borderWidth: 2,
+          ...graphLineStyle(periodMode),
           hoverBorderWidth: 2,
-          pointRadius: 2,
-          pointHoverRadius: 4,
         },
         {
           type: chartType,
@@ -7901,12 +8221,8 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           backgroundColor: tokensFill,
           hoverBackgroundColor: tokensFill,
           hoverBorderColor: tokensColor,
-          fill: !periodMode,
-          tension: periodMode ? 0.25 : 0.4,
-          borderWidth: 2,
+          ...graphLineStyle(periodMode),
           hoverBorderWidth: 2,
-          pointRadius: 2,
-          pointHoverRadius: 4,
         },
       ],
     };
@@ -7955,8 +8271,8 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
         x: {
           type: 'time',
           offset: false,
-          min: costTimeBounds?.min ?? (periodMode && bucketed.cost.length > 0 ? bucketed.cost[0].periodStart : undefined),
-          max: costTimeBounds?.max ?? (periodMode && bucketed.cost.length > 0 ? bucketed.cost[bucketed.cost.length - 1].periodEnd : undefined),
+          min: costTimeBounds?.min ?? costPeriodBounds?.min,
+          max: costTimeBounds?.max ?? costPeriodBounds?.max,
           time: timeScale,
           grid: { color: colors.grid, drawBorder: false },
           ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' },
@@ -7972,7 +8288,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           max: yMaxTokens,
           position: 'right',
           grid: { drawOnChartArea: false, color: colors.grid, drawBorder: false },
-          ticks: { color: colors.text, callback: value => formatNumber(Math.round(Number(value || 0))) },
+          ticks: { color: colors.text, callback: value => formatChartAxisNumber(Number(value || 0)) },
         },
       },
     };
@@ -7995,7 +8311,9 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
 function bindPlatformCostRangeControls(range) {
   setupPlatformCostChartModeSelector();
   document.querySelectorAll('.platform-cost-range-btn').forEach((button) => {
-    button.classList.toggle('active', button.dataset.range === range);
+    const active = button.dataset.range === range;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
 }
 
@@ -8067,6 +8385,11 @@ function downsamplePointSeriesForCumulative(
 
   const buckets = graphBucketRange(range, cleanPoints, mode, windowStart, windowEnd);
   if (buckets.length === 0) return cleanPoints;
+  const selectedStart = String(range || '').toLowerCase() === 'custom' ? Date.parse(windowStart) : NaN;
+  const selectedEnd = String(range || '').toLowerCase() === 'custom' ? Date.parse(windowEnd) : NaN;
+  const clampToSelectedWindow = Number.isFinite(selectedStart)
+    && Number.isFinite(selectedEnd)
+    && selectedEnd > selectedStart;
 
   const sampled = [];
   let pointIndex = 0;
@@ -8077,9 +8400,12 @@ function downsamplePointSeriesForCumulative(
       pointIndex += 1;
     }
     if (!latestPoint) return;
+    const sampledTime = clampToSelectedWindow
+      ? Math.max(selectedStart, Math.min(selectedEnd - 1, bucket.x.getTime()))
+      : bucket.x.getTime();
     sampled.push({
       ...latestPoint,
-      x: bucket.x,
+      x: new Date(sampledTime),
       y: latestPoint.y,
       periodStart: bucket.periodStart,
       periodEnd: bucket.periodEnd,
@@ -8090,7 +8416,49 @@ function downsamplePointSeriesForCumulative(
 }
 
 function processCappedDataWithGaps(dataPoints, range = '6h') {
-  return processDataWithGaps(downsamplePointSeriesForCumulative(dataPoints, range), range);
+  const normalized = [...(dataPoints || [])]
+    .filter(point => point && point.x != null)
+    .map(point => ({
+      ...point,
+      x: point.x instanceof Date ? point.x : new Date(point.x),
+      y: point.y == null ? null : Number(point.y),
+    }))
+    .filter(point => !Number.isNaN(point.x.getTime()) && (point.y == null || Number.isFinite(point.y)))
+    .sort((a, b) => a.x.getTime() - b.x.getTime());
+  const points = normalized.filter(point => point.y != null);
+  if (points.length <= graphBucketMaxCount('bucket')) return processDataWithGaps(normalized, range);
+
+  const intervalMs = graphBucketIntervalMs(range, 'bucket', points);
+  const sampled = [];
+  let latestInBucket = null;
+  let activeBucketTime = null;
+  points.forEach((point) => {
+    const bucket = graphBucketStart(point.x, range, 'bucket', intervalMs);
+    const bucketTime = bucket?.getTime();
+    if (!Number.isFinite(bucketTime)) return;
+    if (activeBucketTime != null && bucketTime !== activeBucketTime && latestInBucket) {
+      sampled.push(latestInBucket);
+    }
+    activeBucketTime = bucketTime;
+    latestInBucket = point;
+  });
+  if (latestInBucket) sampled.push(latestInBucket);
+  if (sampled[0]?.x.getTime() !== points[0].x.getTime()) sampled.unshift(points[0]);
+  const lastPoint = points[points.length - 1];
+  if (sampled[sampled.length - 1]?.x.getTime() !== lastPoint.x.getTime()) sampled.push(lastPoint);
+  let insideMissingRun = false;
+  normalized.forEach((point) => {
+    if (point.y != null) {
+      insideMissingRun = false;
+      return;
+    }
+    if (!insideMissingRun) sampled.push(point);
+    insideMissingRun = true;
+  });
+  const deduplicated = [...new Map(sampled
+    .sort((a, b) => a.x.getTime() - b.x.getTime())
+    .map(point => [point.x.getTime(), point])).values()];
+  return processDataWithGaps(deduplicated, range);
 }
 
 function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h', mode = State.platformCostGraphMode) {
@@ -8111,7 +8479,7 @@ function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h'
     mode,
     State.platformCostWindowStart,
     State.platformCostWindowEnd,
-  ).map(bucket => [bucket.periodStart.toISOString(), {
+  ).map(bucket => [bucket._bucketKey || bucket.periodStart.toISOString(), {
     ...bucket,
     cost: 0,
     tokens: 0,
@@ -8290,8 +8658,10 @@ function platformCostJobIsSelected(job) {
 }
 
 async function runPlatformCostRefreshJob(job, signal) {
-  const payload = await fetchPlatformCostPayload(job.provider, job.range, signal, job.scope);
+  const payload = await fetchPlatformCostPayload(job.provider, job.range, signal, job.scope, job.query);
   if (signal.aborted) return;
+  payload.windowStart = job.windowStart;
+  payload.windowEnd = job.windowEnd;
 
   setCachedPlatformCostHistory(job.provider, job.range, payload, job.scope);
   if (job.range !== 'custom') {
@@ -8300,10 +8670,13 @@ async function runPlatformCostRefreshJob(job, signal) {
   }
   if (!platformCostJobIsSelected(job)) return;
 
+  setGraphHistoryRangeError(job.scope, '');
   if (payload.usesArchivedData) noteArchivedHistorySelection(job.range, job.scope);
   if (job.scope === 'platformCostBreakdown') {
     State.platformCostBreakdownSessionModels = payload.sessionModels || {};
     State.platformCostBreakdownHistoryRange = job.range;
+    State.platformCostBreakdownHistoryWindowStart = job.windowStart;
+    State.platformCostBreakdownHistoryWindowEnd = job.windowEnd;
     renderPlatformCostBreakdown(job.provider);
   } else {
     applyPlatformCostHistoryPayload(job.range, payload);
@@ -8315,6 +8688,7 @@ async function runPlatformCostRefreshJob(job, signal) {
 function createPlatformCostRefreshJob(range, provider, scope = 'platformCost') {
   range = normalizePlatformCostRange(range);
   const selectionKey = platformCostRefreshSelectionKey(range, scope);
+  const requestWindow = historyRequestWindow(range, scope);
   const graphName = scope === 'platformCostBreakdown' ? 'cost breakdown' : 'cost';
   const job = {
     key: `cost:${provider || ''}:${scope}:${selectionKey}`,
@@ -8323,6 +8697,9 @@ function createPlatformCostRefreshJob(range, provider, scope = 'platformCost') {
     provider,
     range,
     selectionKey,
+    windowStart: requestWindow.start,
+    windowEnd: requestWindow.end,
+    query: new URLSearchParams(requestWindow).toString(),
     label: `${platformCostRangeLabel(range)} ${graphName}`,
   };
   job.run = (signal) => runPlatformCostRefreshJob(job, signal);
@@ -8485,10 +8862,17 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
         y: value,
       };
     });
-    const processed = processDataWithGaps(rawData, range);
+    const processed = {
+      data: rawData,
+      gapSegments: new Set(),
+      pointRadii: rawData.map(() => 2),
+    };
     const barStrategy = metric === 'tokenPerCall'
       ? 'average'
       : (metric === 'accumulatedTokens' || metric === 'totalCostUsd' ? 'delta' : 'sum');
+    const deltaBaseline = metric === 'accumulatedTokens'
+      ? accumulatedBaseline
+      : (metric === 'totalCostUsd' ? costBaseline : null);
     datasets.push({
       label: integrationName,
       data: processed.data,
@@ -8499,9 +8883,11 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
       borderWidth: 2,
       pointRadius: processed.pointRadii,
       pointHoverRadius: 4,
-      spanGaps: true,
+      spanGaps: false,
       segment: getSegmentStyle(processed.gapSegments, color.border),
       _barStrategy: barStrategy,
+      _deltaBaseline: deltaBaseline,
+      _accessibleValueType: metric,
     });
     return datasets;
   }, []);
@@ -8532,8 +8918,7 @@ function renderAPIIntegrationsChart(range = State.currentRange || DEFAULT_CHART_
 
   const tickFormatter = (value) => {
     if (metric === 'totalCostUsd') return formatCurrencyUSD(Number(value || 0));
-    if (metric === 'tokenPerCall') return formatNumber(Number(value || 0).toFixed(1));
-    return formatNumber(Number(value || 0));
+    return formatChartAxisNumber(Number(value || 0));
   };
   const tooltipLabelFormatter = (ctx) => {
     if (ctx.parsed.y == null) return null;
@@ -8593,7 +8978,7 @@ function buildFixedDatasetsForRows(rows, range, configs) {
       borderWidth: 2,
       pointRadius: processed.pointRadii,
       pointHoverRadius: 4,
-      spanGaps: true,
+      spanGaps: false,
       segment: getSegmentStyle(processed.gapSegments, cfg.color),
     });
   });
@@ -8612,7 +8997,7 @@ function buildDynamicDatasetsForRows(rows, range, labelMap, colorMap, colorFallb
   let idx = 0;
   sortQuotaKeysForProvider(keys, providerKey).forEach((key) => {
     const color = colorMap[key] || colorFallback[idx++ % colorFallback.length];
-    const rawData = rows.map(d => ({ x: new Date(d.capturedAt), y: d[key] || 0 }));
+    const rawData = rows.map(d => ({ x: new Date(d.capturedAt), y: d[key] ?? null }));
     const processed = processCappedDataWithGaps(rawData, range);
     datasets.push({
       label: (labelMap[key] || getQuotaDisplayName(key, providerKey) || key),
@@ -8624,7 +9009,7 @@ function buildDynamicDatasetsForRows(rows, range, labelMap, colorMap, colorFallb
       borderWidth: 2,
       pointRadius: processed.pointRadii,
       pointHoverRadius: 4,
-      spanGaps: true,
+      spanGaps: false,
       segment: getSegmentStyle(processed.gapSegments, color.border),
     });
   });
@@ -8907,7 +9292,7 @@ function updateBothCharts(data, range = '6h') {
         borderWidth: 2,
         pointRadius: processed.pointRadii,
         pointHoverRadius: 4,
-        spanGaps: true,
+        spanGaps: false,
         segment: getSegmentStyle(processed.gapSegments, cfg.color),
       });
     });
@@ -8924,7 +9309,7 @@ function updateBothCharts(data, range = '6h') {
     let idx = 0;
     sorted.forEach((key) => {
       const color = colorMap[key] || colorFallback[idx++ % colorFallback.length];
-      const rawData = rows.map(d => ({ x: new Date(d.capturedAt), y: d[key] || 0 }));
+      const rawData = rows.map(d => ({ x: new Date(d.capturedAt), y: d[key] ?? null }));
       const processed = processCappedDataWithGaps(rawData, range);
       datasets.push({
         label: (labelMap[key] || getQuotaDisplayName(key, providerKey) || key),
@@ -8936,7 +9321,7 @@ function updateBothCharts(data, range = '6h') {
         borderWidth: 2,
         pointRadius: processed.pointRadii,
         pointHoverRadius: 4,
-        spanGaps: true,
+        spanGaps: false,
         segment: getSegmentStyle(processed.gapSegments, color.border),
       });
     });
@@ -8977,16 +9362,17 @@ function updateBothCharts(data, range = '6h') {
         if (!Array.isArray(row.quotas)) return row;
         const entry = { capturedAt: row.capturedAt };
         row.quotas.forEach((quota) => {
-          entry[quota.name] = quota.utilization || 0;
+          entry[quota.name] = quota.utilization ?? null;
         });
         return entry;
       });
       datasets = createDynamicDatasets(normalizedRows, cursorDisplayNames, cursorChartColorMap, cursorChartColorFallback, 'cursor');
     } else if (slot.provider === 'openrouter') {
-      const orDN = { usage: 'Total Usage', usageDaily: 'Daily Usage', percent: 'Usage %' };
-      const orCM = { usage: { border: '#0D9488', bg: 'rgba(13, 148, 136, 0.06)' }, usageDaily: { border: '#F59E0B', bg: 'rgba(245, 158, 11, 0.06)' }, percent: { border: '#3B82F6', bg: 'rgba(59, 130, 246, 0.06)' } };
+      const orDN = { percent: 'Usage %' };
+      const orCM = { percent: { border: '#3B82F6', bg: 'rgba(59, 130, 246, 0.06)' } };
       const orFB = [{ border: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.06)' }];
-      datasets = createDynamicDatasets(slot.rows, orDN, orCM, orFB, 'openrouter');
+      const percentageRows = slot.rows.map(row => ({ capturedAt: row.capturedAt, percent: row.percent }));
+      datasets = createDynamicDatasets(percentageRows, orDN, orCM, orFB, 'openrouter');
     }
 
     if (datasets.length === 0) return;
@@ -9065,45 +9451,44 @@ function getPollIntervalMs() {
   return (intervalSec || 120) * 1000;
 }
 
-// Analyze data and return gap indices + point visibility
-// Solid lines for continuous data, dotted/faded for gaps
+// Break line and fill rendering anywhere the collector did not observe data.
 function processDataWithGaps(dataPoints, range = '6h') {
-  // Dynamic gap threshold: multiplier × poll interval
-  // 1h: 3 polls, 6h: 5 polls, 24h: 10 polls, 7d: 30 polls, 30d: 60 polls
   const pollMs = getPollIntervalMs();
-  const multipliers = {
-    '1h': 3,
-    '6h': 5,
-    '24h': 10,
-    '7d': 30,
-    '30d': 60
-  };
-  const gapThresholdMs = pollMs * (multipliers[range] || 5);
+  const bucketMs = graphBucketIntervalMs(range, 'cumulative', dataPoints);
+  const gapThresholdMs = Math.max(pollMs * 3, bucketMs);
 
   if (!dataPoints || dataPoints.length === 0) return { data: [], gapSegments: new Set(), pointRadii: [] };
   if (dataPoints.length === 1) return { data: dataPoints, gapSegments: new Set(), pointRadii: [2] };
 
+  const data = [];
   const gapSegments = new Set();
   const pointRadii = [];
   const getTime = pt => pt.x instanceof Date ? pt.x.getTime() : new Date(pt.x).getTime();
 
   for (let i = 0; i < dataPoints.length; i++) {
-    const prevGap = i === 0 ? Infinity : getTime(dataPoints[i]) - getTime(dataPoints[i - 1]);
-    const nextGap = i === dataPoints.length - 1 ? Infinity : getTime(dataPoints[i + 1]) - getTime(dataPoints[i]);
+    const point = dataPoints[i];
+    const pointTime = getTime(point);
+    const nextTime = i === dataPoints.length - 1 ? NaN : getTime(dataPoints[i + 1]);
+    const nextGap = nextTime - pointTime;
 
-    // Mark segment as gap
-    if (nextGap > gapThresholdMs) {
-      gapSegments.add(i);
-    }
-
-    // Keep sample points visible; segment styling still marks real data gaps.
+    data.push(point);
     pointRadii.push(2);
+
+    if (nextGap > gapThresholdMs) {
+      gapSegments.add(data.length - 1);
+      data.push({
+        x: new Date(pointTime + (nextGap / 2)),
+        y: null,
+        _collectionGap: true,
+      });
+      pointRadii.push(0);
+    }
   }
 
-  return { data: dataPoints, gapSegments, pointRadii };
+  return { data, gapSegments, pointRadii };
 }
 
-// Create segment styling: solid for continuous, dotted/faded for gaps
+// Retained for dataset compatibility; null gap points prevent these segments from rendering.
 function getSegmentStyle(gapSegments, baseColor) {
   let fadedColor = baseColor;
   if (baseColor.startsWith('#')) {
@@ -10324,7 +10709,7 @@ async function loadModalChart(quotaType, effectiveProvider) {
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
-          spanGaps: true,
+          spanGaps: false,
           segment: getSegmentStyle(processed.gapSegments, colorMap[quotaType] || '#3B82F6')
         }]
       },
@@ -10412,12 +10797,24 @@ function syncGraphHistoryRangeControl(scope) {
   if (!control) return;
   const windowState = historyScopeWindow(scope);
   control.querySelectorAll('[data-range]').forEach(button => {
-    button.classList.toggle('active', button.dataset.range === normalizeChartRange(windowState.range));
+    const active = button.dataset.range === normalizeChartRange(windowState.range);
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
   const startInput = control.querySelector('[data-history-start]');
   const endInput = control.querySelector('[data-history-end]');
   if (startInput) startInput.value = windowState.startDate || '';
   if (endInput) endInput.value = windowState.endDate || '';
+}
+
+function syncGraphModeButtons(groupID, mode) {
+  const group = document.getElementById(groupID);
+  if (!group) return;
+  group.querySelectorAll('.graph-mode-btn').forEach((button) => {
+    const active = button.dataset.graphMode === normalizeGraphMode(mode);
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
 }
 
 function setGraphHistoryRangeError(scope, message = '') {
@@ -10454,6 +10851,10 @@ function applyCustomHistoryDates(scope, startDate, endDate) {
   const end = historyDateStartUTC(historyDatePlusDays(endDate, 1));
   if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
     setGraphHistoryRangeError(scope, 'Choose a valid start and end date.');
+    return false;
+  }
+  if (end.getTime() - start.getTime() > 100 * 365 * 24 * 60 * 60 * 1000) {
+    setGraphHistoryRangeError(scope, 'Custom history cannot exceed 100 years.');
     return false;
   }
   if (scope === 'platformCost') {
@@ -10547,9 +10948,7 @@ function setupChartModeSelector() {
   const group = document.getElementById('chart-mode-select');
   if (!group) return;
   const setActive = () => {
-    group.querySelectorAll('.graph-mode-btn').forEach((button) => {
-      button.classList.toggle('active', button.dataset.graphMode === normalizeGraphMode(State.graphMode));
-    });
+    syncGraphModeButtons('chart-mode-select', State.graphMode);
   };
   setActive();
   if (group.dataset.bound) return;
@@ -10568,9 +10967,7 @@ function setupPlatformCostChartModeSelector() {
   const group = document.getElementById('platform-cost-chart-mode-select');
   if (!group) return;
   const setActive = () => {
-    group.querySelectorAll('.graph-mode-btn').forEach((button) => {
-      button.classList.toggle('active', button.dataset.graphMode === normalizeGraphMode(State.platformCostGraphMode));
-    });
+    syncGraphModeButtons('platform-cost-chart-mode-select', State.platformCostGraphMode);
   };
   setActive();
   if (group.dataset.bound) return;
