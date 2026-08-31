@@ -20,10 +20,10 @@ func workflow(t *testing.T, name string) string {
 
 func TestPublicPullRequestsStayOnHostedRunners(t *testing.T) {
 	ci := workflow(t, "ci.yml")
-	trusted := regexp.MustCompile(`(?s)test:\s+if: \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs/heads/main'\s+runs-on: \[self-hosted, Linux, X64, server1, onwatch\]`)
+	trusted := regexp.MustCompile(`(?s)test:\s+if: \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs/heads/main'\s+runs-on: \[self-hosted, Linux, X64, onwatch\]`)
 	untrusted := regexp.MustCompile(`(?s)test-pr:\s+if: github\.event_name == 'pull_request'\s+runs-on: ubuntu-latest`)
 	if !trusted.MatchString(ci) {
-		t.Fatal("trusted main CI is not routed to the onWatch Server1 runner")
+		t.Fatal("trusted main CI is not routed to an onWatch runner")
 	}
 	if !untrusted.MatchString(ci) {
 		t.Fatal("public pull-request CI is not pinned to a hosted runner")
@@ -33,7 +33,7 @@ func TestPublicPullRequestsStayOnHostedRunners(t *testing.T) {
 	}
 }
 
-func TestReleaseLinuxJobsRequireMainAndServer1(t *testing.T) {
+func TestReleaseLinuxJobsRequireMainAndOnWatchRunner(t *testing.T) {
 	release := workflow(t, "release.yml")
 	linuxJobs := []string{
 		"test",
@@ -47,7 +47,7 @@ func TestReleaseLinuxJobsRequireMainAndServer1(t *testing.T) {
 		pattern := regexp.MustCompile(
 			`(?ms)^  ` + regexp.QuoteMeta(name) + `:\s+.*?` +
 				`if: github\.ref == 'refs/heads/main'.*?` +
-				`runs-on: \[self-hosted, Linux, X64, server1, onwatch\]`,
+				`runs-on: \[self-hosted, Linux, X64, onwatch\]`,
 		)
 		if !pattern.MatchString(release) {
 			t.Fatalf("%s is not main-only on the onWatch runner", name)
@@ -75,7 +75,7 @@ func TestReleaseValidatesTagBeforePersistentRunnerCheckout(t *testing.T) {
 		t.Fatal("release jobs must checkout the immutable verified SHA, not the unvalidated input")
 	}
 	validateAt := strings.Index(release, "  validate-release-ref:")
-	firstPersistentRunnerAt := strings.Index(release, "runs-on: [self-hosted, Linux, X64, server1, onwatch]")
+	firstPersistentRunnerAt := strings.Index(release, "runs-on: [self-hosted, Linux, X64, onwatch]")
 	if validateAt < 0 || firstPersistentRunnerAt < 0 || validateAt > firstPersistentRunnerAt {
 		t.Fatal("hosted release-ref validation must precede every persistent-runner job")
 	}

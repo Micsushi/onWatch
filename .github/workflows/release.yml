@@ -48,7 +48,7 @@ jobs:
   test:
     needs: validate-release-ref
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, server1, onwatch]
+    runs-on: [self-hosted, Linux, X64, onwatch]
     name: Test
     outputs:
       verified_sha: ${{ needs.validate-release-ref.outputs.verified_sha }}
@@ -82,7 +82,7 @@ jobs:
             goarch: amd64
             binary: onwatch-windows-amd64.exe
 
-    runs-on: [self-hosted, Linux, X64, server1, onwatch]
+    runs-on: [self-hosted, Linux, X64, onwatch]
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
 
     steps:
@@ -118,7 +118,7 @@ jobs:
   build-linux-desktop:
     needs: test
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, server1, onwatch]
+    runs-on: [self-hosted, Linux, X64, onwatch]
     name: Build Linux desktop (amd64)
 
     steps:
@@ -222,7 +222,7 @@ jobs:
   release:
     needs: [test, build-standard, build-macos-amd64, build-macos-arm64, build-linux-desktop]
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, server1, onwatch]
+    runs-on: [self-hosted, Linux, X64, onwatch]
     name: Release
 
     steps:
@@ -263,7 +263,7 @@ jobs:
   docker:
     needs: [test, release]
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, server1, onwatch]
+    runs-on: [self-hosted, Linux, X64, onwatch]
     name: Docker
 
     steps:
@@ -352,7 +352,7 @@ jobs:
   homebrew:
     needs: [test, release, docker]
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, server1, onwatch]
+    runs-on: [self-hosted, Linux, X64, onwatch]
     name: Update Homebrew Formula
 
     steps:
