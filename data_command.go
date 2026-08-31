@@ -17,6 +17,7 @@ type dataCommandOptions struct {
 	dbPath  string
 	outPath string
 	files   []string
+	dryRun  bool
 	help    bool
 }
 
@@ -44,6 +45,9 @@ func runDataCommand(args []string) error {
 	defer s.Close()
 	if opts.command == "export" {
 		return runDataExport(s, opts.outPath)
+	}
+	if opts.dryRun {
+		return runDataImportDryRun(s, opts.files)
 	}
 	return runDataImport(s, opts.files)
 }
@@ -82,6 +86,8 @@ func parseDataCommand(args []string) (dataCommandOptions, error) {
 			opts.outPath = args[index]
 		case strings.HasPrefix(arg, "--out=") && opts.command == "export":
 			opts.outPath = strings.TrimPrefix(arg, "--out=")
+		case arg == "--dry-run" && opts.command == "import":
+			opts.dryRun = true
 		case strings.HasPrefix(arg, "-"):
 			return opts, fmt.Errorf("data: unknown option %q", arg)
 		case opts.command == "import":
@@ -97,6 +103,25 @@ func parseDataCommand(args []string) (dataCommandOptions, error) {
 		return opts, fmt.Errorf("data import: at least one .onwatch.zip file is required")
 	}
 	return opts, nil
+}
+
+func runDataImportDryRun(live *store.Store, files []string) error {
+	dir, err := os.MkdirTemp("", "onwatch-import-dry-run-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	copyPath := filepath.Join(dir, "onwatch.db")
+	if _, err := live.Backup(copyPath); err != nil {
+		return fmt.Errorf("data import dry-run: %w", err)
+	}
+	copyStore, err := store.New(copyPath)
+	if err != nil {
+		return err
+	}
+	defer copyStore.Close()
+	fmt.Println("Dry run only. The live database will not be changed.")
+	return runDataImport(copyStore, files)
 }
 
 func runDataExport(s *store.Store, outputPath string) error {
@@ -155,6 +180,10 @@ func runDataImport(s *store.Store, files []string) error {
 		}
 		fmt.Printf("Imported %s: %d inserted, %d updated, %d skipped\n",
 			path, summary.Total.Inserted, summary.Total.Updated, summary.Total.Skipped)
+		fmt.Printf("Report: origins=%s, span=%s, inserted=%d, enriched=%d, duplicates=%d, rejected=0, account_conflicts=0, settings_inserted=%d, settings_preserved=%d\n",
+			formatImportOrigins(summary.Origins), formatImportSpan(summary.EarliestObservedAt, summary.LatestObservedAt),
+			summary.Total.Inserted, summary.Total.Updated, summary.Total.Skipped,
+			summary.Tables["settings"].Inserted, summary.Tables["settings"].Skipped)
 		total.Inserted += summary.Total.Inserted
 		total.Updated += summary.Total.Updated
 		total.Skipped += summary.Total.Skipped
@@ -163,6 +192,20 @@ func runDataImport(s *store.Store, files []string) error {
 		fmt.Printf("Total: %d inserted, %d updated, %d skipped\n", total.Inserted, total.Updated, total.Skipped)
 	}
 	return nil
+}
+
+func formatImportOrigins(origins []string) string {
+	if len(origins) == 0 {
+		return "none"
+	}
+	return strings.Join(origins, ",")
+}
+
+func formatImportSpan(earliest, latest *time.Time) string {
+	if earliest == nil || latest == nil {
+		return "none"
+	}
+	return earliest.UTC().Format(time.RFC3339Nano) + ".." + latest.UTC().Format(time.RFC3339Nano)
 }
 
 func transferManifestRecordCount(manifest store.TransferManifest) int {
@@ -177,7 +220,7 @@ func printDataHelp() {
 	fmt.Print("onWatch Portable Data Transfer\n\n" +
 		"Usage:\n" +
 		"  onwatch data export [--db PATH] [--out FILE]\n" +
-		"  onwatch data import [--db PATH] FILE...\n\n" +
+		"  onwatch data import [--db PATH] [--dry-run] FILE...\n\n" +
 		"Export creates a secret-safe .onwatch.zip archive. Import additively merges\n" +
 		"records from every source device and skips records already imported.\n")
 }

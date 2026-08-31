@@ -64,6 +64,7 @@ func NewServer(port int, handler *Handler, logger *slog.Logger, username, passwo
 	mux.HandleFunc(p("/api/cycles"), handler.Cycles)
 	mux.HandleFunc(p("/api/summary"), handler.Summary)
 	mux.HandleFunc(p("/api/capabilities"), handler.Capabilities)
+	mux.HandleFunc(p("/api/devices"), handler.Devices)
 	mux.HandleFunc(p("/api/menubar/summary"), handler.MenubarSummary)
 	mux.HandleFunc(p("/api/menubar/preferences"), handler.MenubarPreferences)
 	mux.HandleFunc(p("/api/menubar/refresh"), handler.MenubarRefresh)
@@ -168,6 +169,31 @@ func NewServer(port int, handler *Handler, logger *slog.Logger, username, passwo
 			finalHandler = sessionAuthMiddlewareWithBasePath(sessions, bp, logger)(mux)
 		}
 	}
+	// Readiness is intentionally outside dashboard authentication. It exposes
+	// only a boolean result and remains safe for local container probes.
+	readiness := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if handler.store == nil || handler.store.Ready() != nil {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = io.WriteString(w, "ok\n")
+		}
+	})
+	outer := http.NewServeMux()
+	outer.Handle("/healthz", readiness)
+	if bp != "" {
+		outer.Handle(p("/healthz"), readiness)
+	}
+	outer.Handle("/", finalHandler)
+	finalHandler = outer
+
 	// Apply security headers and gzip compression (outermost)
 	finalHandler = securityHeadersMiddleware(gzipHandler(finalHandler))
 	finalHandler = csrfMiddleware(finalHandler, bp)

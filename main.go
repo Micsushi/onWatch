@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,6 +27,7 @@ import (
 	"github.com/onllm-dev/onwatch/v2/internal/agentusage"
 	"github.com/onllm-dev/onwatch/v2/internal/api"
 	"github.com/onllm-dev/onwatch/v2/internal/config"
+	"github.com/onllm-dev/onwatch/v2/internal/ingestserver"
 	"github.com/onllm-dev/onwatch/v2/internal/menubar"
 	"github.com/onllm-dev/onwatch/v2/internal/notify"
 	"github.com/onllm-dev/onwatch/v2/internal/store"
@@ -576,6 +578,18 @@ func run() error {
 	// Note: "codex" must be checked before "status" because "codex profile status" contains "status"
 	if hasCommand("data") {
 		return runDataCommand(os.Args[1:])
+	}
+	if hasCommand("backup") {
+		return runBackupCommand(os.Args[1:])
+	}
+	if hasCommand("healthcheck") {
+		return runHealthcheckCommand(os.Args[1:])
+	}
+	if hasCommand("device") {
+		return runDeviceCommand(os.Args[1:])
+	}
+	if hasCommand("collector") {
+		return runCollectorCommand(os.Args[1:])
 	}
 	if hasCommand("codex") {
 		return runCodexCommand()
@@ -1206,7 +1220,7 @@ func run() error {
 
 	var apiIntegrationsAg *agent.APIIntegrationsIngestAgent
 	var agentUsageAg *agent.AgentUsageCollectorAgent
-	if cfg.APIIntegrationsEnabled {
+	if cfg.APIIntegrationsEnabled && !cfg.CentralServer {
 		apiIntegrationsAg = agent.NewAPIIntegrationsIngestAgent(db, cfg.APIIntegrationsDir, cfg.APIIntegrationsRetention, logger)
 		sources := agentusage.DefaultSources("")
 		if len(sources) > 0 {
@@ -1261,6 +1275,9 @@ func run() error {
 
 	// Wire polling checks - agents skip poll when telemetry disabled
 	isPollingEnabled := func(providerKey string) bool {
+		if cfg.CentralServer && !db.HasServerPollOwner(providerKey) {
+			return false
+		}
 		v, err := db.GetSetting("provider_visibility")
 		if err != nil || v == "" {
 			return true // default: polling enabled
@@ -1293,6 +1310,9 @@ func run() error {
 		// Per-account polling check for Codex multi-account support
 		// Uses flat keys like "codex:1", "codex:2" for per-account settings
 		codexMgr.SetAccountPollingCheck(func(accountID int64) bool {
+			if cfg.CentralServer && !db.IsServerPollOwner("openai", fmt.Sprint(accountID)) {
+				return false
+			}
 			v, err := db.GetSetting("provider_visibility")
 			if err != nil || v == "" {
 				return true // default: polling enabled
@@ -1327,6 +1347,9 @@ func run() error {
 	if minimaxMgr != nil {
 		minimaxMgr.SetPollingCheck(func() bool { return isPollingEnabled("minimax") })
 		minimaxMgr.SetAccountPollingCheck(func(accountID int64) bool {
+			if cfg.CentralServer && !db.IsServerPollOwner("minimax", fmt.Sprint(accountID)) {
+				return false
+			}
 			v, err := db.GetSetting("provider_visibility")
 			if err != nil || v == "" {
 				return true
@@ -1495,6 +1518,10 @@ func run() error {
 	handler.SetRateLimiter(loginRateLimiter)
 
 	server := web.NewServer(cfg.Port, handler, logger, cfg.AdminUser, cfg.AdminPassHash, cfg.Host, cfg.BasePath, cfg.MetricsToken)
+	var ingestServer *ingestserver.Server
+	if cfg.IngestPort > 0 {
+		ingestServer = ingestserver.New(cfg.IngestHost, cfg.IngestPort, db, logger, cfg.IngestMetricsToken)
+	}
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1537,6 +1564,14 @@ func run() error {
 			serverErr <- fmt.Errorf("server error: %w", err)
 		}
 	}()
+	if ingestServer != nil {
+		go func() {
+			logger.Info("Starting collector ingest server", "host", cfg.IngestHost, "port", cfg.IngestPort)
+			if err := ingestServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serverErr <- fmt.Errorf("ingest server error: %w", err)
+			}
+		}()
+	}
 	if runtime.GOOS == "darwin" && menubar.IsSupported() {
 		go func() {
 			if waitForServerReady(cfg.Port, 10*time.Second) {
@@ -1596,6 +1631,11 @@ func run() error {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("Server shutdown error", "error", err)
+	}
+	if ingestServer != nil {
+		if err := ingestServer.Shutdown(shutdownCtx); err != nil {
+			logger.Error("Ingest server shutdown error", "error", err)
+		}
 	}
 
 	// Close database

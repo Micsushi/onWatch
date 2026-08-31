@@ -1877,6 +1877,97 @@ body.all-density-comfortable .provider-kpi-card {
   color: var(--accent-teal);
 }
 
+.device-health-section {
+  padding: 20px 24px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+}
+
+.device-health-summary {
+  margin: 6px 0 0 30px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.device-health-list {
+  display: grid;
+  gap: 10px;
+}
+
+.device-health-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.35fr) minmax(100px, .8fr) minmax(120px, 1fr) minmax(110px, .7fr);
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--surface-card-alt);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.device-health-name,
+.device-health-detail,
+.device-health-assignments {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.device-health-name strong,
+.device-health-detail strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.device-health-meta,
+.device-health-assignments,
+.device-health-detail span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.device-health-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.device-health-state::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  content: "";
+}
+
+.device-health-state[data-state="current"]::before { background: var(--status-healthy); }
+.device-health-state[data-state="delayed"]::before { background: var(--status-warning); }
+.device-health-state[data-state="stale"]::before,
+.device-health-state[data-state="revoked"]::before { background: var(--status-danger); }
+
+.device-health-empty {
+  padding: 10px 2px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.collection-freshness-note {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  color: var(--status-warning);
+  background: color-mix(in srgb, var(--status-warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-warning) 32%, var(--border-default));
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
 .section-toggle {
   display: inline-flex;
   align-items: center;
@@ -2997,10 +3088,12 @@ body.all-density-comfortable .provider-kpi-card {
   .usage-percent { font-size: 26px; }
   .countdown { font-size: 12px; }
   .section-title { font-size: 15px; }
-  .insights-panel, .chart-section, .cycle-overview-section, .cycles-section, .sessions-section {
+  .insights-panel, .chart-section, .cycle-overview-section, .cycles-section, .sessions-section, .device-health-section {
     padding: 16px;
     border-radius: var(--radius-md);
   }
+  .device-health-row { grid-template-columns: 1fr; gap: 8px; }
+  .device-health-summary { margin-left: 0; }
   .insights-stats { grid-template-columns: 1fr; }
   .platform-cost-summary,
   .usage-summary { grid-template-columns: 1fr; }

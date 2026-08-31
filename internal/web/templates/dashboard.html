@@ -433,6 +433,24 @@
         </div>
         {{end}}
 
+        <section class="device-health-section" id="device-health-section" aria-labelledby="device-health-title">
+            <header class="section-header">
+                <div>
+                    <h3 class="section-title" id="device-health-title">
+                        <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <rect x="3" y="4" width="18" height="14" rx="2"/>
+                            <path d="M8 22h8M12 18v4"/>
+                        </svg>
+                        Collection Status
+                    </h3>
+                    <p class="device-health-summary" id="device-health-summary" aria-live="polite">Checking connected collectors...</p>
+                </div>
+            </header>
+            <div class="device-health-list" id="device-health-list" aria-live="polite" aria-busy="true">
+                <div class="device-health-empty"><span class="loading-spinner inline" aria-hidden="true"></span>Loading collectors...</div>
+            </div>
+        </section>
+
         {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex")}}
         <section class="sessions-section platform-cost-section" id="platform-cost-section" data-provider="{{.CurrentProvider}}">
             <header class="section-header">
@@ -550,6 +568,7 @@
                 </div>
             </header>
             {{if ne .CurrentProvider "api-integrations"}}
+            <p class="collection-freshness-note" id="collection-freshness-note" hidden role="status"></p>
             <div class="usage-summary" id="usage-summary">
                 <div class="platform-cost-metric primary">
                     <span class="platform-cost-label">Avg Weekly All-Model</span>

@@ -299,6 +299,8 @@ All agents run as parallel goroutines. Each polls its API at the configured inte
 
 ## CLI Reference
 
+For a canonical Server2 deployment with collector-only devices, see [Central Hosting Operations](docs/central-hosting-operations.md). It covers enrollment, ownership, live sync, migration, backup, cutover, rollback, and monitoring. Portable import/export remains a migration tool, not continuous synchronization.
+
 Portable data commands work the same on macOS, Linux, and Windows:
 
 ```bash

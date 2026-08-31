@@ -21,6 +21,7 @@ import (
 // Store provides SQLite storage for onWatch
 type Store struct {
 	db                         *sql.DB
+	dbPath                     string
 	apiIntegrationUsageVersion atomic.Uint64
 }
 
@@ -215,7 +216,7 @@ func New(dbPath string) (*Store, error) {
 		}
 	}
 
-	s := &Store{db: db}
+	s := &Store{db: db, dbPath: dbPath}
 	if err := s.createTables(); err != nil {
 		return nil, fmt.Errorf("failed to create tables: %w", err)
 	}
@@ -860,6 +861,9 @@ func (s *Store) createTables() error {
 	// Run migrations for existing databases
 	if err := s.migrateSchema(); err != nil {
 		return fmt.Errorf("failed to migrate schema: %w", err)
+	}
+	if err := s.ensureCentralSchema(); err != nil {
+		return fmt.Errorf("failed to create central schema: %w", err)
 	}
 
 	return nil

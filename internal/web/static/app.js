@@ -13848,6 +13848,78 @@ function initNotificationCenter() {
   setInterval(updateNotificationCenter, 10000);
 }
 
+function deviceHealthElement(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function formatCollectorTime(value) {
+  if (!value) return 'No data yet';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? 'Unknown' : parsed.toLocaleString();
+}
+
+function renderDeviceHealth(payload) {
+  const list = document.getElementById('device-health-list');
+  const summary = document.getElementById('device-health-summary');
+  const freshness = document.getElementById('collection-freshness-note');
+  if (!list || !summary) return;
+  const devices = Array.isArray(payload?.devices) ? payload.devices : [];
+  list.replaceChildren();
+  list.setAttribute('aria-busy', 'false');
+  if (devices.length === 0) {
+    list.append(deviceHealthElement('div', 'device-health-empty', 'No collectors enrolled. Server polling continues where configured.'));
+    summary.textContent = 'No device collectors enrolled';
+    if (freshness) freshness.hidden = true;
+    return;
+  }
+  let unhealthy = 0;
+  devices.forEach((device) => {
+    if (device.state !== 'current') unhealthy += 1;
+    const row = deviceHealthElement('article', 'device-health-row');
+    const identity = deviceHealthElement('div', 'device-health-name');
+    identity.append(deviceHealthElement('strong', '', device.name || device.id));
+    identity.append(deviceHealthElement('span', 'device-health-meta', [device.platform, device.collector_version].filter(Boolean).join(' · ') || 'Collector details unavailable'));
+    const state = deviceHealthElement('span', 'device-health-state', device.state || 'unknown');
+    state.dataset.state = device.state || 'unknown';
+    const queue = deviceHealthElement('div', 'device-health-detail');
+    queue.append(deviceHealthElement('strong', '', `${Number(device.pending_events || 0).toLocaleString()} queued`));
+    queue.append(deviceHealthElement('span', '', `${Number(device.queue_bytes || 0).toLocaleString()} bytes`));
+    const assignments = Array.isArray(device.assignments) && device.assignments.length
+      ? device.assignments.map((item) => `${item.provider}: ${item.external_id}`).join(', ')
+      : 'Usage logs only';
+    const assignment = deviceHealthElement('div', 'device-health-assignments', assignments);
+    assignment.title = assignments;
+    row.append(identity, state, queue, assignment);
+    row.setAttribute('aria-label', `${device.name || device.id}, ${device.state || 'unknown'}, last heartbeat ${formatCollectorTime(device.last_heartbeat_at)}`);
+    list.append(row);
+  });
+  summary.textContent = unhealthy === 0
+    ? `${devices.length} collector${devices.length === 1 ? '' : 's'} reporting normally`
+    : `${unhealthy} of ${devices.length} collectors need attention`;
+  if (freshness) {
+    freshness.hidden = unhealthy === 0;
+    freshness.textContent = unhealthy === 0 ? '' : 'Some collectors are delayed or stale. Gaps in this graph represent missing observations, not zero usage.';
+  }
+}
+
+async function fetchDeviceHealth() {
+  const list = document.getElementById('device-health-list');
+  const summary = document.getElementById('device-health-summary');
+  if (!list || !summary) return;
+  try {
+    const response = await authFetch(`${API_BASE}/api/devices`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderDeviceHealth(await response.json());
+  } catch (_error) {
+    list.setAttribute('aria-busy', 'false');
+    list.replaceChildren(deviceHealthElement('div', 'device-health-empty', 'Collector status is temporarily unavailable. Usage history remains unchanged.'));
+    summary.textContent = 'Unable to load collector status';
+  }
+}
+
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
   applyForkPreferences({
@@ -13920,6 +13992,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupHeaderActions();
   setupCardModals();
   initNotificationCenter();
+  fetchDeviceHealth();
+  setInterval(fetchDeviceHealth, 60000);
 
   if (document.getElementById('usage-chart') || document.getElementById('both-view') || document.getElementById('all-providers-container')) {
     initChart();

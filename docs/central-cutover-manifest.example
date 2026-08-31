@@ -1,0 +1,11 @@
+release_sha=FULL_PUSHED_MAIN_SHA
+ansible_sha=FULL_PUSHED_ANSIBLE_MAIN_SHA
+prior_release_sha=FULL_PRIOR_SHA
+server2_tailscale_host=server2-tailnet-name
+dashboard_host=onwatch.mshi.ca
+old_runtime=DEVICE_OR_SERVER_AND_START_COMMAND
+history_export=PATH_AND_CHECKSUM
+raw_backup=PATH_AND_CHECKSUM
+provider_owner=PROVIDER_ACCOUNT_OLD_OWNER_NEW_OWNER
+rollback_command=EXACT_SAFE_COMMAND
+evidence_directory=PRIVATE_PATH
