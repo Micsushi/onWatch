@@ -18,11 +18,10 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    tmpfs:
-      - /tmp:size=16m,mode=1777
     volumes:
       - ${ONWATCH_DATA_DIR:-./data}:/data
       - ${ONWATCH_BACKUP_DIR:-./backups}:/backups
+      - ${ONWATCH_TEMP_DIR:-./tmp}:/tmp
     env_file:
       - path: ${ONWATCH_ENV_FILE:-.env}
         required: false
