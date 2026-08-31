@@ -230,3 +230,74 @@ func TestCentralImportRejectsAccountLabelCollision(t *testing.T) {
 		t.Fatal("distinct external accounts merged by display label")
 	}
 }
+
+func TestCentralImportAdoptsEmptyDefaultAccountIdentity(t *testing.T) {
+	destination, err := New(filepath.Join(t.TempDir(), "destination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+
+	source, err := New(filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if _, err := source.db.Exec(`UPDATE provider_accounts SET external_id = 'source-id' WHERE provider = 'codex' AND name = 'default'`); err != nil {
+		t.Fatal(err)
+	}
+	var accountID int64
+	if err := source.db.QueryRow(`SELECT id FROM provider_accounts WHERE provider = 'codex' AND name = 'default'`).Scan(&accountID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.db.Exec(`INSERT INTO codex_snapshots(captured_at, account_id, raw_json, quota_count) VALUES(?, ?, '{}', 0)`, time.Now().UTC().Format(time.RFC3339Nano), accountID); err != nil {
+		t.Fatal(err)
+	}
+
+	var archive bytes.Buffer
+	if _, err := source.ExportData(&archive, ExportOptions{AppVersion: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := destination.ImportData(bytes.NewReader(archive.Bytes())); err != nil {
+		t.Fatalf("import into empty default account: %v", err)
+	}
+
+	var externalID string
+	var snapshotCount int
+	if err := destination.db.QueryRow(`SELECT COALESCE(external_id, '') FROM provider_accounts WHERE provider = 'codex' AND name = 'default'`).Scan(&externalID); err != nil {
+		t.Fatal(err)
+	}
+	if err := destination.db.QueryRow(`SELECT COUNT(*) FROM codex_snapshots`).Scan(&snapshotCount); err != nil {
+		t.Fatal(err)
+	}
+	if externalID != "source-id" || snapshotCount != 1 {
+		t.Fatalf("externalID=%q snapshotCount=%d", externalID, snapshotCount)
+	}
+}
+
+func TestCentralImportRejectsIdentityAdoptionForAccountWithHistory(t *testing.T) {
+	destination, err := New(filepath.Join(t.TempDir(), "destination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	if _, err := destination.db.Exec(`INSERT INTO codex_snapshots(captured_at, account_id, raw_json, quota_count) VALUES(?, 1, '{}', 0)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	source, err := New(filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if _, err := source.db.Exec(`UPDATE provider_accounts SET external_id = 'source-id' WHERE provider = 'codex' AND name = 'default'`); err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	if _, err := source.ExportData(&archive, ExportOptions{AppVersion: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := destination.ImportData(bytes.NewReader(archive.Bytes())); err == nil {
+		t.Fatal("account with history adopted an unverified external identity")
+	}
+}

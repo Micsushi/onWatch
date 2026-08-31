@@ -1162,6 +1162,18 @@ func findDestinationAccount(tx *sql.Tx, provider, name, externalID string) (stri
 		var existingExternalID sql.NullString
 		err = tx.QueryRow(`SELECT CAST(id AS TEXT), external_id FROM provider_accounts WHERE provider = ? AND name = ? LIMIT 1`, provider, name).Scan(&localID, &existingExternalID)
 		if err == nil {
+			if !existingExternalID.Valid || existingExternalID.String == "" {
+				empty, emptyErr := destinationAccountHasNoHistory(tx, localID)
+				if emptyErr != nil {
+					return "", false, emptyErr
+				}
+				if empty {
+					if _, updateErr := tx.Exec(`UPDATE provider_accounts SET external_id = ? WHERE id = ?`, externalID, localID); updateErr != nil {
+						return "", false, fmt.Errorf("store.ImportData: adopt account external identity: %w", updateErr)
+					}
+					return localID, true, nil
+				}
+			}
 			return "", false, fmt.Errorf("store.ImportData: account conflict for %s/%s: external identity %q does not match destination %q", provider, name, externalID, existingExternalID.String)
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -1177,6 +1189,23 @@ func findDestinationAccount(tx *sql.Tx, provider, name, externalID string) (stri
 		return "", false, fmt.Errorf("store.ImportData: find account name: %w", err)
 	}
 	return localID, true, nil
+}
+
+func destinationAccountHasNoHistory(tx *sql.Tx, accountID string) (bool, error) {
+	for _, table := range transferTables {
+		if table.accountColumn == "" {
+			continue
+		}
+		var count int
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s = ?`, table.name, table.accountColumn)
+		if err := tx.QueryRow(query, accountID).Scan(&count); err != nil {
+			return false, fmt.Errorf("store.ImportData: inspect account history: %w", err)
+		}
+		if count != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func inspectTransferHistory(source *sql.DB) ([]string, *time.Time, *time.Time, error) {
