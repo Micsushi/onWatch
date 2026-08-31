@@ -18,9 +18,10 @@ import (
 	"time"
 
 	apiintegrations "github.com/onllm-dev/onwatch/v2/internal/api_integrations"
+	"github.com/onllm-dev/onwatch/v2/internal/ingest"
 )
 
-const TransferFormatVersion = 1
+const TransferFormatVersion = 2
 
 const (
 	maxTransferArchiveSize  int64 = 1 << 30
@@ -47,8 +48,11 @@ type ImportTableSummary struct {
 }
 
 type ImportSummary struct {
-	Tables map[string]ImportTableSummary `json:"tables"`
-	Total  ImportTableSummary            `json:"total"`
+	Tables             map[string]ImportTableSummary `json:"tables"`
+	Total              ImportTableSummary            `json:"total"`
+	Origins            []string                      `json:"origins"`
+	EarliestObservedAt *time.Time                    `json:"earliest_observed_at,omitempty"`
+	LatestObservedAt   *time.Time                    `json:"latest_observed_at,omitempty"`
 }
 
 type transferTable struct {
@@ -103,6 +107,8 @@ var transferTables = []transferTable{
 	{name: "cursor_reset_cycles", id: "id", columns: []string{"quota_name", "cycle_start", "cycle_end", "resets_at", "peak_utilization", "total_delta"}, mutable: true},
 	{name: "api_integration_usage_events", id: "id", columns: []string{"captured_at", "integration_name", "provider", "account_name", "model", "request_id", "prompt_tokens", "completion_tokens", "total_tokens", "cost_usd", "latency_ms", "metadata_json", "source_path", "fingerprint", "created_at"}},
 	{name: "api_integration_usage_hourly", id: "id", columns: []string{"origin_scope", "hour_start", "integration_name", "provider", "account_name", "model", "reasoning_effort", "mode", "speed_mode", "request_count", "prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "cached_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens", "total_cost_usd", "first_captured_at", "last_captured_at"}},
+	{name: "central_quota_snapshots", id: "id", columns: []string{"provider", "external_account_id", "account_label", "captured_at", "created_at"}},
+	{name: "central_quota_values", id: "id", columns: []string{"snapshot_id", "metric_name", "value", "limit_value", "unit", "resets_at", "status"}, parentTable: "central_quota_snapshots", parentColumn: "snapshot_id"},
 }
 
 var transferSettingKeys = []string{
@@ -261,6 +267,11 @@ func (s *Store) ExportData(w io.Writer, opts ExportOptions) (TransferManifest, e
 		transferDB.Close()
 		return TransferManifest{}, err
 	}
+	if err := s.exportCentralTransferMetadata(exportTx, installationID, counts); err != nil {
+		exportTx.Rollback()
+		transferDB.Close()
+		return TransferManifest{}, err
+	}
 	if err := exportTx.Commit(); err != nil {
 		transferDB.Close()
 		return TransferManifest{}, fmt.Errorf("store.ExportData: commit transfer transaction: %w", err)
@@ -331,6 +342,31 @@ func createTransferDatabase(db *sql.DB) error {
 		CREATE TABLE transfer_settings (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
+		);
+		CREATE TABLE transfer_devices (
+			device_id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			platform TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			revoked_at TEXT
+		);
+		CREATE TABLE transfer_observation_provenance (
+			target_table TEXT NOT NULL,
+			target_origin_id TEXT NOT NULL,
+			target_origin_record_id TEXT NOT NULL,
+			device_id TEXT NOT NULL,
+			event_id TEXT NOT NULL,
+			observed_at TEXT NOT NULL,
+			PRIMARY KEY(device_id, event_id)
+		);
+		CREATE TABLE transfer_poll_owners (
+			origin_record_id TEXT PRIMARY KEY,
+			provider TEXT NOT NULL,
+			external_account_id TEXT NOT NULL,
+			owner_kind TEXT NOT NULL,
+			device_id TEXT,
+			effective_at TEXT NOT NULL,
+			ended_at TEXT
 		);
 	`)
 	if err != nil {
@@ -549,6 +585,96 @@ func (s *Store) exportTransferSettings(dest *sql.Tx, counts map[string]int) erro
 	return nil
 }
 
+func (s *Store) exportCentralTransferMetadata(dest *sql.Tx, installationID string, counts map[string]int) error {
+	deviceRows, err := s.db.Query(`SELECT device_id, name, platform, created_at, revoked_at FROM devices ORDER BY created_at, device_id`)
+	if err != nil {
+		return fmt.Errorf("store.ExportData: query devices: %w", err)
+	}
+	deviceInsert, err := dest.Prepare(`INSERT INTO transfer_devices(device_id, name, platform, created_at, revoked_at) VALUES(?, ?, ?, ?, ?)`)
+	if err != nil {
+		deviceRows.Close()
+		return err
+	}
+	for deviceRows.Next() {
+		var id, name, platform, created string
+		var revoked sql.NullString
+		if err := deviceRows.Scan(&id, &name, &platform, &created, &revoked); err != nil {
+			deviceInsert.Close()
+			deviceRows.Close()
+			return err
+		}
+		if _, err := deviceInsert.Exec(id, name, platform, created, nullableStringValue(revoked)); err != nil {
+			deviceInsert.Close()
+			deviceRows.Close()
+			return err
+		}
+		counts["devices"]++
+	}
+	deviceInsert.Close()
+	if err := deviceRows.Close(); err != nil {
+		return err
+	}
+
+	provenanceRows, err := s.db.Query(`
+		SELECT p.target_table, COALESCE(r.origin_id, ?), COALESCE(r.origin_record_id, p.target_record_id),
+		       p.device_id, p.event_id, p.observed_at
+		FROM observation_provenance p
+		LEFT JOIN data_transfer_records r
+		  ON r.table_name = p.target_table AND r.local_record_id = p.target_record_id
+		WHERE p.target_table IN ('api_integration_usage_events', 'central_quota_snapshots')
+		ORDER BY p.id`, installationID)
+	if err != nil {
+		return fmt.Errorf("store.ExportData: query observation provenance: %w", err)
+	}
+	provenanceInsert, err := dest.Prepare(`INSERT INTO transfer_observation_provenance(target_table, target_origin_id, target_origin_record_id, device_id, event_id, observed_at) VALUES(?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		provenanceRows.Close()
+		return err
+	}
+	for provenanceRows.Next() {
+		var table, originID, recordID, deviceID, eventID, observed string
+		if err := provenanceRows.Scan(&table, &originID, &recordID, &deviceID, &eventID, &observed); err != nil {
+			provenanceInsert.Close()
+			provenanceRows.Close()
+			return err
+		}
+		if _, err := provenanceInsert.Exec(table, originID, recordID, deviceID, eventID, observed); err != nil {
+			provenanceInsert.Close()
+			provenanceRows.Close()
+			return err
+		}
+		counts["observation_provenance"]++
+	}
+	provenanceInsert.Close()
+	if err := provenanceRows.Close(); err != nil {
+		return err
+	}
+
+	ownerRows, err := s.db.Query(`SELECT id, provider, external_account_id, owner_kind, device_id, effective_at, ended_at FROM provider_poll_owners ORDER BY id`)
+	if err != nil {
+		return fmt.Errorf("store.ExportData: query poll ownership: %w", err)
+	}
+	defer ownerRows.Close()
+	ownerInsert, err := dest.Prepare(`INSERT INTO transfer_poll_owners(origin_record_id, provider, external_account_id, owner_kind, device_id, effective_at, ended_at) VALUES(?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer ownerInsert.Close()
+	for ownerRows.Next() {
+		var id int64
+		var provider, externalID, ownerKind, effective string
+		var deviceID, ended sql.NullString
+		if err := ownerRows.Scan(&id, &provider, &externalID, &ownerKind, &deviceID, &effective, &ended); err != nil {
+			return err
+		}
+		if _, err := ownerInsert.Exec(strconv.FormatInt(id, 10), provider, externalID, ownerKind, nullableStringValue(deviceID), effective, nullableStringValue(ended)); err != nil {
+			return err
+		}
+		counts["provider_poll_owners"]++
+	}
+	return ownerRows.Err()
+}
+
 func sanitizeTransferSetting(key, value string) (string, bool) {
 	switch key {
 	case "notifications":
@@ -703,7 +829,7 @@ func (s *Store) ImportData(r io.Reader) (ImportSummary, error) {
 	if err != nil {
 		return summary, err
 	}
-	if manifest.FormatVersion != TransferFormatVersion {
+	if manifest.FormatVersion < 1 || manifest.FormatVersion > TransferFormatVersion {
 		return summary, fmt.Errorf("store.ImportData: unsupported transfer format version %d", manifest.FormatVersion)
 	}
 	checksum, err := hashFile(databasePath)
@@ -720,7 +846,11 @@ func (s *Store) ImportData(r io.Reader) (ImportSummary, error) {
 	}
 	source.SetMaxOpenConns(1)
 	defer source.Close()
-	if err := validateTransferDatabase(source); err != nil {
+	if err := validateTransferDatabase(source, manifest.FormatVersion); err != nil {
+		return summary, err
+	}
+	summary.Origins, summary.EarliestObservedAt, summary.LatestObservedAt, err = inspectTransferHistory(source)
+	if err != nil {
 		return summary, err
 	}
 	localInstallationID, err := s.TransferInstallationID()
@@ -745,6 +875,11 @@ func (s *Store) ImportData(r io.Reader) (ImportSummary, error) {
 	}
 	if err := importTransferSettings(tx, source, &summary); err != nil {
 		return summary, err
+	}
+	if manifest.FormatVersion >= 2 {
+		if err := importCentralTransferMetadata(tx, source, localInstallationID, manifest.InstallationID, &summary); err != nil {
+			return summary, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return summary, fmt.Errorf("store.ImportData: commit destination transaction: %w", err)
@@ -852,7 +987,7 @@ func unpackTransferData(r io.Reader) (databasePath string, manifest TransferMani
 	return databasePath, manifest, cleanup, nil
 }
 
-func validateTransferDatabase(db *sql.DB) error {
+func validateTransferDatabase(db *sql.DB, formatVersion int) error {
 	var integrity string
 	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil {
 		return fmt.Errorf("store.ImportData: check transfer database integrity: %w", err)
@@ -861,6 +996,11 @@ func validateTransferDatabase(db *sql.DB) error {
 		return fmt.Errorf("store.ImportData: transfer database integrity check failed: %s", integrity)
 	}
 	required := map[string]bool{"transfer_accounts": false, "transfer_rows": false, "transfer_settings": false}
+	if formatVersion >= 2 {
+		required["transfer_devices"] = false
+		required["transfer_observation_provenance"] = false
+		required["transfer_poll_owners"] = false
+	}
 	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
 	if err != nil {
 		return fmt.Errorf("store.ImportData: inspect transfer schema: %w", err)
@@ -905,14 +1045,19 @@ func validateTransferDatabase(db *sql.DB) error {
 	if err := rowNames.Err(); err != nil {
 		return fmt.Errorf("store.ImportData: iterate transfer row tables: %w", err)
 	}
-	return validateTransferTableColumns(db)
+	return validateTransferTableColumns(db, formatVersion)
 }
 
-func validateTransferTableColumns(db *sql.DB) error {
+func validateTransferTableColumns(db *sql.DB, formatVersion int) error {
 	requiredColumns := map[string][]string{
 		"transfer_accounts": {"origin_id", "origin_record_id", "provider", "name", "created_at", "metadata", "deleted_at", "external_id"},
 		"transfer_rows":     {"table_name", "origin_id", "origin_record_id", "payload_json", "parent_origin_id", "parent_origin_record_id", "account_origin_id", "account_origin_record_id"},
 		"transfer_settings": {"key", "value"},
+	}
+	if formatVersion >= 2 {
+		requiredColumns["transfer_devices"] = []string{"device_id", "name", "platform", "created_at", "revoked_at"}
+		requiredColumns["transfer_observation_provenance"] = []string{"target_table", "target_origin_id", "target_origin_record_id", "device_id", "event_id", "observed_at"}
+		requiredColumns["transfer_poll_owners"] = []string{"origin_record_id", "provider", "external_account_id", "owner_kind", "device_id", "effective_at", "ended_at"}
 	}
 	for table, columns := range requiredColumns {
 		rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
@@ -1014,6 +1159,15 @@ func findDestinationAccount(tx *sql.Tx, provider, name, externalID string) (stri
 		if !errors.Is(err, sql.ErrNoRows) {
 			return "", false, fmt.Errorf("store.ImportData: find account external identity: %w", err)
 		}
+		var existingExternalID sql.NullString
+		err = tx.QueryRow(`SELECT CAST(id AS TEXT), external_id FROM provider_accounts WHERE provider = ? AND name = ? LIMIT 1`, provider, name).Scan(&localID, &existingExternalID)
+		if err == nil {
+			return "", false, fmt.Errorf("store.ImportData: account conflict for %s/%s: external identity %q does not match destination %q", provider, name, externalID, existingExternalID.String)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", false, fmt.Errorf("store.ImportData: find account name conflict: %w", err)
+		}
+		return "", false, nil
 	}
 	err = tx.QueryRow(`SELECT CAST(id AS TEXT) FROM provider_accounts WHERE provider = ? AND name = ? LIMIT 1`, provider, name).Scan(&localID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1023,6 +1177,77 @@ func findDestinationAccount(tx *sql.Tx, provider, name, externalID string) (stri
 		return "", false, fmt.Errorf("store.ImportData: find account name: %w", err)
 	}
 	return localID, true, nil
+}
+
+func inspectTransferHistory(source *sql.DB) ([]string, *time.Time, *time.Time, error) {
+	originRows, err := source.Query(`
+		SELECT origin_id FROM transfer_accounts
+		UNION SELECT origin_id FROM transfer_rows
+		ORDER BY origin_id`)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("store.ImportData: inspect origins: %w", err)
+	}
+	var origins []string
+	for originRows.Next() {
+		var origin string
+		if err := originRows.Scan(&origin); err != nil {
+			originRows.Close()
+			return nil, nil, nil, fmt.Errorf("store.ImportData: scan origin: %w", err)
+		}
+		origins = append(origins, origin)
+	}
+	if err := originRows.Close(); err != nil {
+		return nil, nil, nil, err
+	}
+
+	rows, err := source.Query(`SELECT payload_json FROM transfer_rows`)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("store.ImportData: inspect date span: %w", err)
+	}
+	dateFields := map[string]bool{
+		"captured_at": true, "hour_start": true, "first_captured_at": true,
+		"last_captured_at": true, "observed_at": true, "started_at": true,
+		"ended_at": true, "cycle_start": true, "cycle_end": true,
+	}
+	var earliest, latest *time.Time
+	for rows.Next() {
+		var encoded string
+		if err := rows.Scan(&encoded); err != nil {
+			rows.Close()
+			return nil, nil, nil, fmt.Errorf("store.ImportData: scan date span: %w", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(encoded), &payload); err != nil {
+			rows.Close()
+			return nil, nil, nil, fmt.Errorf("store.ImportData: decode date span: %w", err)
+		}
+		for field, value := range payload {
+			if !dateFields[field] {
+				continue
+			}
+			text, ok := value.(string)
+			if !ok || text == "" {
+				continue
+			}
+			parsed, err := time.Parse(time.RFC3339Nano, text)
+			if err != nil {
+				continue
+			}
+			parsed = parsed.UTC()
+			if earliest == nil || parsed.Before(*earliest) {
+				copy := parsed
+				earliest = &copy
+			}
+			if latest == nil || parsed.After(*latest) {
+				copy := parsed
+				latest = &copy
+			}
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, nil, nil, err
+	}
+	return origins, earliest, latest, nil
 }
 
 func importTransferTable(tx *sql.Tx, source *sql.DB, table transferTable, accountMap map[string]string, localInstallationID string, summary *ImportSummary) error {
@@ -1301,6 +1526,127 @@ func importTransferSettings(tx *sql.Tx, source *sql.DB, summary *ImportSummary) 
 		incrementImportSummary(summary, "settings", "inserted")
 	}
 	return rows.Err()
+}
+
+func importCentralTransferMetadata(tx *sql.Tx, source *sql.DB, localInstallationID, originID string, summary *ImportSummary) error {
+	deviceRows, err := source.Query(`SELECT device_id, name, platform, created_at, revoked_at FROM transfer_devices ORDER BY created_at, device_id`)
+	if err != nil {
+		return fmt.Errorf("store.ImportData: query devices: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for deviceRows.Next() {
+		var deviceID, name, platform, created string
+		var sourceRevoked sql.NullString
+		if err := deviceRows.Scan(&deviceID, &name, &platform, &created, &sourceRevoked); err != nil {
+			deviceRows.Close()
+			return err
+		}
+		if err := ingest.ValidateDeviceID(deviceID); err != nil {
+			deviceRows.Close()
+			return fmt.Errorf("store.ImportData: invalid device ID")
+		}
+		var existingName, existingPlatform string
+		err := tx.QueryRow(`SELECT name, platform FROM devices WHERE device_id = ?`, deviceID).Scan(&existingName, &existingPlatform)
+		if err == nil {
+			if existingName != name || existingPlatform != platform {
+				deviceRows.Close()
+				return fmt.Errorf("store.ImportData: conflicting device identity %s", deviceID)
+			}
+			incrementImportSummary(summary, "devices", "skipped")
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			deviceRows.Close()
+			return err
+		}
+		digest := sha256.Sum256([]byte("onwatch-imported-device:" + originID + ":" + deviceID))
+		revoked := now
+		if sourceRevoked.Valid && sourceRevoked.String != "" {
+			revoked = sourceRevoked.String
+		}
+		if _, err := tx.Exec(`INSERT INTO devices(device_id, name, token_digest, platform, created_at, revoked_at, desired_config_json) VALUES(?, ?, ?, ?, ?, ?, '{"revision":0}')`, deviceID, name, digest[:], platform, created, revoked); err != nil {
+			deviceRows.Close()
+			return fmt.Errorf("store.ImportData: insert device %s: %w", deviceID, err)
+		}
+		incrementImportSummary(summary, "devices", "inserted")
+	}
+	if err := deviceRows.Close(); err != nil {
+		return err
+	}
+
+	provenanceRows, err := source.Query(`SELECT target_table, target_origin_id, target_origin_record_id, device_id, event_id, observed_at FROM transfer_observation_provenance ORDER BY device_id, event_id`)
+	if err != nil {
+		return fmt.Errorf("store.ImportData: query observation provenance: %w", err)
+	}
+	for provenanceRows.Next() {
+		var table, targetOriginID, targetRecordID, deviceID, eventID, observed string
+		if err := provenanceRows.Scan(&table, &targetOriginID, &targetRecordID, &deviceID, &eventID, &observed); err != nil {
+			provenanceRows.Close()
+			return err
+		}
+		if table != "api_integration_usage_events" && table != "central_quota_snapshots" {
+			provenanceRows.Close()
+			return fmt.Errorf("store.ImportData: unsupported provenance table %q", table)
+		}
+		localID, found, err := findImportedLocalID(tx, table, transferOrigin{OriginID: targetOriginID, OriginRecordID: targetRecordID}, localInstallationID)
+		if err != nil || !found {
+			provenanceRows.Close()
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("store.ImportData: provenance target not found")
+		}
+		result, err := tx.Exec(`INSERT OR IGNORE INTO observation_provenance(target_table, target_record_id, device_id, event_id, observed_at) VALUES(?, ?, ?, ?, ?)`, table, localID, deviceID, eventID, observed)
+		if err != nil {
+			provenanceRows.Close()
+			return err
+		}
+		if changed, _ := result.RowsAffected(); changed == 1 {
+			incrementImportSummary(summary, "observation_provenance", "inserted")
+		} else {
+			incrementImportSummary(summary, "observation_provenance", "skipped")
+		}
+	}
+	if err := provenanceRows.Close(); err != nil {
+		return err
+	}
+
+	ownerRows, err := source.Query(`SELECT origin_record_id, provider, external_account_id, owner_kind, device_id, effective_at, ended_at FROM transfer_poll_owners ORDER BY origin_record_id`)
+	if err != nil {
+		return fmt.Errorf("store.ImportData: query poll ownership: %w", err)
+	}
+	defer ownerRows.Close()
+	for ownerRows.Next() {
+		var recordID, provider, externalID, ownerKind, effective string
+		var deviceID, ended sql.NullString
+		if err := ownerRows.Scan(&recordID, &provider, &externalID, &ownerKind, &deviceID, &effective, &ended); err != nil {
+			return err
+		}
+		origin := transferOrigin{OriginID: originID, OriginRecordID: recordID}
+		if _, found, err := findImportedLocalID(tx, "provider_poll_owners", origin, localInstallationID); err != nil {
+			return err
+		} else if found {
+			incrementImportSummary(summary, "provider_poll_owners", "skipped")
+			continue
+		}
+		endedAt := now
+		if ended.Valid && ended.String != "" {
+			endedAt = ended.String
+		}
+		result, err := tx.Exec(`INSERT INTO provider_poll_owners(provider, external_account_id, owner_kind, device_id, effective_at, ended_at) VALUES(?, ?, ?, ?, ?, ?)`, provider, externalID, ownerKind, nullableStringValue(deviceID), effective, endedAt)
+		if err != nil {
+			return err
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		if err := recordImportedOrigin(tx, "provider_poll_owners", strconv.FormatInt(id, 10), origin); err != nil {
+			return err
+		}
+		incrementImportSummary(summary, "provider_poll_owners", "inserted")
+	}
+	return ownerRows.Err()
 }
 
 func decodeTransferPayload(value string) (map[string]any, error) {

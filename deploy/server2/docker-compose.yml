@@ -1,0 +1,66 @@
+name: onwatch-server2
+
+services:
+  onwatch:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${ONWATCH_RELEASE_SHA:-dev}
+        BUILD_TIME: ${ONWATCH_BUILD_TIME:-}
+    image: onwatch:${ONWATCH_IMAGE_TAG:-dev}
+    container_name: onwatch
+    restart: unless-stopped
+    read_only: true
+    init: true
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - ${ONWATCH_DATA_DIR:-./data}:/data
+      - ${ONWATCH_BACKUP_DIR:-./backups}:/backups
+    env_file:
+      - path: ${ONWATCH_ENV_FILE:-.env}
+        required: false
+    environment:
+      ONWATCH_HOST: 0.0.0.0
+      ONWATCH_PORT: "9211"
+      ONWATCH_INGEST_HOST: 0.0.0.0
+      ONWATCH_INGEST_PORT: "9212"
+      ONWATCH_DB_PATH: /data/onwatch.db
+      ONWATCH_CENTRAL_SERVER: "true"
+      ONWATCH_API_INTEGRATIONS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:${ONWATCH_INGEST_HOST_PORT:-9212}:9212"
+    expose:
+      - "9211"
+    networks:
+      - homelab
+    healthcheck:
+      test: ["CMD", "/app/onwatch", "healthcheck", "--url", "http://127.0.0.1:9211/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 48M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      com.mshi.onwatch.revision: ${ONWATCH_RELEASE_SHA:-dev}
+
+networks:
+  homelab:
+    external: true
+    name: homelab

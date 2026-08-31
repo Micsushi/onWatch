@@ -90,6 +90,10 @@ type Config struct {
 	LogLevel           string        // ONWATCH_LOG_LEVEL
 	LogFormat          string        // ONWATCH_LOG_FORMAT: text (default), txt, fmt, or json
 	MetricsToken       string        // ONWATCH_METRICS_TOKEN (bearer token for /metrics endpoint)
+	IngestHost         string        // ONWATCH_INGEST_HOST (disabled when empty)
+	IngestPort         int           // ONWATCH_INGEST_PORT (disabled when zero)
+	IngestMetricsToken string        // ONWATCH_INGEST_METRICS_TOKEN
+	CentralServer      bool          // ONWATCH_CENTRAL_SERVER
 	SessionIdleTimeout time.Duration // ONWATCH_SESSION_IDLE_TIMEOUT (seconds -> Duration)
 	BasePath           string        // ONWATCH_BASE_PATH (subdirectory hosting, e.g. "/onwatch")
 	DebugMode          bool          // --debug flag (foreground mode)
@@ -398,6 +402,21 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 
 	// Metrics token for Prometheus endpoint
 	cfg.MetricsToken = os.Getenv("ONWATCH_METRICS_TOKEN")
+	cfg.IngestHost = strings.TrimSpace(os.Getenv("ONWATCH_INGEST_HOST"))
+	if raw := strings.TrimSpace(os.Getenv("ONWATCH_INGEST_PORT")); raw != "" {
+		port, err := strconv.Atoi(raw)
+		if err != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("ONWATCH_INGEST_PORT must be a valid port")
+		}
+		cfg.IngestPort = port
+		if cfg.IngestHost == "" {
+			cfg.IngestHost = "127.0.0.1"
+		}
+	}
+	cfg.IngestMetricsToken = strings.TrimSpace(os.Getenv("ONWATCH_INGEST_METRICS_TOKEN"))
+	if env := strings.ToLower(strings.TrimSpace(os.Getenv("ONWATCH_CENTRAL_SERVER"))); env != "" {
+		cfg.CentralServer = env == "true" || env == "1" || env == "yes" || env == "on"
+	}
 
 	// Host (bind address)
 	cfg.Host = envWithFallback("ONWATCH_HOST", "SYNTRACK_HOST")
