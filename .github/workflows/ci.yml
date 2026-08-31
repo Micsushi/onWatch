@@ -10,7 +10,7 @@ on:
 jobs:
   test:
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, server1, onwatch]
+    runs-on: [self-hosted, Linux, X64, onwatch]
     name: Test trusted main
 
     steps:
