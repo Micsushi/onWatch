@@ -100,13 +100,46 @@ func installCollectorScheduledTask(executable string, args []string, tokenFile s
 	if err := exec.Command("icacls", tokenFile, "/inheritance:r", "/grant:r", current.Username+":(R)").Run(); err != nil {
 		return fmt.Errorf("restrict collector token ACL: %w", err)
 	}
-	quoted := `"` + executable + `" ` + quoteWindowsArgs(args)
-	command := exec.Command("schtasks", "/Create", "/F", "/SC", "ONLOGON", "/TN", "onWatch Collector", "/TR", quoted)
+	launcher := filepath.Join(filepath.Dir(tokenFile), "onwatch-collector-hidden.vbs")
+	if err := os.WriteFile(launcher, []byte(collectorHiddenLauncher), 0600); err != nil {
+		return fmt.Errorf("write collector hidden launcher: %w", err)
+	}
+	if err := exec.Command("icacls", launcher, "/inheritance:r", "/grant:r", current.Username+":(R)").Run(); err != nil {
+		return fmt.Errorf("restrict collector launcher ACL: %w", err)
+	}
+	wscript := filepath.Join(os.Getenv("SystemRoot"), "System32", "wscript.exe")
+	actionArgs := quoteWindowsArgs(append([]string{"//B", "//Nologo", launcher, executable}, args...))
+	script := fmt.Sprintf(`
+$action = New-ScheduledTaskAction -Execute '%s' -Argument '%s'
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 3650) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -Hidden
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName 'onWatch Collector' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Runs the onWatch collector in the background.' -Force | Out-Null
+Start-ScheduledTask -TaskName 'onWatch Collector'
+`, powerShellSingleQuote(wscript), powerShellSingleQuote(actionArgs))
+	command := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
 	if output, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("create collector scheduled task: %s: %w", strings.TrimSpace(string(output)), err)
 	}
 	fmt.Println("Collector installed as Windows task onWatch Collector")
 	return nil
+}
+
+const collectorHiddenLauncher = `Option Explicit
+Dim arguments, command, index, shell, exitCode
+Set arguments = WScript.Arguments
+If arguments.Count < 1 Then WScript.Quit 87
+command = Chr(34) & Replace(arguments(0), Chr(34), "\" & Chr(34)) & Chr(34)
+For index = 1 To arguments.Count - 1
+    command = command & " " & Chr(34) & Replace(arguments(index), Chr(34), "\" & Chr(34)) & Chr(34)
+Next
+Set shell = CreateObject("WScript.Shell")
+exitCode = shell.Run(command, 0, True)
+WScript.Quit exitCode
+`
+
+func powerShellSingleQuote(value string) string {
+	return strings.ReplaceAll(value, "'", "''")
 }
 
 func quoteWindowsArgs(args []string) string {
