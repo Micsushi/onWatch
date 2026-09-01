@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,37 @@ func TestCentralIngestMirrorsQuotaAndTracksEnrichment(t *testing.T) {
 	results, err = s.StoreIngestBatch(device, []ingest.Event{usage}, now.Add(time.Second))
 	if err != nil || results[0].Status != "enriched" {
 		t.Fatalf("enrichment result=%v err=%v", results, err)
+	}
+}
+
+func TestObservedProvidersRequiresStoredHistory(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "central.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	providers, err := s.ObservedProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providers) != 0 {
+		t.Fatalf("fresh observed providers = %v, want none", providers)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`INSERT INTO codex_snapshots(captured_at, account_id, raw_json, quota_count) VALUES(?, 1, '{}', 0)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO central_quota_snapshots(provider, external_account_id, account_label, captured_at, created_at) VALUES('anthropic', 'acct', 'default', ?, ?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	providers, err = s.ObservedProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(providers, ","), "anthropic,codex"; got != want {
+		t.Fatalf("observed providers = %q, want %q", got, want)
 	}
 }
 

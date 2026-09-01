@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1201,22 +1202,26 @@ func (h *Handler) getProviderFromRequest(r *http.Request) (string, error) {
 		return "", fmt.Errorf("configuration not available")
 	}
 
-	providers := h.config.AvailableProviders()
+	providers := h.telemetryProviders()
 	if len(providers) == 0 {
 		return "", fmt.Errorf("no providers configured")
+	}
+	multipleProviders := len(providers) > 1
+	hasProvider := func(name string) bool {
+		return slices.Contains(providers, name)
 	}
 
 	provider := r.URL.Query().Get("provider")
 	if provider == "" {
 		if prefsProvider, ok := h.forkPreferences()["default_provider"].(string); ok && prefsProvider != "" {
-			if prefsProvider == "both" && h.config.HasMultipleProviders() {
+			if prefsProvider == "both" && multipleProviders {
 				return "both", nil
 			}
-			if h.config.HasProvider(prefsProvider) {
+			if hasProvider(prefsProvider) {
 				return prefsProvider, nil
 			}
 		}
-		if h.config.HasMultipleProviders() {
+		if multipleProviders {
 			return "both", nil
 		}
 		return providers[0], nil
@@ -1227,18 +1232,55 @@ func (h *Handler) getProviderFromRequest(r *http.Request) (string, error) {
 
 	// "both" is a virtual provider - allowed when multiple are configured
 	if provider == "both" {
-		if h.config.HasMultipleProviders() {
+		if multipleProviders {
 			return "both", nil
 		}
 		return "", fmt.Errorf("'both' requires multiple providers to be configured")
 	}
 
 	// Validate provider is available
-	if !h.config.HasProvider(provider) {
+	if !hasProvider(provider) {
 		return "", fmt.Errorf("provider '%s' is not configured", provider)
 	}
 
 	return provider, nil
+}
+
+func (h *Handler) telemetryProviders() []string {
+	if h.config == nil {
+		return nil
+	}
+	available := make(map[string]bool)
+	for _, provider := range h.config.AvailableProviders() {
+		available[provider] = true
+	}
+	if h.config.CentralServer && h.store != nil {
+		observed, err := h.store.ObservedProviders()
+		if err != nil {
+			if h.logger != nil {
+				h.logger.Warn("failed to query observed providers", "error", err)
+			}
+		} else {
+			for _, provider := range observed {
+				available[provider] = true
+			}
+		}
+	}
+	providers := make([]string, 0, len(available))
+	for _, provider := range providerCatalog() {
+		if available[provider.Key] {
+			providers = append(providers, provider.Key)
+		}
+	}
+	return providers
+}
+
+func (h *Handler) telemetryProviderSet() map[string]bool {
+	providers := make(map[string]bool)
+	for _, provider := range h.telemetryProviders() {
+		providers[provider] = true
+	}
+	return providers
 }
 
 func (h *Handler) providerVisibilitySettings() map[string]interface{} {
@@ -1924,7 +1966,7 @@ func (h *Handler) Providers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providers := h.config.AvailableProviders()
+	providers := h.telemetryProviders()
 
 	// Filter by provider_visibility dashboard flag
 	if h.store != nil {
@@ -1943,14 +1985,14 @@ func (h *Handler) Providers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasMultipleProviders() {
+	if len(providers) > 1 {
 		providers = append(providers, "both")
 	}
 	current := ""
 	if len(providers) > 0 {
 		current = providers[0]
 	}
-	if h.config.HasMultipleProviders() {
+	if slices.Contains(providers, "both") {
 		current = "both"
 	}
 
@@ -1983,7 +2025,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	hasTools := false
 	toolsVisible := false
 	if h.config != nil {
-		providers = h.config.AvailableProviders()
+		providers = h.telemetryProviders()
 
 		// Filter by provider_visibility dashboard flag
 		if h.store != nil {
@@ -2001,6 +2043,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		quotaProviderCount := len(providers)
 
 		hasTools = h.config.APIIntegrationsEnabled
 		toolsVisible = hasTools && h.apiIntegrationsDashboardVisible()
@@ -2009,7 +2052,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Always add "both" (All tab) when multiple providers configured
-		if h.config.HasMultipleProviders() {
+		if quotaProviderCount > 1 {
 			providers = append(providers, "both")
 		}
 		currentProvider = h.forkDefaultProvider(r, providers)
@@ -2114,22 +2157,23 @@ func (h *Handler) currentCursor(w http.ResponseWriter, r *http.Request) {
 
 // currentBoth returns combined quota status for all configured providers.
 func (h *Handler) currentBoth(w http.ResponseWriter, r *http.Request) {
+	providers := h.telemetryProviderSet()
 	response := map[string]interface{}{}
 	visibility := h.providerVisibilitySettings()
 
-	if h.config.HasProvider("synthetic") && providerTelemetryEnabled(visibility, "synthetic") {
+	if providers["synthetic"] && providerTelemetryEnabled(visibility, "synthetic") {
 		response["synthetic"] = h.buildSyntheticCurrent()
 	}
-	if h.config.HasProvider("zai") && providerTelemetryEnabled(visibility, "zai") {
+	if providers["zai"] && providerTelemetryEnabled(visibility, "zai") {
 		response["zai"] = h.buildZaiCurrent()
 	}
-	if h.config.HasProvider("anthropic") && providerTelemetryEnabled(visibility, "anthropic") {
+	if providers["anthropic"] && providerTelemetryEnabled(visibility, "anthropic") {
 		response["anthropic"] = h.buildAnthropicCurrent()
 	}
-	if h.config.HasProvider("copilot") && providerTelemetryEnabled(visibility, "copilot") {
+	if providers["copilot"] && providerTelemetryEnabled(visibility, "copilot") {
 		response["copilot"] = h.buildCopilotCurrent()
 	}
-	if h.config.HasProvider("codex") && providerTelemetryEnabled(visibility, "codex") {
+	if providers["codex"] && providerTelemetryEnabled(visibility, "codex") {
 		codexAccounts := h.codexUsageAccounts()
 		originalAccountCount := len(codexAccounts)
 		filteredAccounts := make([]map[string]interface{}, 0, len(codexAccounts))
@@ -2148,10 +2192,10 @@ func (h *Handler) currentBoth(w http.ResponseWriter, r *http.Request) {
 			response["codex"] = h.buildCodexCurrent(DefaultCodexAccountID)
 		}
 	}
-	if h.config.HasProvider("antigravity") && providerTelemetryEnabled(visibility, "antigravity") {
+	if providers["antigravity"] && providerTelemetryEnabled(visibility, "antigravity") {
 		response["antigravity"] = h.buildAntigravityCurrent()
 	}
-	if h.config.HasProvider("minimax") && providerTelemetryEnabled(visibility, "minimax") {
+	if providers["minimax"] && providerTelemetryEnabled(visibility, "minimax") {
 		minimaxAccounts := h.minimaxUsageAccounts()
 		originalCount := len(minimaxAccounts)
 		filtered := make([]map[string]interface{}, 0, len(minimaxAccounts))
@@ -2170,13 +2214,13 @@ func (h *Handler) currentBoth(w http.ResponseWriter, r *http.Request) {
 			response["minimax"] = h.buildMiniMaxCurrent(h.defaultMiniMaxAccountID())
 		}
 	}
-	if h.config.HasProvider("openrouter") && providerTelemetryEnabled(visibility, "openrouter") {
+	if providers["openrouter"] && providerTelemetryEnabled(visibility, "openrouter") {
 		response["openrouter"] = h.buildOpenRouterCurrent()
 	}
-	if h.config.HasProvider("gemini") && providerTelemetryEnabled(visibility, "gemini") {
+	if providers["gemini"] && providerTelemetryEnabled(visibility, "gemini") {
 		response["gemini"] = h.buildGeminiCurrent()
 	}
-	if h.config.HasProvider("cursor") && providerTelemetryEnabled(visibility, "cursor") {
+	if providers["cursor"] && providerTelemetryEnabled(visibility, "cursor") {
 		response["cursor"] = h.buildCursorCurrent()
 	}
 	respondJSON(w, http.StatusOK, response)
@@ -2529,6 +2573,7 @@ func (h *Handler) History(w http.ResponseWriter, r *http.Request) {
 
 // historyBoth returns both providers' history.
 func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
+	providers := h.telemetryProviderSet()
 	response := map[string]interface{}{}
 	visibility := h.providerVisibilitySettings()
 
@@ -2541,7 +2586,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	now := window.End
 	start := window.Start
 
-	if h.config.HasProvider("synthetic") && providerTelemetryEnabled(visibility, "synthetic") && h.store != nil {
+	if providers["synthetic"] && providerTelemetryEnabled(visibility, "synthetic") && h.store != nil {
 		snapshots, err := h.store.QueryRange(start, now)
 		if err == nil {
 			step := downsampleStep(len(snapshots), maxChartPoints)
@@ -2578,7 +2623,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("zai") && providerTelemetryEnabled(visibility, "zai") && h.store != nil {
+	if providers["zai"] && providerTelemetryEnabled(visibility, "zai") && h.store != nil {
 		snapshots, err := h.store.QueryZaiRange(start, now)
 		if err == nil {
 			step := downsampleStep(len(snapshots), maxChartPoints)
@@ -2603,7 +2648,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("anthropic") && providerTelemetryEnabled(visibility, "anthropic") && h.store != nil {
+	if providers["anthropic"] && providerTelemetryEnabled(visibility, "anthropic") && h.store != nil {
 		snapshots, err := h.store.QueryAnthropicRangeSampled(start, now, maxChartPoints)
 		if err == nil {
 			step := downsampleStep(len(snapshots), maxChartPoints)
@@ -2625,7 +2670,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("copilot") && providerTelemetryEnabled(visibility, "copilot") && h.store != nil {
+	if providers["copilot"] && providerTelemetryEnabled(visibility, "copilot") && h.store != nil {
 		snapshots, err := h.store.QueryCopilotRange(start, now)
 		if err == nil {
 			step := downsampleStep(len(snapshots), maxChartPoints)
@@ -2649,7 +2694,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("codex") && providerTelemetryEnabled(visibility, "codex") && h.store != nil {
+	if providers["codex"] && providerTelemetryEnabled(visibility, "codex") && h.store != nil {
 		codexAccounts := h.codexUsageAccounts()
 		codexHistories := make([]map[string]interface{}, 0, len(codexAccounts))
 		for _, acc := range codexAccounts {
@@ -2694,7 +2739,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("antigravity") && providerTelemetryEnabled(visibility, "antigravity") && h.store != nil {
+	if providers["antigravity"] && providerTelemetryEnabled(visibility, "antigravity") && h.store != nil {
 		snapshots, err := h.store.QueryAntigravityRange(start, now)
 		if err == nil {
 			step := downsampleStep(len(snapshots), maxChartPoints)
@@ -2716,7 +2761,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("minimax") && providerTelemetryEnabled(visibility, "minimax") && h.store != nil {
+	if providers["minimax"] && providerTelemetryEnabled(visibility, "minimax") && h.store != nil {
 		minimaxAccounts := h.minimaxUsageAccounts()
 		minimaxHistories := make([]map[string]interface{}, 0, len(minimaxAccounts))
 		for _, acc := range minimaxAccounts {
@@ -2760,7 +2805,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("openrouter") && providerTelemetryEnabled(visibility, "openrouter") && h.store != nil {
+	if providers["openrouter"] && providerTelemetryEnabled(visibility, "openrouter") && h.store != nil {
 		snapshots, err := h.store.QueryOpenRouterRange(start, now)
 		if err == nil {
 			step := downsampleStep(len(snapshots), maxChartPoints)
@@ -2788,7 +2833,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("gemini") && providerTelemetryEnabled(visibility, "gemini") && h.store != nil {
+	if providers["gemini"] && providerTelemetryEnabled(visibility, "gemini") && h.store != nil {
 		snapshots, err := h.store.QueryGeminiRangeSampled(start, now, maxChartPoints)
 		if err == nil {
 			// Filter empty snapshots and aggregate by family
@@ -2816,7 +2861,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("cursor") && providerTelemetryEnabled(visibility, "cursor") && h.store != nil {
+	if providers["cursor"] && providerTelemetryEnabled(visibility, "cursor") && h.store != nil {
 		snapshots, err := h.store.QueryCursorRangeSampled(start, now, maxChartPoints)
 		if err == nil {
 			step := downsampleStep(len(snapshots), maxChartPoints)
@@ -3437,13 +3482,14 @@ func (h *Handler) Cycles(w http.ResponseWriter, r *http.Request) {
 
 // cyclesBoth returns combined cycles from all configured providers.
 func (h *Handler) cyclesBoth(w http.ResponseWriter, r *http.Request) {
+	providers := h.telemetryProviderSet()
 	response := map[string]interface{}{}
 	if h.store == nil {
 		respondJSON(w, http.StatusOK, response)
 		return
 	}
 
-	if h.config.HasProvider("synthetic") {
+	if providers["synthetic"] {
 		quotaType := r.URL.Query().Get("type")
 		if quotaType == "" {
 			quotaType = "subscription"
@@ -3460,7 +3506,7 @@ func (h *Handler) cyclesBoth(w http.ResponseWriter, r *http.Request) {
 		response["synthetic"] = synCycles
 	}
 
-	if h.config.HasProvider("zai") {
+	if providers["zai"] {
 		zaiType := r.URL.Query().Get("zaiType")
 		if zaiType == "" {
 			zaiType = "tokens"
@@ -3477,7 +3523,7 @@ func (h *Handler) cyclesBoth(w http.ResponseWriter, r *http.Request) {
 		response["zai"] = zaiCycles
 	}
 
-	if h.config.HasProvider("anthropic") {
+	if providers["anthropic"] {
 		anthType := r.URL.Query().Get("anthropicType")
 		if anthType == "" {
 			anthType = "five_hour"
@@ -3497,7 +3543,7 @@ func (h *Handler) cyclesBoth(w http.ResponseWriter, r *http.Request) {
 		response["anthropic"] = anthCycles
 	}
 
-	if h.config.HasProvider("codex") {
+	if providers["codex"] {
 		codexType := r.URL.Query().Get("codexType")
 		if codexType == "" {
 			codexType = r.URL.Query().Get("type")
@@ -3517,7 +3563,7 @@ func (h *Handler) cyclesBoth(w http.ResponseWriter, r *http.Request) {
 		response["codex"] = codexCycles
 	}
 
-	if h.config.HasProvider("antigravity") {
+	if providers["antigravity"] {
 		modelIDs, err := h.store.QueryAllAntigravityModelIDs()
 		if err == nil {
 			var antigravityCycles []map[string]interface{}
@@ -3534,7 +3580,7 @@ func (h *Handler) cyclesBoth(w http.ResponseWriter, r *http.Request) {
 			response["antigravity"] = antigravityCycles
 		}
 	}
-	if h.config.HasProvider("minimax") {
+	if providers["minimax"] {
 		minimaxAccID := h.parseMiniMaxAccountID(r)
 		modelNames, err := h.store.QueryAllMiniMaxModelNames(minimaxAccID)
 		if err == nil {
@@ -3552,7 +3598,7 @@ func (h *Handler) cyclesBoth(w http.ResponseWriter, r *http.Request) {
 			response["minimax"] = minimaxCycles
 		}
 	}
-	if h.config.HasProvider("openrouter") {
+	if providers["openrouter"] {
 		quotaType := "credits"
 		var orCycles []map[string]interface{}
 		if active, err := h.store.QueryActiveOpenRouterCycle(quotaType); err == nil && active != nil {
@@ -3571,7 +3617,7 @@ func (h *Handler) cyclesBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("gemini") {
+	if providers["gemini"] {
 		response["gemini"] = []interface{}{}
 	}
 
@@ -3756,8 +3802,9 @@ func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 
 // summaryBoth returns combined summaries from all configured providers.
 func (h *Handler) summaryBoth(w http.ResponseWriter, r *http.Request) {
+	providers := h.telemetryProviderSet()
 	response := map[string]interface{}{}
-	if h.config.HasProvider("synthetic") {
+	if providers["synthetic"] {
 		synResp := map[string]interface{}{
 			"subscription": buildEmptySummaryResponse("subscription"),
 			"search":       buildEmptySummaryResponse("search"),
@@ -3776,28 +3823,28 @@ func (h *Handler) summaryBoth(w http.ResponseWriter, r *http.Request) {
 		}
 		response["synthetic"] = synResp
 	}
-	if h.config.HasProvider("zai") {
+	if providers["zai"] {
 		response["zai"] = h.buildZaiSummaryMap()
 	}
-	if h.config.HasProvider("openrouter") {
+	if providers["openrouter"] {
 		response["openrouter"] = h.buildOpenRouterSummaryMap()
 	}
-	if h.config.HasProvider("anthropic") {
+	if providers["anthropic"] {
 		response["anthropic"] = h.buildAnthropicSummaryMap()
 	}
-	if h.config.HasProvider("copilot") {
+	if providers["copilot"] {
 		response["copilot"] = h.buildCopilotSummaryMap()
 	}
-	if h.config.HasProvider("codex") {
+	if providers["codex"] {
 		response["codex"] = h.buildCodexSummaryMap(DefaultCodexAccountID)
 	}
-	if h.config.HasProvider("antigravity") {
+	if providers["antigravity"] {
 		response["antigravity"] = h.buildAntigravitySummaryMap()
 	}
-	if h.config.HasProvider("minimax") {
+	if providers["minimax"] {
 		response["minimax"] = h.buildMiniMaxSummaryMap(h.defaultMiniMaxAccountID())
 	}
-	if h.config.HasProvider("gemini") && h.geminiTracker != nil {
+	if providers["gemini"] && h.geminiTracker != nil {
 		modelIDs, _ := h.store.QueryAllGeminiModelIDs()
 		var geminiSummaries []map[string]interface{}
 		for _, modelID := range modelIDs {
@@ -3816,7 +3863,7 @@ func (h *Handler) summaryBoth(w http.ResponseWriter, r *http.Request) {
 		}
 		response["gemini"] = geminiSummaries
 	}
-	if h.config.HasProvider("cursor") && h.cursorTracker != nil {
+	if providers["cursor"] && h.cursorTracker != nil {
 		response["cursor"] = h.buildCursorSummaryMap()
 	}
 	respondJSON(w, http.StatusOK, response)
@@ -4315,6 +4362,7 @@ func (h *Handler) queryMiniMaxSessions(accountID int64) ([]*store.Session, error
 
 // sessionsBoth returns sessions from both providers.
 func (h *Handler) sessionsBoth(w http.ResponseWriter, r *http.Request) {
+	providers := h.telemetryProviderSet()
 	response := map[string]interface{}{}
 	codexAccountID := parseCodexAccountID(r)
 
@@ -4356,28 +4404,28 @@ func (h *Handler) sessionsBoth(w http.ResponseWriter, r *http.Request) {
 		return list
 	}
 
-	if h.config.HasProvider("synthetic") {
+	if providers["synthetic"] {
 		response["synthetic"] = buildSessionList("synthetic")
 	}
-	if h.config.HasProvider("zai") {
+	if providers["zai"] {
 		response["zai"] = buildSessionList("zai")
 	}
-	if h.config.HasProvider("anthropic") {
+	if providers["anthropic"] {
 		response["anthropic"] = buildSessionList("anthropic")
 	}
-	if h.config.HasProvider("copilot") {
+	if providers["copilot"] {
 		response["copilot"] = buildSessionList("copilot")
 	}
-	if h.config.HasProvider("codex") {
+	if providers["codex"] {
 		response["codex"] = buildSessionList("codex")
 	}
-	if h.config.HasProvider("antigravity") {
+	if providers["antigravity"] {
 		response["antigravity"] = buildSessionList("antigravity")
 	}
-	if h.config.HasProvider("minimax") {
+	if providers["minimax"] {
 		response["minimax"] = buildSessionList("minimax")
 	}
-	if h.config.HasProvider("openrouter") {
+	if providers["openrouter"] {
 		quotaType := "credits"
 		var orCycles []map[string]interface{}
 		if active, err := h.store.QueryActiveOpenRouterCycle(quotaType); err == nil && active != nil {
@@ -4396,10 +4444,10 @@ func (h *Handler) sessionsBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("gemini") {
+	if providers["gemini"] {
 		response["gemini"] = buildSessionList("gemini")
 	}
-	if h.config.HasProvider("openrouter") {
+	if providers["openrouter"] {
 		response["openrouter"] = buildSessionList("openrouter")
 	}
 
@@ -4551,23 +4599,24 @@ func (h *Handler) Insights(w http.ResponseWriter, r *http.Request) {
 
 // insightsBoth returns combined insights from all configured providers.
 func (h *Handler) insightsBoth(w http.ResponseWriter, r *http.Request, rangeDur time.Duration) {
+	providers := h.telemetryProviderSet()
 	hidden := h.getHiddenInsightKeys()
 	response := map[string]interface{}{}
 	visibility := h.providerVisibilitySettings()
 
-	if h.config.HasProvider("synthetic") && providerTelemetryEnabled(visibility, "synthetic") {
+	if providers["synthetic"] && providerTelemetryEnabled(visibility, "synthetic") {
 		response["synthetic"] = h.buildSyntheticInsights(hidden, rangeDur)
 	}
-	if h.config.HasProvider("zai") && providerTelemetryEnabled(visibility, "zai") {
+	if providers["zai"] && providerTelemetryEnabled(visibility, "zai") {
 		response["zai"] = h.buildZaiInsights(hidden)
 	}
-	if h.config.HasProvider("anthropic") && providerTelemetryEnabled(visibility, "anthropic") {
+	if providers["anthropic"] && providerTelemetryEnabled(visibility, "anthropic") {
 		response["anthropic"] = h.buildAnthropicInsights(hidden, rangeDur)
 	}
-	if h.config.HasProvider("copilot") && providerTelemetryEnabled(visibility, "copilot") {
+	if providers["copilot"] && providerTelemetryEnabled(visibility, "copilot") {
 		response["copilot"] = h.buildCopilotInsights(hidden, rangeDur)
 	}
-	if h.config.HasProvider("codex") && providerTelemetryEnabled(visibility, "codex") {
+	if providers["codex"] && providerTelemetryEnabled(visibility, "codex") {
 		codexAccounts := h.codexUsageAccounts()
 		codexInsights := make([]map[string]interface{}, 0, len(codexAccounts))
 		for _, acc := range codexAccounts {
@@ -4590,10 +4639,10 @@ func (h *Handler) insightsBoth(w http.ResponseWriter, r *http.Request, rangeDur 
 			response["codexAccounts"] = codexInsights
 		}
 	}
-	if h.config.HasProvider("antigravity") && providerTelemetryEnabled(visibility, "antigravity") {
+	if providers["antigravity"] && providerTelemetryEnabled(visibility, "antigravity") {
 		response["antigravity"] = h.buildAntigravityInsights(hidden, rangeDur)
 	}
-	if h.config.HasProvider("minimax") && providerTelemetryEnabled(visibility, "minimax") {
+	if providers["minimax"] && providerTelemetryEnabled(visibility, "minimax") {
 		minimaxAccounts := h.minimaxUsageAccounts()
 		minimaxInsights := make([]map[string]interface{}, 0, len(minimaxAccounts))
 		for _, acc := range minimaxAccounts {
@@ -4616,13 +4665,13 @@ func (h *Handler) insightsBoth(w http.ResponseWriter, r *http.Request, rangeDur 
 			response["minimaxAccounts"] = minimaxInsights
 		}
 	}
-	if h.config.HasProvider("openrouter") && providerTelemetryEnabled(visibility, "openrouter") {
+	if providers["openrouter"] && providerTelemetryEnabled(visibility, "openrouter") {
 		response["openrouter"] = h.buildOpenRouterInsights(hidden)
 	}
-	if h.config.HasProvider("gemini") && providerTelemetryEnabled(visibility, "gemini") {
+	if providers["gemini"] && providerTelemetryEnabled(visibility, "gemini") {
 		response["gemini"] = insightsResponse{Stats: []insightStat{}, Insights: []insightItem{}}
 	}
-	if h.config.HasProvider("cursor") && providerTelemetryEnabled(visibility, "cursor") {
+	if providers["cursor"] && providerTelemetryEnabled(visibility, "cursor") {
 		response["cursor"] = h.buildCursorInsights(hidden, rangeDur)
 	}
 
@@ -7239,6 +7288,7 @@ func (h *Handler) cycleOverviewAnthropic(w http.ResponseWriter, r *http.Request)
 
 // cycleOverviewBoth returns combined cycle overview from all configured providers.
 func (h *Handler) cycleOverviewBoth(w http.ResponseWriter, r *http.Request) {
+	providers := h.telemetryProviderSet()
 	response := map[string]interface{}{}
 	if h.store == nil {
 		respondJSON(w, http.StatusOK, response)
@@ -7247,7 +7297,7 @@ func (h *Handler) cycleOverviewBoth(w http.ResponseWriter, r *http.Request) {
 
 	limit := parseCycleOverviewLimit(r)
 
-	if h.config.HasProvider("synthetic") {
+	if providers["synthetic"] {
 		groupBy := r.URL.Query().Get("groupBy")
 		if groupBy == "" {
 			groupBy = "subscription"
@@ -7262,7 +7312,7 @@ func (h *Handler) cycleOverviewBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("zai") {
+	if providers["zai"] {
 		groupBy := r.URL.Query().Get("zaiGroupBy")
 		if groupBy == "" {
 			groupBy = "tokens"
@@ -7277,7 +7327,7 @@ func (h *Handler) cycleOverviewBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("anthropic") {
+	if providers["anthropic"] {
 		groupBy := r.URL.Query().Get("anthropicGroupBy")
 		if groupBy == "" {
 			groupBy = "five_hour"
@@ -7304,7 +7354,7 @@ func (h *Handler) cycleOverviewBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("copilot") {
+	if providers["copilot"] {
 		groupBy := r.URL.Query().Get("copilotGroupBy")
 		if groupBy == "" {
 			groupBy = "premium_interactions"
@@ -7331,7 +7381,7 @@ func (h *Handler) cycleOverviewBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("codex") {
+	if providers["codex"] {
 		groupBy := r.URL.Query().Get("codexGroupBy")
 		if groupBy == "" {
 			groupBy = r.URL.Query().Get("groupBy")
@@ -7361,7 +7411,7 @@ func (h *Handler) cycleOverviewBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("openrouter") {
+	if providers["openrouter"] {
 		quotaType := "credits"
 		var orCycles []map[string]interface{}
 		if active, err := h.store.QueryActiveOpenRouterCycle(quotaType); err == nil && active != nil {
@@ -7380,7 +7430,7 @@ func (h *Handler) cycleOverviewBoth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.config.HasProvider("gemini") {
+	if providers["gemini"] {
 		response["gemini"] = map[string]interface{}{
 			"groupBy":    "",
 			"provider":   "gemini",

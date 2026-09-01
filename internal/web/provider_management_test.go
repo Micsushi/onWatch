@@ -136,6 +136,40 @@ func TestHandler_ProviderVisibilityHelpers(t *testing.T) {
 	}
 }
 
+func TestCentralServerUsesImportedProviderHistoryWithoutCredentials(t *testing.T) {
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	defer s.Close()
+	insertCodexWebSnapshot(t, s, 1, "pro")
+	reset := time.Now().UTC().Add(2 * time.Hour)
+	if _, err := s.InsertAnthropicSnapshot(&api.AnthropicSnapshot{
+		CapturedAt: time.Now().UTC(),
+		Quotas:     []api.AnthropicQuota{{Name: "seven_day", Utilization: 22, ResetsAt: &reset}},
+	}); err != nil {
+		t.Fatalf("InsertAnthropicSnapshot: %v", err)
+	}
+
+	h := NewHandler(s, nil, nil, nil, &config.Config{CentralServer: true})
+	providers := h.telemetryProviders()
+	if got, want := strings.Join(providers, ","), "anthropic,codex"; got != want {
+		t.Fatalf("telemetryProviders() = %q, want %q", got, want)
+	}
+
+	rr := httptest.NewRecorder()
+	h.Providers(rr, httptest.NewRequest(http.MethodGet, "/api/providers", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"codex"`) || !strings.Contains(rr.Body.String(), `"both"`) {
+		t.Fatalf("providers status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	h.History(rr, httptest.NewRequest(http.MethodGet, "/api/history?range=7d&provider=both", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"anthropic"`) || !strings.Contains(rr.Body.String(), `"codex"`) {
+		t.Fatalf("history status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestHandler_IsProviderConfiguredAndTryAutoDetect(t *testing.T) {
 	home := t.TempDir()
 	codexHome := t.TempDir()

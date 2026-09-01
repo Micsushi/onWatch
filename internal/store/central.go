@@ -45,6 +45,51 @@ type PollOwner struct {
 	EffectiveAt time.Time
 }
 
+// ObservedProviders returns providers with stored quota history. It deliberately
+// ignores placeholder provider accounts so a fresh database stays empty.
+func (s *Store) ObservedProviders() ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT provider
+		FROM (
+			SELECT 'anthropic' AS provider, 1 AS sort WHERE EXISTS (SELECT 1 FROM anthropic_snapshots LIMIT 1)
+			UNION ALL SELECT 'synthetic', 2 WHERE EXISTS (SELECT 1 FROM quota_snapshots LIMIT 1)
+			UNION ALL SELECT 'zai', 3 WHERE EXISTS (SELECT 1 FROM zai_snapshots LIMIT 1)
+			UNION ALL SELECT 'copilot', 4 WHERE EXISTS (SELECT 1 FROM copilot_snapshots LIMIT 1)
+			UNION ALL SELECT 'codex', 5 WHERE EXISTS (SELECT 1 FROM codex_snapshots LIMIT 1)
+			UNION ALL SELECT 'antigravity', 6 WHERE EXISTS (SELECT 1 FROM antigravity_snapshots LIMIT 1)
+			UNION ALL SELECT 'minimax', 7 WHERE EXISTS (SELECT 1 FROM minimax_snapshots LIMIT 1)
+			UNION ALL SELECT 'openrouter', 8 WHERE EXISTS (SELECT 1 FROM openrouter_snapshots LIMIT 1)
+			UNION ALL SELECT 'gemini', 9 WHERE EXISTS (SELECT 1 FROM gemini_snapshots LIMIT 1)
+			UNION ALL SELECT 'cursor', 10 WHERE EXISTS (SELECT 1 FROM cursor_snapshots LIMIT 1)
+			UNION ALL
+			SELECT CASE provider WHEN 'openai' THEN 'codex' ELSE provider END,
+				CASE provider
+					WHEN 'anthropic' THEN 1 WHEN 'synthetic' THEN 2 WHEN 'zai' THEN 3
+					WHEN 'copilot' THEN 4 WHEN 'openai' THEN 5 WHEN 'codex' THEN 5
+					WHEN 'antigravity' THEN 6 WHEN 'minimax' THEN 7 WHEN 'openrouter' THEN 8
+					WHEN 'gemini' THEN 9 WHEN 'cursor' THEN 10 ELSE 99
+				END
+			FROM central_quota_snapshots
+			WHERE provider IN ('anthropic', 'synthetic', 'zai', 'copilot', 'openai', 'codex', 'antigravity', 'minimax', 'openrouter', 'gemini', 'cursor')
+		)
+		GROUP BY provider
+		ORDER BY MIN(sort), provider`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	providers := []string{}
+	for rows.Next() {
+		var provider string
+		if err := rows.Scan(&provider); err != nil {
+			return nil, err
+		}
+		providers = append(providers, provider)
+	}
+	return providers, rows.Err()
+}
+
 func (s *Store) ensureCentralSchema() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS devices (
