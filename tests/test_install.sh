@@ -19,6 +19,7 @@ BOLD='\033[1m'; NC='\033[0m'
 setup() {
     TEST_DIR=$(mktemp -d)
     export ONWATCH_INSTALL_DIR="$TEST_DIR"
+    export ONWATCH_LAUNCH_AGENT_DIR="$TEST_DIR/LaunchAgents"
     export INSTALL_DIR="$TEST_DIR"
     export BIN_DIR="${TEST_DIR}/bin"
     mkdir -p "$TEST_DIR/bin" "$TEST_DIR/data"
@@ -28,6 +29,7 @@ teardown() {
     # Close fd 3 if open
     exec 3<&- 2>/dev/null || true
     [[ -n "$TEST_DIR" ]] && rm -rf "$TEST_DIR"
+    unset ONWATCH_LAUNCH_AGENT_DIR
     TEST_DIR=""
 }
 
@@ -178,7 +180,7 @@ test_anthropic_auto_rejected_manual() {
 test_multiple_syn_and_anth() {
     setup && source_functions
     detect_anthropic_token() { return 1; }
-    run_setup "5\ny\nsyn_multi_123\nN\ny\n1\nanth-multi\nN\nadmin\ntestpass\n9211\n60\n"
+    run_setup "7\ny\nsyn_multi_123\nN\ny\n1\nanth-multi\nN\nN\nN\nadmin\ntestpass\n9211\n60\n"
     assert_eq "SYNTHETIC_API_KEY" "syn_multi_123" && \
     assert_unset "ZAI_API_KEY" && \
     assert_eq "ANTHROPIC_TOKEN" "anth-multi" && \
@@ -187,7 +189,7 @@ test_multiple_syn_and_anth() {
 
 test_multiple_zai_only() {
     setup && source_functions
-    run_setup "5\nN\ny\nzai_multi_456\nY\nN\nN\nadmin\ntestpass\n9211\n60\n"
+    run_setup "7\nN\ny\nzai_multi_456\nY\nN\nN\nN\nN\nadmin\ntestpass\n9211\n60\n"
     assert_unset "SYNTHETIC_API_KEY" && \
     assert_eq "ZAI_API_KEY" "zai_multi_456" && \
     assert_unset "ANTHROPIC_TOKEN"
@@ -196,7 +198,7 @@ test_multiple_zai_only() {
 test_multiple_all_three() {
     setup && source_functions
     detect_anthropic_token() { return 1; }
-    run_setup "5\ny\nsyn_all_789\ny\nzai_all_789\nY\ny\n1\nanth_all_789\nN\nadmin\ntestpass\n9211\n60\n"
+    run_setup "7\ny\nsyn_all_789\ny\nzai_all_789\nY\ny\n1\nanth_all_789\nN\nN\nN\nadmin\ntestpass\n9211\n60\n"
     assert_eq "SYNTHETIC_API_KEY" "syn_all_789" && \
     assert_eq "ZAI_API_KEY" "zai_all_789" && \
     assert_eq "ANTHROPIC_TOKEN" "anth_all_789" && \
@@ -207,7 +209,7 @@ test_all_available_choice6() {
     setup && source_functions
     detect_anthropic_token() { return 1; }
     detect_codex_token() { return 1; }
-    run_setup "6\nsyn_all_avail\nzai_all_avail\nY\n1\nanth_all_avail\n1\ncodex_all_avail\nadmin\ntestpass\n9211\n60\n"
+    run_setup "8\nsyn_all_avail\nzai_all_avail\nY\n1\nanth_all_avail\n1\ncodex_all_avail\nadmin\ntestpass\n9211\n60\n"
     assert_eq "SYNTHETIC_API_KEY" "syn_all_avail" && \
     assert_eq "ZAI_API_KEY" "zai_all_avail" && \
     assert_eq "ANTHROPIC_TOKEN" "anth_all_avail" && \
@@ -313,8 +315,8 @@ EOF
 
 test_multiple_none_triggers_retry() {
     setup && source_functions
-    # choice=5, all N (triggers retry), then add Synthetic on retry
-    run_setup "5\nN\nN\nN\nN\ny\nsyn_retry_123\nadmin\ntestpass\n9211\n60\n"
+    # choice=7, all N (triggers retry), then add Synthetic on retry
+    run_setup "7\nN\nN\nN\nN\nN\nN\ny\nsyn_retry_123\nadmin\ntestpass\n9211\n60\n"
     assert_eq "SYNTHETIC_API_KEY" "syn_retry_123"
 }
 
@@ -345,6 +347,20 @@ EOF
     [[ "$token" == "file-fallback-token-xyz" ]]
 }
 
+test_setup_launchd_creates_supervised_service() {
+    setup && source_functions
+    OS="darwin"
+    setup_launchd >/dev/null
+
+    local plist="${ONWATCH_LAUNCH_AGENT_DIR}/dev.onllm.onwatch.plist"
+    [[ -f "$plist" ]] &&
+        grep -q '<string>dev.onllm.onwatch</string>' "$plist" &&
+        grep -q "<string>${BIN_DIR}/onwatch</string>" "$plist" &&
+        grep -q '<key>RunAtLoad</key>' "$plist" &&
+        grep -q '<key>KeepAlive</key>' "$plist" &&
+        grep -q '<key>ONWATCH_LAUNCHD</key>' "$plist"
+}
+
 # Run All Tests
 printf "\n${BOLD}  install.sh Test Suite${NC}\n"
 printf "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n\n"
@@ -371,6 +387,7 @@ run_test test_has_anthropic_key_accepts_real
 run_test test_env_get_reads_values
 run_test test_multiple_none_triggers_retry
 run_test test_detect_anthropic_file_fallback
+run_test test_setup_launchd_creates_supervised_service
 
 printf "\n  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
 printf "  ${BOLD}Results:${NC} %d/%d passed" "$PASS" "$TOTAL"

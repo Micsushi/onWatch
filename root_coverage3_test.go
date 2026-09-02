@@ -6,10 +6,12 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -2394,6 +2396,83 @@ func TestStopPreviousInstance_WithLivePIDLegacyFormat(t *testing.T) {
 		stopPreviousInstance(0, true)
 	})
 	_ = out
+}
+
+func TestStopPreviousInstance_WaitsForGracefulExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGTERM not supported the same way on Windows")
+	}
+
+	oldPIDFile := pidFile
+	pidFile = filepath.Join(t.TempDir(), "onwatch.pid")
+	t.Cleanup(func() { pidFile = oldPIDFile })
+
+	readyPath := filepath.Join(t.TempDir(), "ready")
+	exitPath := filepath.Join(t.TempDir(), "exited")
+	cmd := exec.Command(os.Args[0], "-test.run=TestDelayedExitHelperProcess_NeverRun")
+	cmd.Env = append(os.Environ(),
+		"GO_DELAYED_EXIT_HELPER=1",
+		"GO_DELAYED_EXIT_READY="+readyPath,
+		"GO_DELAYED_EXIT_DONE="+exitPath,
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start delayed-exit subprocess: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(readyPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("delayed-exit subprocess did not become ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d:9211", cmd.Process.Pid)), 0o644); err != nil {
+		t.Fatalf("write pid file: %v", err)
+	}
+
+	stopPreviousInstance(0, true)
+	if _, err := os.Stat(exitPath); err != nil {
+		t.Fatalf("stopPreviousInstance returned before graceful shutdown completed: %v", err)
+	}
+}
+
+func TestLaunchdServiceInstalled_IgnoresGoTestBinary(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("launchd is macOS-only")
+	}
+
+	dir := t.TempDir()
+	t.Setenv("ONWATCH_LAUNCH_AGENT_DIR", dir)
+	setTestArgs(t, []string{"onwatch"})
+	if err := os.WriteFile(filepath.Join(dir, launchdServiceLabel+".plist"), []byte("test"), 0o600); err != nil {
+		t.Fatalf("write plist: %v", err)
+	}
+	if launchdServiceInstalled() {
+		t.Fatal("Go test binary must not control the user's launchd service")
+	}
+}
+
+func TestDelayedExitHelperProcess_NeverRun(t *testing.T) {
+	if os.Getenv("GO_DELAYED_EXIT_HELPER") != "1" {
+		return
+	}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM)
+	if err := os.WriteFile(os.Getenv("GO_DELAYED_EXIT_READY"), []byte("ready"), 0o600); err != nil {
+		os.Exit(2)
+	}
+	<-sigChan
+	time.Sleep(900 * time.Millisecond)
+	if err := os.WriteFile(os.Getenv("GO_DELAYED_EXIT_DONE"), []byte("done"), 0o600); err != nil {
+		os.Exit(3)
+	}
+	os.Exit(0)
 }
 
 // ---------------------------------------------------------------------------

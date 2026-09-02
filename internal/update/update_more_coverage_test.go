@@ -243,6 +243,49 @@ func TestRestart_SystemdBranchUsesSystemctl(t *testing.T) {
 	_ = u.Restart()
 }
 
+func TestRestart_LaunchdBranchUsesLaunchctl(t *testing.T) {
+	t.Setenv("ONWATCH_LAUNCHD", "1")
+	t.Setenv("ONWATCH_LAUNCHD_TARGET", "gui/501")
+	t.Setenv("INVOCATION_ID", "")
+
+	oldExecCommand := execCommand
+	oldSleepFn := sleepFn
+	oldExitFn := exitFn
+	t.Cleanup(func() {
+		execCommand = oldExecCommand
+		sleepFn = oldSleepFn
+		exitFn = oldExitFn
+	})
+
+	var gotName string
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return fakeExecCommandSuccess(t)(name, args...)
+	}
+	sleepFn = func(time.Duration) {}
+	exitFn = func(code int) { panic(updateExitPanic{code: code}) }
+
+	u := NewUpdater("1.0.0", slog.Default())
+	defer func() {
+		r := recover()
+		exit, ok := r.(updateExitPanic)
+		if !ok || exit.code != 0 {
+			t.Fatalf("expected exit 0, got %v", r)
+		}
+		if gotName != "launchctl" {
+			t.Fatalf("command = %q, want launchctl", gotName)
+		}
+		wantArgs := []string{"kickstart", "-k", "gui/501/dev.onllm.onwatch"}
+		if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
+			t.Fatalf("args = %v, want %v", gotArgs, wantArgs)
+		}
+	}()
+
+	_ = u.Restart()
+}
+
 func TestFallbackSystemctlRestart_Success(t *testing.T) {
 	oldExecCommand := execCommand
 	oldSleepFn := sleepFn
