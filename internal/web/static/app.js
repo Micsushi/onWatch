@@ -979,6 +979,7 @@ function refreshAll() {
   if (refreshBtn) refreshBtn.classList.add('spinning');
   setDashboardRefreshState(true, 'Updating saved data...');
   const tasks = [fetchCurrent(), fetchDeepInsights(), fetchHistory()];
+  if (getCurrentProvider() === 'codex') tasks.push(fetchCodexResetIntelligence());
   if (shouldShowCyclesTable()) tasks.push(fetchCycles());
   if (shouldShowSessionsTable()) tasks.push(fetchSessions());
   if (shouldShowOverviewTable()) tasks.push(fetchCycleOverview());
@@ -4665,6 +4666,56 @@ async function fetchCodexUsage(options = {}) {
     visibleQuotas.forEach(q => updateCodexCard(q));
   } catch (err) {
     // codex usage fetch error - non-critical
+  }
+}
+
+function resetIntelLane(label, state, verdict, detail, meta, link) {
+  const safeState = String(state || 'unknown').replace(/[^a-z_]/g, '');
+  return `<div class="reset-intel-lane" data-state="${safeState}">
+    <span class="reset-intel-lane-label">${escapeHTML(label)}</span>
+    <div class="reset-intel-verdict"><span class="reset-intel-dot" aria-hidden="true"></span>${escapeHTML(verdict)}</div>
+    <p class="reset-intel-detail">${escapeHTML(detail || 'No details available.')}</p>
+    <div class="reset-intel-meta">${escapeHTML(meta || '')}${link ? `<a class="reset-intel-link" href="${escapeHTML(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(link.label)}</a>` : ''}</div>
+  </div>`;
+}
+
+async function fetchCodexResetIntelligence() {
+  const grid = document.getElementById('reset-intel-grid');
+  if (!grid) return;
+  try {
+    const accountID = State.codexAccount || 1;
+    const res = await authFetch(`${API_BASE}/api/codex/reset-intelligence?account=${encodeURIComponent(accountID)}`);
+    if (!res.ok) throw new Error('Reset intelligence unavailable');
+    const data = await res.json();
+    const global = data.global || {};
+    const account = data.account || {};
+    const service = data.service || {};
+
+    const globalDetail = global.signal === 'possible' && global.signalText
+      ? global.signalText
+      : (global.lastResetText || 'No confirmed reset was found.');
+    const globalMeta = global.signalAt
+      ? `Signal: ${formatDateTime(global.signalAt)}`
+      : (global.lastResetAt ? `Last confirmed: ${formatDateTime(global.lastResetAt)}` : '');
+    const changes = Array.isArray(account.changes)
+      ? account.changes.map(change => `${change.name}: ${Number(change.before).toFixed(0)}% → ${Number(change.after).toFixed(0)}%`).join(' · ')
+      : '';
+    const incident = Array.isArray(service.incidents) && service.incidents.length ? service.incidents[0] : null;
+    const serviceDetail = incident
+      ? `${incident.name}${incident.components?.length ? ` · ${incident.components.join(', ')}` : ''}`
+      : 'No active official incident affects Codex or ChatGPT Work.';
+
+    grid.innerHTML = [
+      resetIntelLane('Public reset signal', global.signal, global.signalLabel || 'Unknown', globalDetail, globalMeta, global.signalSourceUrl || global.lastResetUrl ? { url: global.signalSourceUrl || global.lastResetUrl, label: 'Verify source' } : null),
+      resetIntelLane('Your account', account.status, account.label || 'No local evidence', account.explanation, changes, null),
+      resetIntelLane('OpenAI service', service.status, service.label || 'Status unavailable', serviceDetail, service.incidentCount ? `${service.incidentCount} active` : 'Official status feed', service.sourceUrl ? { url: service.sourceUrl, label: 'Open status' } : null),
+    ].join('');
+    grid.setAttribute('aria-busy', 'false');
+    const updated = document.getElementById('reset-intel-updated');
+    if (updated) updated.textContent = data.fetchedAt ? `Checked ${formatDateTime(data.fetchedAt)}` : 'Live evidence';
+  } catch (err) {
+    grid.innerHTML = resetIntelLane('Reset intelligence', 'unknown', 'Evidence unavailable', 'OnWatch could not reach the public reset or status feeds. Your quota cards remain authoritative for personal windows.', '', null);
+    grid.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -11232,6 +11283,7 @@ function setupHeaderActions() {
         fetchHistory(undefined, { force: true }),
       ];
       const provider = getCurrentProvider();
+      if (provider === 'codex') tasks.push(fetchCodexResetIntelligence());
       if (supportsPlatformCost(provider)) {
         tasks.push(fetchPlatformCostHistory(selectedPlatformCostRange(), provider));
         if (document.getElementById('platform-cost-breakdown-section')) {
@@ -11292,6 +11344,7 @@ function startAutoRefresh() {
     setDashboardRefreshState(true, 'Checking for newer data...');
     // Always refresh above-fold data
     const tasks = [fetchCurrent(), fetchDeepInsights(), fetchHistory()];
+    if (getCurrentProvider() === 'codex') tasks.push(fetchCodexResetIntelligence());
     // Only refresh below-fold sections that have been loaded
     if (shouldShowCyclesTable() && _lazyLoaded.has('.cycles-section')) tasks.push(fetchCycles());
     if (shouldShowOverviewTable() && _lazyLoaded.has('.cycle-overview-section')) tasks.push(fetchCycleOverview());
@@ -13929,6 +13982,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     Promise.allSettled([
       loadHiddenInsights(),
       fetchCurrent({ force: true }),
+      ...(getCurrentProvider() === 'codex' ? [fetchCodexResetIntelligence()] : []),
       fetchDeepInsights({ force: true }),
       fetchHistory(selectedChartRange(), { force: true }),
     ]).finally(() => setDashboardRefreshState(false));

@@ -116,6 +116,7 @@ type Handler struct {
 	discordTestLastSent  time.Time
 	rateLimiter          *LoginRateLimiter // Per-IP rate limiting for login attempts
 	apiIntegrationsCache apiIntegrationResponseCache
+	resetIntel           *codexResetIntelService
 }
 
 // DefaultCodexAccountID is the default account ID for single-account setups.
@@ -778,6 +779,7 @@ func NewHandler(store *store.Store, tracker *tracker.Tracker, logger *slog.Logge
 		sessions:      sessions,
 		config:        cfg,
 		metrics:       metrics.New(),
+		resetIntel:    newCodexResetIntelService(store),
 	}
 	if len(zaiTracker) > 0 && zaiTracker[0] != nil {
 		h.zaiTracker = zaiTracker[0]

@@ -91,6 +91,7 @@ func NewServer(port int, handler *Handler, logger *slog.Logger, username, passwo
 	mux.HandleFunc(p("/api/discord/test"), handler.DiscordTest)
 	mux.HandleFunc(p("/api/codex/profiles"), handler.CodexProfiles)
 	mux.HandleFunc(p("/api/codex/usage"), handler.CodexUsage)
+	mux.HandleFunc(p("/api/codex/reset-intelligence"), handler.CodexResetIntelligence)
 	mux.HandleFunc(p("/api/codex/accounts/usage"), handler.CodexAccountsUsage)
 	mux.HandleFunc(p("/api/minimax/current"), handler.currentMiniMax)
 	mux.HandleFunc(p("/api/minimax/history"), handler.historyMiniMax)

@@ -1723,6 +1723,118 @@ body.all-density-comfortable .provider-kpi-card {
   box-shadow: inset 3px 0 0 var(--status-warning), var(--shadow-card);
 }
 
+/* Codex reset intelligence: one evidence surface, three independent lanes. */
+.reset-intel-section {
+  margin-bottom: 24px;
+  padding: 22px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.reset-intel-header {
+  margin-bottom: 18px;
+}
+
+.reset-intel-subtitle,
+.reset-intel-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.reset-intel-subtitle { margin-top: 4px; }
+.reset-intel-updated { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.reset-intel-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-block: 1px solid var(--border-light);
+}
+
+.reset-intel-lane {
+  min-width: 0;
+  padding: 18px 20px 18px 0;
+}
+
+.reset-intel-lane + .reset-intel-lane {
+  padding-left: 20px;
+  border-left: 1px solid var(--border-light);
+}
+
+.reset-intel-lane-label {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.reset-intel-verdict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.reset-intel-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  box-shadow: 0 2px 6px color-mix(in srgb, currentColor 22%, transparent);
+  flex: 0 0 auto;
+}
+.reset-intel-lane[data-state="confirmed"] .reset-intel-dot,
+.reset-intel-lane[data-state="observed"] .reset-intel-dot,
+.reset-intel-lane[data-state="operational"] .reset-intel-dot { background: var(--status-healthy); }
+.reset-intel-lane[data-state="possible"] .reset-intel-dot,
+.reset-intel-lane[data-state="degraded_performance"] .reset-intel-dot,
+.reset-intel-lane[data-state="partial_outage"] .reset-intel-dot { background: var(--status-warning); }
+.reset-intel-lane[data-state="full_outage"] .reset-intel-dot { background: var(--status-danger); }
+
+.reset-intel-detail {
+  min-height: 42px;
+  margin-top: 9px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.reset-intel-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.reset-intel-link {
+  color: var(--accent-teal-text);
+  font-weight: 600;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.reset-intel-note {
+  margin-top: 12px;
+}
+
+@media (max-width: 820px) {
+  .reset-intel-grid { grid-template-columns: 1fr; }
+  .reset-intel-lane { padding: 16px 0; }
+  .reset-intel-lane + .reset-intel-lane { padding-left: 0; border-left: 0; border-top: 1px solid var(--border-light); }
+  .reset-intel-detail { min-height: 0; }
+}
+
 /* Per-tool usage breakdown (Z.ai Time Limit card) */
 .usage-details {
   margin: 8px 0 4px;

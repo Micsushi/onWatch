@@ -433,6 +433,29 @@
         </div>
         {{end}}
 
+        {{if eq .CurrentProvider "codex"}}
+        <section class="reset-intel-section" id="reset-intel-section" aria-labelledby="reset-intel-title">
+            <header class="section-header reset-intel-header">
+                <div>
+                    <h3 class="section-title" id="reset-intel-title">
+                        <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path d="M4 19V9M10 19V5M16 19v-7M22 19V3"/>
+                        </svg>
+                        Reset Intelligence
+                    </h3>
+                    <p class="reset-intel-subtitle">Public announcement, your meter, and provider health kept separate.</p>
+                </div>
+                <span class="reset-intel-updated" id="reset-intel-updated">Checking live evidence...</span>
+            </header>
+            <div class="reset-intel-grid" id="reset-intel-grid" aria-live="polite" aria-busy="true">
+                <div class="reset-intel-lane"><span class="loading-line title"></span><span class="loading-line percent"></span><span class="loading-line reset"></span></div>
+                <div class="reset-intel-lane"><span class="loading-line title"></span><span class="loading-line percent"></span><span class="loading-line reset"></span></div>
+                <div class="reset-intel-lane"><span class="loading-line title"></span><span class="loading-line percent"></span><span class="loading-line reset"></span></div>
+            </div>
+            <p class="reset-intel-note">A public announcement does not prove your account changed. OnWatch reports local evidence separately.</p>
+        </section>
+        {{end}}
+
         {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex")}}
         <section class="sessions-section platform-cost-section" id="platform-cost-section" data-provider="{{.CurrentProvider}}">
             <header class="section-header">

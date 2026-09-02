@@ -38,6 +38,9 @@ dashboard.
   data. Treat the 30d preset as the exact-retention boundary and do not warn
   for it; warn for All or Custom selections that extend beyond 30 days.
 - Do not rely on color alone for provider or warning state.
+- Keep public reset announcements, local account evidence, and official provider
+  incidents as separate signals. Link the public and official sources, and do
+  not imply that timing alone proves an account reset.
 - Avoid vague or generic UI copy.
 - Update this file when a durable product-wide UI rule changes.
 
