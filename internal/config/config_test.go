@@ -292,6 +292,27 @@ func TestConfig_AnthropicTokenRotationRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestConfig_IsolatedAnthropicOwnerKeepsProviderEnabledWithoutToken(t *testing.T) {
+	clearEnvForTest()
+	defer clearEnvForTest()
+	t.Setenv("ANTHROPIC_TOKEN_ROTATION", "on")
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "claude-profile"))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if !cfg.AnthropicCredentialOwner {
+		t.Fatal("AnthropicCredentialOwner = false, want true")
+	}
+	if cfg.AnthropicToken != "" {
+		t.Fatalf("AnthropicToken = %q, want empty", cfg.AnthropicToken)
+	}
+	if !cfg.HasProvider("anthropic") {
+		t.Fatal("HasProvider('anthropic') = false, want true for isolated owner")
+	}
+}
+
 func TestConfig_AnthropicClaudePathLoadsFromEnv(t *testing.T) {
 	clearEnvForTest()
 	defer clearEnvForTest()

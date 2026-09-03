@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,90 @@ import (
 	"github.com/onllm-dev/onwatch/v2/internal/store"
 	"github.com/onllm-dev/onwatch/v2/internal/tracker"
 )
+
+func TestAnthropicAgent_ExpiredOwnerRefreshFailureClearsTokenAndPauses(t *testing.T) {
+	var apiCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	str, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	defer str.Close()
+
+	logger := slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))
+	client := api.NewAnthropicClient("expired-token", logger, api.WithAnthropicBaseURL(server.URL))
+	agent := NewAnthropicAgent(client, str, tracker.NewAnthropicTracker(str, logger), time.Minute, logger, nil)
+	agent.SetCredentialsRefresh(func() *api.AnthropicCredentials {
+		return &api.AnthropicCredentials{
+			AccessToken: "expired-token",
+			ExpiresAt:   time.Now().Add(-time.Minute),
+			ExpiresIn:   -time.Minute,
+		}
+	})
+	agent.SetTokenRefresh(func() string { return "" })
+	agent.SetCredentialOwnerRefresh(func(context.Context) error {
+		return errors.New("Claude login required")
+	})
+
+	agent.poll(context.Background())
+
+	if client.HasToken() {
+		t.Fatal("expired token remained available after owner refresh failure")
+	}
+	if agent.lastToken != "" {
+		t.Fatalf("lastToken = %q, want empty", agent.lastToken)
+	}
+	if !agent.authPaused {
+		t.Fatal("expected polling to pause after owner refresh failure")
+	}
+	if agent.authFailCount != maxAuthFailures {
+		t.Fatalf("authFailCount = %d, want %d", agent.authFailCount, maxAuthFailures)
+	}
+	if got := apiCalls.Load(); got != 0 {
+		t.Fatalf("API calls = %d, want 0 after credentials expired", got)
+	}
+}
+
+func TestAnthropicAgent_MissingOwnerCredentialsClearsStaleTokenAndPauses(t *testing.T) {
+	var apiCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	str, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	defer str.Close()
+
+	logger := slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))
+	client := api.NewAnthropicClient("stale-token", logger, api.WithAnthropicBaseURL(server.URL))
+	agent := NewAnthropicAgent(client, str, tracker.NewAnthropicTracker(str, logger), time.Minute, logger, nil)
+	agent.SetCredentialsRefresh(func() *api.AnthropicCredentials { return nil })
+	agent.SetTokenRefresh(func() string { return "" })
+	agent.SetCredentialOwnerRefresh(func(context.Context) error {
+		return errors.New("Claude login required")
+	})
+
+	agent.poll(context.Background())
+
+	if client.HasToken() {
+		t.Fatal("stale token remained available after missing credentials")
+	}
+	if !agent.authPaused {
+		t.Fatal("expected polling to pause after missing credentials")
+	}
+	if got := apiCalls.Load(); got != 0 {
+		t.Fatalf("API calls = %d, want 0 without credentials", got)
+	}
+}
 
 func TestAnthropicAgent_ExpiredCredentialsUseOwnerRefreshBeforePolling(t *testing.T) {
 	var ownerRefreshCalls atomic.Int32

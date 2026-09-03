@@ -646,14 +646,18 @@ func run() error {
 		if token := api.DetectAnthropicToken(preflightLogger); token != "" {
 			cfg.AnthropicToken = token
 			cfg.AnthropicAutoToken = true
-		} else if p := agent.StatuslineDataPath(); p != "" {
-			if _, err := os.Stat(p); err == nil {
-				// No OAuth token reachable (e.g. Keychain denied in this launch
-				// context) but the statusline bridge file exists: keep the
-				// Anthropic provider alive on statusline data alone.
-				cfg.AnthropicSource = "statusline"
-				preflightLogger.Info("Anthropic token not found; statusline-only mode", "statusline", p)
+		} else if !cfg.AnthropicCredentialOwner {
+			if p := agent.StatuslineDataPath(); p != "" {
+				if _, err := os.Stat(p); err == nil {
+					// No OAuth token reachable (e.g. Keychain denied in this launch
+					// context) but the statusline bridge file exists: keep the
+					// Anthropic provider alive on statusline data alone.
+					cfg.AnthropicSource = "statusline"
+					preflightLogger.Info("Anthropic token not found; statusline-only mode", "statusline", p)
+				}
 			}
+		} else {
+			preflightLogger.Info("Anthropic credentials unavailable; isolated owner will refresh when available")
 		}
 	}
 	if cfg.CodexToken == "" {
@@ -1044,7 +1048,7 @@ func run() error {
 			// invalidate Claude Code's session and force daily re-authentication.
 			if cfg.AnthropicTokenRotation {
 				claudeConfigDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
-				if anthropicUsesIsolatedCredentialOwner(cfg.AnthropicTokenRotation, claudeConfigDir) {
+				if cfg.AnthropicCredentialOwner && anthropicUsesIsolatedCredentialOwner(cfg.AnthropicTokenRotation, claudeConfigDir) {
 					anthropicAg.SetCredentialsRefresh(func() *api.AnthropicCredentials {
 						return api.DetectAnthropicCredentials(logger)
 					})

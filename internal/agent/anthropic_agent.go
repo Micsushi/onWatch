@@ -439,17 +439,32 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 	// OAuth endpoint early is aggressively rate limited, while the official
 	// Claude process can safely rotate the profile it owns.
 	if a.credsRefresh != nil {
-		if creds := a.credsRefresh(); creds != nil {
-			if a.ownerRefresh != nil {
-				if creds.IsExpired() {
-					a.logger.Info("Anthropic token expired, asking isolated credential owner to refresh")
-					if err := a.ownerRefresh(ctx); err != nil {
-						a.logger.Warn("Anthropic isolated credential owner refresh failed", "error", err)
-					}
-				}
-			} else if creds.IsExpiringSoon(tokenRefreshThreshold) && creds.RefreshToken != "" {
-				a.proactiveRefresh(ctx, creds)
+		creds := a.credsRefresh()
+		if a.ownerRefresh != nil && !a.authPaused && (creds == nil || creds.IsExpired()) {
+			if creds == nil {
+				a.logger.Info("Anthropic credentials unavailable, asking isolated credential owner to refresh")
+			} else {
+				a.logger.Info("Anthropic token expired, asking isolated credential owner to refresh")
 			}
+			if err := a.ownerRefresh(ctx); err != nil {
+				a.logger.Warn("Anthropic isolated credential owner refresh failed", "error", err)
+				// The owner may clear an expired profile after a failed login.
+				// Never keep sending that stale token or turn a local auth failure
+				// into repeated 401/429 traffic.
+				a.client.SetToken("")
+				a.lastToken = ""
+				a.authPaused = true
+				a.authFailCount = maxAuthFailures
+				a.lastFailedToken = ""
+				if creds != nil {
+					a.lastFailedToken = creds.AccessToken
+				}
+				reportFailure("authentication",
+					"Claude credentials expired or are unavailable. Re-authenticate with 'claude auth' to resume polling.")
+				return
+			}
+		} else if creds != nil && a.ownerRefresh == nil && creds.IsExpiringSoon(tokenRefreshThreshold) && creds.RefreshToken != "" {
+			a.proactiveRefresh(ctx, creds)
 		}
 	}
 

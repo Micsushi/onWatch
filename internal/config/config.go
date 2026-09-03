@@ -37,7 +37,12 @@ type Config struct {
 	// isolated Claude profile. Default false so onWatch cannot invalidate a
 	// shared Claude Code session.
 	AnthropicTokenRotation bool
-	AnthropicClaudePath    string // optional ANTHROPIC_CLAUDE_PATH override
+	// AnthropicCredentialOwner is true when rotation is explicitly enabled and
+	// CLAUDE_CONFIG_DIR points at an isolated profile. It keeps the provider
+	// alive while that profile is temporarily unauthenticated so the owner can
+	// refresh it without requiring an onWatch restart.
+	AnthropicCredentialOwner bool
+	AnthropicClaudePath      string // optional ANTHROPIC_CLAUDE_PATH override
 
 	// Copilot provider configuration
 	CopilotToken string // COPILOT_TOKEN (GitHub PAT with copilot scope)
@@ -291,6 +296,7 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 	case "on", "true", "1", "yes":
 		cfg.AnthropicTokenRotation = true
 	}
+	cfg.AnthropicCredentialOwner = cfg.AnthropicTokenRotation && strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")) != ""
 	cfg.AnthropicClaudePath = strings.TrimSpace(os.Getenv("ANTHROPIC_CLAUDE_PATH"))
 
 	// Copilot provider
@@ -599,7 +605,7 @@ func (c *Config) HasProvider(name string) bool {
 	case "zai":
 		return c.ZaiAPIKey != ""
 	case "anthropic":
-		return c.AnthropicToken != "" || c.AnthropicSource == "statusline"
+		return c.AnthropicToken != "" || c.AnthropicSource == "statusline" || c.AnthropicCredentialOwner
 	case "copilot":
 		return c.CopilotToken != ""
 	case "codex":
