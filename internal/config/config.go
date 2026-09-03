@@ -564,7 +564,11 @@ func (c *Config) Validate() error {
 // AvailableProviders returns which providers are configured.
 func (c *Config) AvailableProviders() []string {
 	var providers []string
-	if c.AnthropicToken != "" {
+	// Anthropic can be pollable without a config token: an isolated credential
+	// owner supplies one per poll, and statusline mode needs none at all. Use
+	// the same rule as HasProvider so the dashboard doesn't hide a provider
+	// that is actively collecting data.
+	if c.HasProvider("anthropic") {
 		providers = append(providers, "anthropic")
 	}
 	if c.SyntheticAPIKey != "" {

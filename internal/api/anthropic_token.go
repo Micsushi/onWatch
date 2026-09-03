@@ -3,6 +3,9 @@ package api
 import (
 	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -87,4 +90,37 @@ func DetectAnthropicToken(logger *slog.Logger) string {
 // Returns nil if not found.
 func DetectAnthropicCredentials(logger *slog.Logger) *AnthropicCredentials {
 	return detectAnthropicCredentialsPlatform(logger)
+}
+
+// DefaultClaudeConfigDir returns Claude Code's default profile directory,
+// ignoring CLAUDE_CONFIG_DIR. Used to reach the main profile's credentials
+// when an isolated profile is configured but unusable.
+func DefaultClaudeConfigDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude")
+}
+
+// DetectAnthropicTokenInDir reads an unexpired OAuth access token from
+// <dir>/.credentials.json. Returns "" when the file is missing, unreadable,
+// signed out, or expired. This is a read-only view: it never rotates anything,
+// so it is safe to point at a profile another application owns.
+func DetectAnthropicTokenInDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".credentials.json"))
+	if err != nil {
+		return ""
+	}
+	creds, err := parseFullClaudeCredentials(data)
+	if err != nil || creds == nil || creds.AccessToken == "" {
+		return ""
+	}
+	if creds.IsExpired() {
+		return ""
+	}
+	return strings.TrimSpace(creds.AccessToken)
 }

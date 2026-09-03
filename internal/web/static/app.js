@@ -2276,6 +2276,30 @@ function getQuotaDisplayName(quotaKey, provider) {
   return overviewQuotaDisplayNames[quotaKey] || quotaKey;
 };
 
+// Poll failure banner: explains why a provider's data stopped updating instead
+// of leaving the cards silently stale.
+function pollErrorBannerHTML(pollError) {
+  if (!pollError || !pollError.message) return '';
+  const when = pollError.at ? ` Last attempt: ${formatDateTime(pollError.at)}.` : '';
+  return `<div class="poll-error-banner" role="status">
+    <svg class="poll-error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+    <span>${escapeHTML(pollError.message)}${escapeHTML(when)}</span>
+  </div>`;
+}
+
+function renderPollErrorBanner(containerId, pollError) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const existing = container.previousElementSibling;
+  if (existing && existing.classList.contains('poll-error-banner-slot')) existing.remove();
+  const html = pollErrorBannerHTML(pollError);
+  if (!html) return;
+  const slot = document.createElement('div');
+  slot.className = 'poll-error-banner-slot';
+  slot.innerHTML = html;
+  container.parentNode.insertBefore(slot, container);
+}
+
 // Anthropic Dynamic Card Rendering
 function renderAnthropicQuotaCards(quotas, containerId) {
   const container = document.getElementById(containerId);
@@ -4529,6 +4553,7 @@ function applyProviderCurrentPayload(provider, data, apiIntegrationsCurrentData 
       data.quotas.forEach(q => updateCopilotCard(q));
     }
   } else if (provider === 'anthropic') {
+    renderPollErrorBanner('quota-grid-anthropic', data.pollError);
     if (data.quotas) {
       const container = document.getElementById('quota-grid-anthropic');
       const renderedCount = container ? container.querySelectorAll('.quota-card.anthropic-card').length : 0;
@@ -7034,6 +7059,7 @@ function buildAllProviderEntries() {
           ? (payload.planName || toTitleCase(payload.accountType || ''))
           : toTitleCase(payload.planType || '')),
       planType: payload.planType || '',
+      pollError: payload.pollError || null,
       quotas: normalizeBothQuotas(provider, payload),
       insights: insights[provider] || { stats: [], insights: [] },
       historyRows: Array.isArray(history[provider]) ? history[provider] : [],
@@ -9102,7 +9128,11 @@ function renderAllProvidersView() {
   // just update the KPI values without rebuilding any HTML.
   const canUpdateInPlace = entries.length > 0 && entries.every(entry => {
     if (entry.summaryOnly) return false; // API integrations card: always rebuild
-    return container.querySelector(`.provider-card[data-card-key="${entry.cardKey}"]`) !== null;
+    const card = container.querySelector(`.provider-card[data-card-key="${entry.cardKey}"]`);
+    if (!card) return false;
+    // A poll error appearing or clearing changes the card structure.
+    const hasBanner = card.querySelector('.poll-error-banner') !== null;
+    return hasBanner === Boolean(entry.pollError && entry.pollError.message);
   });
 
   if (canUpdateInPlace) {
@@ -9137,6 +9167,7 @@ function renderAllProvidersView() {
         </button>
       </header>
       <div class="provider-card-body">
+        ${pollErrorBannerHTML(entry.pollError)}
         <div class="provider-kpis">${renderProviderKPIHTML(entry.quotas, entry.cardKey)}</div>
       </div>
     </section>`;

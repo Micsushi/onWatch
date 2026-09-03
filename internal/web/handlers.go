@@ -5212,6 +5212,10 @@ func (h *Handler) buildAnthropicCurrent() map[string]interface{} {
 		return response
 	}
 
+	if pollError := h.anthropicPollError(); pollError != nil {
+		response["pollError"] = pollError
+	}
+
 	// Get per-quota latest values (merges statusline + API snapshots).
 	// This ensures we show Sonnet/extra_usage from older API polls alongside
 	// fresh five_hour/seven_day from statusline.
@@ -5277,6 +5281,29 @@ func (h *Handler) buildAnthropicCurrent() map[string]interface{} {
 	response["quotas"] = quotas
 	applyDisplayModeToResponse(response, h.getDisplayMode("anthropic"))
 	return response
+}
+
+// anthropicPollError returns the reason the last Anthropic poll failed, or nil
+// when the last poll succeeded. Lets the dashboard say why data stopped
+// updating instead of only showing it as stale.
+func (h *Handler) anthropicPollError() map[string]interface{} {
+	raw, err := h.store.GetSetting(store.AnthropicPollErrorSetting)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var stored struct {
+		Category string `json:"category"`
+		Message  string `json:"message"`
+		At       string `json:"at"`
+	}
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil || stored.Message == "" {
+		return nil
+	}
+	return map[string]interface{}{
+		"category": stored.Category,
+		"message":  stored.Message,
+		"at":       stored.At,
+	}
 }
 
 // buildAnthropicCurrentFallback uses the single latest snapshot when per-quota

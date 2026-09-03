@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os/exec"
@@ -64,18 +65,24 @@ const tokenRefreshThreshold = 10 * time.Minute
 
 // AnthropicAgent manages the background polling loop for Anthropic quota tracking.
 type AnthropicAgent struct {
-	client       *api.AnthropicClient
-	store        *store.Store
-	tracker      *tracker.AnthropicTracker
-	interval     time.Duration
-	logger       *slog.Logger
-	sm           *SessionManager
-	tokenRefresh TokenRefreshFunc
-	credsRefresh CredentialsRefreshFunc
-	ownerRefresh CredentialOwnerRefreshFunc
-	lastToken    string
-	notifier     agentNotifier
-	pollingCheck func() bool
+	client        *api.AnthropicClient
+	store         *store.Store
+	tracker       *tracker.AnthropicTracker
+	interval      time.Duration
+	logger        *slog.Logger
+	sm            *SessionManager
+	tokenRefresh  TokenRefreshFunc
+	credsRefresh  CredentialsRefreshFunc
+	ownerRefresh  CredentialOwnerRefreshFunc
+	fallbackToken TokenRefreshFunc
+
+	// usingFallbackToken is true while polling only works because the isolated
+	// credential owner is unusable. Keeps the dashboard warning visible even
+	// though the polls themselves succeed.
+	usingFallbackToken bool
+	lastToken          string
+	notifier           agentNotifier
+	pollingCheck       func() bool
 
 	// Auth failure rate limiting
 	authFailCount   int    // consecutive auth failures (401 or 403)
@@ -115,6 +122,7 @@ func (a *AnthropicAgent) SetNotifier(n *notify.NotificationEngine) {
 }
 
 func (a *AnthropicAgent) recordPollFailure(category, message string) {
+	a.persistPollError(category, message)
 	if a.notifier == nil {
 		return
 	}
@@ -122,9 +130,56 @@ func (a *AnthropicAgent) recordPollFailure(category, message string) {
 }
 
 func (a *AnthropicAgent) recordPollSuccess() {
+	if a.usingFallbackToken {
+		// Polls succeed, but on borrowed credentials - keep saying so.
+		a.recordCredentialOwnerDegraded()
+		return
+	}
+	a.clearPollError()
 	if a.notifier != nil {
 		a.notifier.RecordPollSuccess("anthropic", "default")
 	}
+}
+
+// recordCredentialOwnerDegraded flags that polling only continues on fallback
+// credentials, so the isolated profile still needs a re-login.
+func (a *AnthropicAgent) recordCredentialOwnerDegraded() {
+	a.persistPollError("credential_owner",
+		"The isolated Claude profile is signed out. Polling continues on read-only credentials - run 'claude /login' in that profile to restore it.")
+}
+
+func (a *AnthropicAgent) persistPollError(category, message string) {
+	if a.store == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]string{
+		"category": category,
+		"message":  message,
+		"at":       time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return
+	}
+	if err := a.store.SetSetting(store.AnthropicPollErrorSetting, string(payload)); err != nil {
+		a.logger.Debug("Failed to persist Anthropic poll error", "error", err)
+	}
+}
+
+func (a *AnthropicAgent) clearPollError() {
+	if a.store == nil {
+		return
+	}
+	if err := a.store.SetSetting(store.AnthropicPollErrorSetting, ""); err != nil {
+		a.logger.Debug("Failed to clear Anthropic poll error", "error", err)
+	}
+}
+
+// fallbackTokenValue returns the read-only fallback token, if one is configured.
+func (a *AnthropicAgent) fallbackTokenValue() string {
+	if a.fallbackToken == nil {
+		return ""
+	}
+	return a.fallbackToken()
 }
 
 func (a *AnthropicAgent) recordPollSkipped() {
@@ -166,6 +221,15 @@ func (a *AnthropicAgent) SetCredentialsRefresh(fn CredentialsRefreshFunc) {
 // refresh token.
 func (a *AnthropicAgent) SetCredentialOwnerRefresh(fn CredentialOwnerRefreshFunc) {
 	a.ownerRefresh = fn
+}
+
+// SetFallbackToken configures a read-only token source used when the isolated
+// credential owner cannot refresh its profile (typically because that profile
+// was signed out). The token is only handed to the API client - it is never
+// stored as lastToken, so the OAuth rotation path can never rotate it and
+// invalidate the session that owns it.
+func (a *AnthropicAgent) SetFallbackToken(fn TokenRefreshFunc) {
+	a.fallbackToken = fn
 }
 
 // EnableStatuslineBridge activates the statusline file bridge for zero-429
@@ -446,22 +510,39 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 			} else {
 				a.logger.Info("Anthropic token expired, asking isolated credential owner to refresh")
 			}
-			if err := a.ownerRefresh(ctx); err != nil {
+			err := a.ownerRefresh(ctx)
+			if err == nil {
+				a.usingFallbackToken = false
+			}
+			if err != nil {
 				a.logger.Warn("Anthropic isolated credential owner refresh failed", "error", err)
-				// The owner may clear an expired profile after a failed login.
-				// Never keep sending that stale token or turn a local auth failure
-				// into repeated 401/429 traffic.
-				a.client.SetToken("")
-				a.lastToken = ""
-				a.authPaused = true
-				a.authFailCount = maxAuthFailures
-				a.lastFailedToken = ""
-				if creds != nil {
-					a.lastFailedToken = creds.AccessToken
+				// The isolated profile is unusable. Rather than going dark, poll
+				// with a read-only token from another profile when one exists.
+				if fallback := a.fallbackTokenValue(); fallback != "" {
+					a.logger.Warn("Anthropic falling back to read-only credentials; isolated profile needs re-authentication")
+					a.client.SetToken(fallback)
+					a.authPaused = false
+					a.authFailCount = 0
+					a.usingFallbackToken = true
+					a.recordCredentialOwnerDegraded()
+					// tokenRefresh below reads the isolated profile, which has
+					// nothing to offer, so the fallback token stays in place.
+				} else {
+					// The owner may clear an expired profile after a failed login.
+					// Never keep sending that stale token or turn a local auth failure
+					// into repeated 401/429 traffic.
+					a.client.SetToken("")
+					a.lastToken = ""
+					a.authPaused = true
+					a.authFailCount = maxAuthFailures
+					a.lastFailedToken = ""
+					if creds != nil {
+						a.lastFailedToken = creds.AccessToken
+					}
+					reportFailure("authentication",
+						"Claude credentials expired or are unavailable. Re-authenticate with 'claude auth' to resume polling.")
+					return
 				}
-				reportFailure("authentication",
-					"Claude credentials expired or are unavailable. Re-authenticate with 'claude auth' to resume polling.")
-				return
 			}
 		} else if creds != nil && a.ownerRefresh == nil && creds.IsExpiringSoon(tokenRefreshThreshold) && creds.RefreshToken != "" {
 			a.proactiveRefresh(ctx, creds)
