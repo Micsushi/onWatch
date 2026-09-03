@@ -149,6 +149,7 @@ func menubarHelpText() string {
 func stopPreviousInstance(port int, testMode bool) {
 	myPID := os.Getpid()
 	stopped := false
+	var stoppedPIDs []int
 
 	// Method 1: PID file (handles both "PID" and "PID:PORT" formats)
 	if data, err := os.ReadFile(pidFile); err == nil {
@@ -171,6 +172,7 @@ func stopPreviousInstance(port int, testMode bool) {
 				if err := proc.Signal(syscall.SIGTERM); err == nil {
 					fmt.Printf("Stopped previous instance (PID %d) via PID file\n", pid)
 					stopped = true
+					stoppedPIDs = append(stoppedPIDs, pid)
 				}
 			}
 		}
@@ -190,6 +192,7 @@ func stopPreviousInstance(port int, testMode bool) {
 							if err := proc.Signal(syscall.SIGTERM); err == nil {
 								fmt.Printf("Stopped previous instance (PID %d) on port %d\n", foundPID, filePort)
 								stopped = true
+								stoppedPIDs = append(stoppedPIDs, foundPID)
 							}
 						}
 					}
@@ -214,6 +217,7 @@ func stopPreviousInstance(port int, testMode bool) {
 						if err := proc.Signal(syscall.SIGTERM); err == nil {
 							fmt.Printf("Stopped previous instance (PID %d) on port %d\n", pid, port)
 							stopped = true
+							stoppedPIDs = append(stoppedPIDs, pid)
 						}
 					}
 				}
@@ -222,7 +226,27 @@ func stopPreviousInstance(port int, testMode bool) {
 	}
 
 	if stopped {
-		time.Sleep(500 * time.Millisecond)
+		waitForProcessesExit(stoppedPIDs, 5*time.Second)
+	}
+}
+
+func waitForProcessesExit(pids []int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		allStopped := true
+		for _, pid := range pids {
+			if processRunning(pid) {
+				allStopped = false
+				break
+			}
+		}
+		if allStopped {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -573,6 +597,9 @@ func run() error {
 	if testMode {
 		pidFile = filepath.Join(pidDir, "onwatch-test.pid")
 	}
+	if !testMode && len(os.Args) == 1 && launchdServiceInstalled() {
+		return startLaunchdService()
+	}
 
 	// Phase 2: Handle subcommands (both with and without -- prefix)
 	// Note: "codex" must be checked before "status" because "codex profile status" contains "status"
@@ -605,6 +632,11 @@ func run() error {
 		return runAgentUsageCommand(os.Args[1:])
 	}
 	if hasCommand("stop", "--stop") {
+		if !testMode {
+			if handled, err := stopLaunchdService(); handled {
+				return err
+			}
+		}
 		return runStop(testMode)
 	}
 	if hasCommand("status", "--status") {
@@ -1961,6 +1993,7 @@ var newCLIUpdater = func(v string, logger *slog.Logger) cliUpdater {
 func runUpdate() error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	u := newCLIUpdater(version, logger)
+	restartLaunchd := launchdServiceLoaded()
 
 	fmt.Printf("onWatch v%s - checking for updates...\n", version)
 
@@ -1982,6 +2015,10 @@ func runUpdate() error {
 	}
 
 	fmt.Printf("Updated successfully to v%s\n", info.LatestVersion)
+	if restartLaunchd {
+		fmt.Println("Restarting launchd service...")
+		return startLaunchdService()
+	}
 
 	// If a daemon is running, stop it and start a fresh one
 	if data, err := os.ReadFile(pidFile); err == nil {

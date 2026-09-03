@@ -7,6 +7,8 @@ INSTALL_DIR="${ONWATCH_INSTALL_DIR:-$HOME/.onwatch}"
 BIN_DIR="${INSTALL_DIR}/bin"
 REPO="Micsushi/onWatch"
 SERVICE_NAME="onwatch"
+LAUNCH_AGENT_LABEL="dev.onllm.onwatch"
+LAUNCH_AGENT_DIR="${ONWATCH_LAUNCH_AGENT_DIR:-$HOME/Library/LaunchAgents}"
 SYSTEMD_MODE="user"  # "user" or "system" - auto-detected at runtime
 INSTALL_VERSION="latest"
 
@@ -1238,13 +1240,53 @@ EOF
 setup_launchd() {
     if [[ "$OS" != "darwin" ]]; then return 1; fi
 
+    local plist="${LAUNCH_AGENT_DIR}/${LAUNCH_AGENT_LABEL}.plist"
+    mkdir -p "$LAUNCH_AGENT_DIR" "${INSTALL_DIR}/data"
+    cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LAUNCH_AGENT_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${BIN_DIR}/onwatch</string>
+        <string>--debug</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ONWATCH_LAUNCHD</key>
+        <string>1</string>
+        <key>ONWATCH_LAUNCHD_TARGET</key>
+        <string>gui/$(id -u)</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>${INSTALL_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>${INSTALL_DIR}/data/.onwatch-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>${INSTALL_DIR}/data/.onwatch-launchd.log</string>
+</dict>
+</plist>
+EOF
+
+    if command -v plutil &>/dev/null; then
+        plutil -lint "$plist" >/dev/null
+    fi
+
     echo ""
-    ok "macOS detected - onWatch self-daemonizes"
+    ok "Created macOS LaunchAgent with automatic restart"
     printf "  ${DIM}Manage with:${NC}\n"
-    printf "    ${CYAN}onwatch${NC}           # Start (runs in background)\n"
+    printf "    ${CYAN}onwatch${NC}           # Start or restart\n"
     printf "    ${CYAN}onwatch stop${NC}      # Stop\n"
     printf "    ${CYAN}onwatch status${NC}    # Status\n"
-    printf "    ${CYAN}onwatch --debug${NC}   # Run in foreground (logs to stdout)\n"
     return 0
 }
 
@@ -1305,8 +1347,25 @@ start_service() {
             print_errors "$port"
             return 1
         fi
+    elif [[ "$OS" == "darwin" ]] && command -v launchctl &>/dev/null; then
+        local plist="${LAUNCH_AGENT_DIR}/${LAUNCH_AGENT_LABEL}.plist"
+        local domain="gui/$(id -u)"
+        launchctl bootout "$domain" "$plist" >/dev/null 2>&1 || true
+        if ! launchctl bootstrap "$domain" "$plist"; then
+            print_errors "$port"
+            return 1
+        fi
+        launchctl kickstart -k "${domain}/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+        sleep 2
+
+        if launchctl print "${domain}/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1; then
+            ok "onWatch is running under launchd"
+        else
+            print_errors "$port"
+            return 1
+        fi
     else
-        # Direct start (macOS / Linux without systemd)
+        # Direct start (Linux without systemd)
         cd "$INSTALL_DIR"
         if "${BIN_DIR}/onwatch" 2>&1; then
             sleep 1

@@ -27,7 +27,7 @@ It works with any tool that uses Synthetic, Z.ai, Anthropic, Codex, GitHub Copil
 curl -fsSL https://raw.githubusercontent.com/Micsushi/onWatch/main/install.sh | bash
 ```
 
-This downloads the binary to `~/.onwatch/`, creates a `.env` config, sets up a systemd service (Linux) or self-daemonizes (macOS), and adds `onwatch` to your PATH.
+This downloads the binary to `~/.onwatch/`, creates a `.env` config, sets up a systemd service on Linux or a restartable LaunchAgent on macOS, and adds `onwatch` to your PATH.
 
 On macOS, the installer downloads the standard binary with menubar support.
 
@@ -411,7 +411,7 @@ Or click the update badge in the dashboard footer when a new version is availabl
 
 **Under systemd**, the update is fully automatic - no manual restart needed. onWatch detects its systemd service via `/proc/self/cgroup`, fixes the unit file if needed (`Restart=always`), runs `systemctl daemon-reload`, and triggers `systemctl restart` for a clean lifecycle-managed restart.
 
-**Standalone mode** (macOS, or Linux without systemd) spawns the new binary, which takes over via PID file. If the spawn fails, onWatch automatically falls back to `systemctl restart` as a safety net.
+**Managed mode** uses systemd on Linux and launchd on macOS. Both restart the updated binary through the platform service manager. Linux installations without systemd use standalone mode and hand over through the PID file.
 
 The binary validates downloaded updates by checking executable magic bytes (ELF, Mach-O, PE) before replacing itself.
 
@@ -421,7 +421,7 @@ The binary validates downloaded updates by checking executable magic bytes (ELF,
 # systemd (Linux)
 sudo systemctl restart onwatch
 
-# Standalone (macOS / Linux without systemd)
+# Standalone Linux without systemd
 onwatch stop && onwatch
 ```
 
@@ -635,6 +635,8 @@ rm -rf ~/.onwatch
 **Manual install (macOS):**
 ```bash
 onwatch stop
+launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/dev.onllm.onwatch.plist 2>/dev/null || true
+rm -f ~/Library/LaunchAgents/dev.onllm.onwatch.plist
 rm -rf ~/.onwatch
 sed -i '' '/# onWatch/d; /\.onwatch/d' ~/.zshrc ~/.bash_profile 2>/dev/null
 ```

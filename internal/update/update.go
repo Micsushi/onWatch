@@ -505,6 +505,21 @@ func MigrateSystemdUnit(logger *slog.Logger) {
 // Under systemd: triggers `systemctl restart` so systemd manages the full lifecycle.
 // Standalone: spawns the new binary which will stop the old instance via PID file.
 func (u *Updater) Restart() error {
+	if os.Getenv("ONWATCH_LAUNCHD") == "1" {
+		target := strings.TrimSpace(os.Getenv("ONWATCH_LAUNCHD_TARGET"))
+		if target == "" {
+			return fmt.Errorf("update.Restart: ONWATCH_LAUNCHD_TARGET is empty")
+		}
+		u.logger.Info("Running under launchd - triggering service restart", "target", target)
+		cmd := execCommand("launchctl", "kickstart", "-k", target+"/dev.onllm.onwatch")
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("update.Restart: launchctl kickstart: %w", err)
+		}
+		sleepFn(30 * time.Second)
+		exitFn(0)
+		return nil
+	}
+
 	if IsSystemd() {
 		serviceName := DetectServiceName()
 		u.logger.Info("Running under systemd - triggering service restart", "service", serviceName)
