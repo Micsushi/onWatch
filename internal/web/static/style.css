@@ -4548,3 +4548,28 @@ select.settings-input {
     animation: none;
   }
 }
+
+/* Poll failure banner: why a provider's data stopped updating */
+.poll-error-banner-slot {
+  margin-bottom: 12px;
+}
+.poll-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--status-critical);
+  background: var(--status-critical-bg);
+  border: 1px solid color-mix(in srgb, var(--status-critical) 40%, transparent);
+  border-radius: var(--radius-sm);
+}
+.poll-error-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}

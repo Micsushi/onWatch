@@ -3,10 +3,12 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/api"
@@ -62,17 +64,56 @@ const rateLimitMaxBackoff = 6 * time.Hour
 // tokenRefreshThreshold is how soon before expiry we proactively refresh the token.
 const tokenRefreshThreshold = 10 * time.Minute
 
+// ownerRefreshRetryInterval spaces out isolated credential owner refreshes once
+// the profile looks durably signed out. A dead profile fails every attempt and
+// each attempt spawns a Claude subprocess, so retrying on every poll would be a
+// subprocess storm.
+const ownerRefreshRetryInterval = 30 * time.Minute
+
+// maxOwnerRefreshFailures is how many consecutive owner refresh failures are
+// retried at the normal poll cadence before backing off. Keeping the first few
+// attempts prompt means a freshly re-authenticated profile is picked up quickly.
+const maxOwnerRefreshFailures = 3
+
+// ownerRefreshTokenWarnThreshold is how far ahead of the isolated profile's
+// refresh token expiry the dashboard starts asking for a re-login. Long enough
+// to act on, short enough not to nag.
+const ownerRefreshTokenWarnThreshold = 72 * time.Hour
+
+// errCredentialOwnerBackoff is returned instead of spawning the credential owner
+// again while its retry window is still open.
+var errCredentialOwnerBackoff = errors.New("anthropic: isolated credential owner refresh in backoff")
+
 // AnthropicAgent manages the background polling loop for Anthropic quota tracking.
 type AnthropicAgent struct {
-	client       *api.AnthropicClient
-	store        *store.Store
-	tracker      *tracker.AnthropicTracker
-	interval     time.Duration
-	logger       *slog.Logger
-	sm           *SessionManager
-	tokenRefresh TokenRefreshFunc
-	credsRefresh CredentialsRefreshFunc
-	ownerRefresh CredentialOwnerRefreshFunc
+	client        *api.AnthropicClient
+	store         *store.Store
+	tracker       *tracker.AnthropicTracker
+	interval      time.Duration
+	logger        *slog.Logger
+	sm            *SessionManager
+	tokenRefresh  TokenRefreshFunc
+	credsRefresh  CredentialsRefreshFunc
+	ownerRefresh  CredentialOwnerRefreshFunc
+	fallbackToken TokenRefreshFunc
+
+	// usingFallbackToken is true while polling only works because the isolated
+	// credential owner is unusable. Keeps the dashboard warning visible even
+	// though the polls themselves succeed.
+	usingFallbackToken bool
+
+	// ownerRetryAt is when the isolated credential owner may be asked to refresh
+	// again after a failure. credentialOwnerDir is only used to make the
+	// dashboard message actionable.
+	ownerRetryAt       time.Time
+	ownerFailCount     int
+	credentialOwnerDir string
+
+	// ownerRefreshTokenExpiry is when the isolated profile's refresh token dies.
+	// After that only an interactive login revives the profile, so the dashboard
+	// says so while polling still works instead of after it has gone dark.
+	ownerRefreshTokenExpiry time.Time
+
 	lastToken    string
 	notifier     agentNotifier
 	pollingCheck func() bool
@@ -115,6 +156,7 @@ func (a *AnthropicAgent) SetNotifier(n *notify.NotificationEngine) {
 }
 
 func (a *AnthropicAgent) recordPollFailure(category, message string) {
+	a.persistPollError(category, message)
 	if a.notifier == nil {
 		return
 	}
@@ -122,9 +164,157 @@ func (a *AnthropicAgent) recordPollFailure(category, message string) {
 }
 
 func (a *AnthropicAgent) recordPollSuccess() {
+	if a.usingFallbackToken {
+		// Polls succeed, but on borrowed credentials - keep saying so.
+		a.recordCredentialOwnerDegraded()
+		return
+	}
+	if msg := a.credentialOwnerExpiringMessage(); msg != "" {
+		// The poll worked, so this is a warning, not a failure: keep the
+		// notifier on the success path and only claim the dashboard banner.
+		a.persistPollError("credential_owner_expiring", msg)
+	} else {
+		a.clearPollError()
+	}
 	if a.notifier != nil {
 		a.notifier.RecordPollSuccess("anthropic", "default")
 	}
+}
+
+// credentialOwnerExpiringMessage warns while the isolated profile still works
+// but its refresh token is about to expire. Once it does, the profile is signed
+// out for good and Anthropic data silently stops updating, so the warning has to
+// arrive before that, not after.
+func (a *AnthropicAgent) credentialOwnerExpiringMessage() string {
+	if a.ownerRefresh == nil || a.ownerRefreshTokenExpiry.IsZero() {
+		return ""
+	}
+	remaining := time.Until(a.ownerRefreshTokenExpiry)
+	if remaining >= ownerRefreshTokenWarnThreshold {
+		return ""
+	}
+	when := "in " + humanizeDuration(remaining)
+	if remaining <= 0 {
+		when = "now"
+	}
+	return "The isolated Claude profile's login expires " + when +
+		". Re-authenticate before then to avoid a gap: " + a.credentialOwnerLoginInstruction()
+}
+
+// humanizeDuration renders a coarse "2 days" / "5 hours" string for the banner.
+func humanizeDuration(d time.Duration) string {
+	if d < time.Hour {
+		return "under an hour"
+	}
+	if d < 48*time.Hour {
+		hours := int(d.Hours())
+		if hours == 1 {
+			return "1 hour"
+		}
+		return strconv.Itoa(hours) + " hours"
+	}
+	return strconv.Itoa(int(d.Hours()/24)) + " days"
+}
+
+// recordCredentialOwnerDegraded flags that polling only continues on fallback
+// credentials, so the isolated profile still needs a re-login.
+func (a *AnthropicAgent) recordCredentialOwnerDegraded() {
+	a.persistPollError("credential_owner",
+		"The isolated Claude profile is signed out. Polling continues on read-only credentials, which expire on their owner's schedule. "+
+			a.credentialOwnerLoginInstruction())
+}
+
+func (a *AnthropicAgent) persistPollError(category, message string) {
+	if a.store == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]string{
+		"category": category,
+		"message":  message,
+		"at":       time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return
+	}
+	if err := a.store.SetSetting(store.AnthropicPollErrorSetting, string(payload)); err != nil {
+		a.logger.Debug("Failed to persist Anthropic poll error", "error", err)
+	}
+}
+
+func (a *AnthropicAgent) clearPollError() {
+	if a.store == nil {
+		return
+	}
+	if err := a.store.SetSetting(store.AnthropicPollErrorSetting, ""); err != nil {
+		a.logger.Debug("Failed to clear Anthropic poll error", "error", err)
+	}
+}
+
+// fallbackTokenValue returns the read-only fallback token, if one is configured.
+func (a *AnthropicAgent) fallbackTokenValue() string {
+	if a.fallbackToken == nil {
+		return ""
+	}
+	return a.fallbackToken()
+}
+
+// refreshViaCredentialOwner asks the isolated profile's owner to rotate its
+// credentials, spacing out attempts after a failure. A signed-out profile fails
+// forever, so the caller must be able to fall back on every cycle rather than
+// pausing: that is what lets polling resume by itself once usable credentials
+// reappear anywhere.
+func (a *AnthropicAgent) refreshViaCredentialOwner(ctx context.Context, creds *api.AnthropicCredentials) error {
+	if time.Now().Before(a.ownerRetryAt) {
+		return errCredentialOwnerBackoff
+	}
+	if creds == nil {
+		a.logger.Info("Anthropic credentials unavailable, asking isolated credential owner to refresh")
+	} else {
+		a.logger.Info("Anthropic token expired, asking isolated credential owner to refresh")
+	}
+	if err := a.ownerRefresh(ctx); err != nil {
+		a.ownerFailCount++
+		if a.ownerFailCount >= maxOwnerRefreshFailures {
+			a.ownerRetryAt = time.Now().Add(ownerRefreshRetryInterval)
+		}
+		a.logger.Warn("Anthropic isolated credential owner refresh failed",
+			"error", err, "failures", a.ownerFailCount)
+		return err
+	}
+	a.ownerRetryAt = time.Time{}
+	a.ownerFailCount = 0
+	a.usingFallbackToken = false
+	if a.authPaused {
+		a.authPaused = false
+		a.authFailCount = 0
+		a.lastFailedToken = ""
+		a.logger.Info("Auth failure pause lifted - isolated credential owner refreshed")
+	}
+	return nil
+}
+
+// credentialOwnerSignedOutMessage explains the only action that actually fixes a
+// signed-out isolated profile. 'claude auth' does not exist and re-authenticating
+// the default profile would not help, so name the profile that needs the login.
+func (a *AnthropicAgent) credentialOwnerSignedOutMessage() string {
+	profile := "the isolated Claude profile"
+	if a.credentialOwnerDir != "" {
+		profile = a.credentialOwnerDir
+	}
+	return "Claude credentials are unavailable: " + profile +
+		" is signed out and no read-only Claude credentials are available either. " +
+		a.credentialOwnerLoginInstruction()
+}
+
+// credentialOwnerLoginInstruction spells out the only command that restores the
+// isolated profile. 'claude auth' does not exist, and logging into the default
+// profile would not help, so name the profile that needs the login.
+func (a *AnthropicAgent) credentialOwnerLoginInstruction() string {
+	if a.credentialOwnerDir == "" {
+		return "Run 'claude' with CLAUDE_CONFIG_DIR set to the isolated profile, sign in with /login, then restart onWatch."
+	}
+	return "Run 'claude' with CLAUDE_CONFIG_DIR=" + a.credentialOwnerDir +
+		", sign in with /login, then restart onWatch."
 }
 
 func (a *AnthropicAgent) recordPollSkipped() {
@@ -166,6 +356,21 @@ func (a *AnthropicAgent) SetCredentialsRefresh(fn CredentialsRefreshFunc) {
 // refresh token.
 func (a *AnthropicAgent) SetCredentialOwnerRefresh(fn CredentialOwnerRefreshFunc) {
 	a.ownerRefresh = fn
+}
+
+// SetFallbackToken configures a read-only token source used when the isolated
+// credential owner cannot refresh its profile (typically because that profile
+// was signed out). The token is only handed to the API client - it is never
+// stored as lastToken, so the OAuth rotation path can never rotate it and
+// invalidate the session that owns it.
+func (a *AnthropicAgent) SetFallbackToken(fn TokenRefreshFunc) {
+	a.fallbackToken = fn
+}
+
+// SetCredentialOwnerProfile records the isolated profile directory so the
+// dashboard can name it when that profile needs a re-login.
+func (a *AnthropicAgent) SetCredentialOwnerProfile(dir string) {
+	a.credentialOwnerDir = dir
 }
 
 // EnableStatuslineBridge activates the statusline file bridge for zero-429
@@ -440,28 +645,38 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 	// Claude process can safely rotate the profile it owns.
 	if a.credsRefresh != nil {
 		creds := a.credsRefresh()
-		if a.ownerRefresh != nil && !a.authPaused && (creds == nil || creds.IsExpired()) {
-			if creds == nil {
-				a.logger.Info("Anthropic credentials unavailable, asking isolated credential owner to refresh")
-			} else {
-				a.logger.Info("Anthropic token expired, asking isolated credential owner to refresh")
-			}
-			if err := a.ownerRefresh(ctx); err != nil {
-				a.logger.Warn("Anthropic isolated credential owner refresh failed", "error", err)
-				// The owner may clear an expired profile after a failed login.
-				// Never keep sending that stale token or turn a local auth failure
-				// into repeated 401/429 traffic.
-				a.client.SetToken("")
-				a.lastToken = ""
-				a.authPaused = true
-				a.authFailCount = maxAuthFailures
-				a.lastFailedToken = ""
-				if creds != nil {
-					a.lastFailedToken = creds.AccessToken
+		if creds != nil {
+			a.ownerRefreshTokenExpiry = creds.RefreshTokenExpiresAt
+		}
+		if a.ownerRefresh != nil && (creds == nil || creds.IsExpired()) {
+			if err := a.refreshViaCredentialOwner(ctx, creds); err != nil {
+				// The isolated profile is unusable. Rather than going dark, poll
+				// with a read-only token from another profile when one exists.
+				// Re-checked every cycle: the borrowed token expires on its own
+				// schedule, and a new one appears whenever its owner refreshes.
+				fallback := a.fallbackTokenValue()
+				if fallback == "" {
+					// The owner may clear an expired profile after a failed login.
+					// Never keep sending that stale token or turn a local auth failure
+					// into repeated 401/429 traffic.
+					a.client.SetToken("")
+					a.lastToken = ""
+					a.lastFailedToken = ""
+					if creds != nil {
+						a.lastFailedToken = creds.AccessToken
+					}
+					a.usingFallbackToken = false
+					reportFailure("credential_owner", a.credentialOwnerSignedOutMessage())
+					return
 				}
-				reportFailure("authentication",
-					"Claude credentials expired or are unavailable. Re-authenticate with 'claude auth' to resume polling.")
-				return
+				a.logger.Warn("Anthropic falling back to read-only credentials; isolated profile needs re-authentication")
+				a.client.SetToken(fallback)
+				a.authPaused = false
+				a.authFailCount = 0
+				a.usingFallbackToken = true
+				a.recordCredentialOwnerDegraded()
+				// tokenRefresh below reads the isolated profile, which has
+				// nothing to offer, so the fallback token stays in place.
 			}
 		} else if creds != nil && a.ownerRefresh == nil && creds.IsExpiringSoon(tokenRefreshThreshold) && creds.RefreshToken != "" {
 			a.proactiveRefresh(ctx, creds)

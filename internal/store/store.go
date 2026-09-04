@@ -1842,6 +1842,11 @@ func (s *Store) QuerySyntheticCycleOverview(groupBy string, limit int) ([]CycleO
 	return rows, nil
 }
 
+// AnthropicPollErrorSetting is the settings key holding the reason the last
+// Anthropic poll failed. The dashboard reads it so a dead credential profile
+// shows up as an explanation instead of silently stale data.
+const AnthropicPollErrorSetting = "anthropic_poll_error"
+
 // GetSetting returns the value for a setting key. Returns "" if not found.
 func (s *Store) GetSetting(key string) (string, error) {
 	var value string

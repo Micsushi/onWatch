@@ -16,7 +16,7 @@ import (
 	"github.com/onllm-dev/onwatch/v2/internal/tracker"
 )
 
-func TestAnthropicAgent_ExpiredOwnerRefreshFailureClearsTokenAndPauses(t *testing.T) {
+func TestAnthropicAgent_ExpiredOwnerRefreshFailureClearsTokenAndSkipsAPI(t *testing.T) {
 	var apiCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiCalls.Add(1)
@@ -53,18 +53,17 @@ func TestAnthropicAgent_ExpiredOwnerRefreshFailureClearsTokenAndPauses(t *testin
 	if agent.lastToken != "" {
 		t.Fatalf("lastToken = %q, want empty", agent.lastToken)
 	}
-	if !agent.authPaused {
-		t.Fatal("expected polling to pause after owner refresh failure")
-	}
-	if agent.authFailCount != maxAuthFailures {
-		t.Fatalf("authFailCount = %d, want %d", agent.authFailCount, maxAuthFailures)
+	// Polling is not latched off: a signed-out profile must be re-checked every
+	// cycle so a usable token is picked up as soon as one exists.
+	if agent.authPaused {
+		t.Fatal("owner refresh failure latched polling off instead of retrying")
 	}
 	if got := apiCalls.Load(); got != 0 {
 		t.Fatalf("API calls = %d, want 0 after credentials expired", got)
 	}
 }
 
-func TestAnthropicAgent_MissingOwnerCredentialsClearsStaleTokenAndPauses(t *testing.T) {
+func TestAnthropicAgent_MissingOwnerCredentialsClearsStaleTokenAndSkipsAPI(t *testing.T) {
 	var apiCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiCalls.Add(1)
@@ -92,8 +91,8 @@ func TestAnthropicAgent_MissingOwnerCredentialsClearsStaleTokenAndPauses(t *test
 	if client.HasToken() {
 		t.Fatal("stale token remained available after missing credentials")
 	}
-	if !agent.authPaused {
-		t.Fatal("expected polling to pause after missing credentials")
+	if agent.authPaused {
+		t.Fatal("missing credentials latched polling off instead of retrying")
 	}
 	if got := apiCalls.Load(); got != 0 {
 		t.Fatalf("API calls = %d, want 0 without credentials", got)

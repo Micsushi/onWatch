@@ -1091,6 +1091,16 @@ func run() error {
 							claudeConfigDir,
 						)
 					})
+					// Read-only safety net: if the isolated profile is signed
+					// out, poll with the default profile's token instead of
+					// going dark. Never rotated, so it cannot invalidate the
+					// Claude Code session that owns it.
+					if defaultDir := api.DefaultClaudeConfigDir(); defaultDir != "" && defaultDir != claudeConfigDir {
+						anthropicAg.SetFallbackToken(func() string {
+							return api.DetectAnthropicTokenInDir(defaultDir)
+						})
+					}
+					anthropicAg.SetCredentialOwnerProfile(claudeConfigDir)
 					anthropicAg.SetCCDetectionEnabled(false)
 					logger.Info("Anthropic isolated credential owner enabled", "profile", claudeConfigDir)
 				} else {

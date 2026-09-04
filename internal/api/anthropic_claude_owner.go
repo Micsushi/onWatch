@@ -1,10 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,18 +92,89 @@ func runClaudeCredentialRefresh(ctx context.Context, executable string, args, en
 	refreshCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
+	var stdout, stderr boundedBuffer
 	cmd := exec.CommandContext(refreshCtx, executable, args...)
 	cmd.Env = env
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if refreshCtx.Err() != nil {
 			return fmt.Errorf("anthropic: Claude credential refresh timed out: %w", refreshCtx.Err())
 		}
-		return fmt.Errorf("anthropic: Claude credential refresh failed: %w", err)
+		return fmt.Errorf("anthropic: Claude credential refresh failed: %w%s",
+			err, claudeRefreshDetail(stdout.Bytes(), stderr.Bytes()))
 	}
 	return nil
 }
+
+// claudeRefreshDetail turns the refresh command's output into a short suffix for
+// the error. Without it every failure reads "exit status 1", which says nothing
+// about whether the profile is signed out, offline, or misconfigured. The probe
+// runs with --output-format json, so the reason lives in the "result" field on
+// stdout; stderr only carries unrelated workspace-trust warnings.
+func claudeRefreshDetail(stdout, stderr []byte) string {
+	detail := claudeResultField(stdout)
+	if detail == "" {
+		detail = lastMeaningfulLine(string(stdout))
+	}
+	if detail == "" {
+		detail = lastMeaningfulLine(string(stderr))
+	}
+	if detail == "" {
+		return ""
+	}
+	const maxDetail = 200
+	if len(detail) > maxDetail {
+		detail = detail[:maxDetail] + "..."
+	}
+	return " (" + detail + ")"
+}
+
+// claudeResultField pulls the human-readable reason out of the CLI's JSON
+// result envelope. Returns "" when the output is not that envelope.
+func claudeResultField(stdout []byte) string {
+	var envelope struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout), &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.Result)
+}
+
+// lastMeaningfulLine returns the final non-empty line, which is where the Claude
+// CLI prints the actual reason after its warning preamble.
+func lastMeaningfulLine(out string) string {
+	lines := strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// boundedBuffer keeps only the first maxCredentialRefreshOutput bytes so a
+// chatty CLI cannot grow the agent's memory footprint. The cap has to clear a
+// whole JSON result envelope, or the reason field is truncated away.
+type boundedBuffer struct {
+	buf bytes.Buffer
+}
+
+const maxCredentialRefreshOutput = 64 * 1024
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if remaining := maxCredentialRefreshOutput - b.buf.Len(); remaining > 0 {
+		if len(p) > remaining {
+			b.buf.Write(p[:remaining])
+		} else {
+			b.buf.Write(p)
+		}
+	}
+	return len(p), nil
+}
+
+func (b *boundedBuffer) Bytes() []byte { return b.buf.Bytes() }
 
 func withoutEnvironmentVariable(env []string, name string) []string {
 	prefix := name + "="

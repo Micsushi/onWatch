@@ -42,7 +42,12 @@ type Config struct {
 	// alive while that profile is temporarily unauthenticated so the owner can
 	// refresh it without requiring an onWatch restart.
 	AnthropicCredentialOwner bool
-	AnthropicClaudePath      string // optional ANTHROPIC_CLAUDE_PATH override
+
+	// AnthropicLocalCredentials is true when Claude Code keeps credentials on
+	// disk for onWatch to read. It is the zero-maintenance setup: Claude Code
+	// refreshes them itself, so no rotation and no isolated profile are needed.
+	AnthropicLocalCredentials bool
+	AnthropicClaudePath       string // optional ANTHROPIC_CLAUDE_PATH override
 
 	// Copilot provider configuration
 	CopilotToken string // COPILOT_TOKEN (GitHub PAT with copilot scope)
@@ -297,6 +302,7 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 		cfg.AnthropicTokenRotation = true
 	}
 	cfg.AnthropicCredentialOwner = cfg.AnthropicTokenRotation && strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")) != ""
+	cfg.AnthropicLocalCredentials = hasLocalClaudeCredentials()
 	cfg.AnthropicClaudePath = strings.TrimSpace(os.Getenv("ANTHROPIC_CLAUDE_PATH"))
 
 	// Copilot provider
@@ -561,10 +567,27 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// hasLocalClaudeCredentials reports whether Claude Code has credentials on disk.
+// Read-only mode polls with those and needs no configuration of its own, so
+// without this check the dashboard would hide a provider that polls fine.
+func hasLocalClaudeCredentials() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(home, ".claude", ".credentials.json"))
+	return err == nil && !info.IsDir() && info.Size() > 0
+}
+
 // AvailableProviders returns which providers are configured.
 func (c *Config) AvailableProviders() []string {
 	var providers []string
-	if c.AnthropicToken != "" {
+	// Anthropic can be pollable without a config token: an isolated credential
+	// owner supplies one per poll, read-only mode reads Claude Code's own
+	// credentials file, and statusline mode needs none at all. Use
+	// the same rule as HasProvider so the dashboard doesn't hide a provider
+	// that is actively collecting data.
+	if c.HasProvider("anthropic") {
 		providers = append(providers, "anthropic")
 	}
 	if c.SyntheticAPIKey != "" {
@@ -605,7 +628,8 @@ func (c *Config) HasProvider(name string) bool {
 	case "zai":
 		return c.ZaiAPIKey != ""
 	case "anthropic":
-		return c.AnthropicToken != "" || c.AnthropicSource == "statusline" || c.AnthropicCredentialOwner
+		return c.AnthropicToken != "" || c.AnthropicSource == "statusline" ||
+			c.AnthropicCredentialOwner || c.AnthropicLocalCredentials
 	case "copilot":
 		return c.CopilotToken != ""
 	case "codex":
