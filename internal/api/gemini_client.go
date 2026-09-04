@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -112,6 +113,39 @@ func (c *GeminiClient) getProjectID() string {
 	return c.projectID
 }
 
+// geminiStatusError attaches the API's own explanation to a sentinel error.
+// A bare "gemini: forbidden" cannot distinguish an expired token from a retired
+// product tier, which is the difference between retrying and giving up.
+func geminiStatusError(sentinel error, body io.Reader) error {
+	raw, err := io.ReadAll(io.LimitReader(body, 1<<16))
+	if err != nil {
+		return sentinel
+	}
+	if msg := geminiAPIErrorMessage(raw); msg != "" {
+		return fmt.Errorf("%w: %s", sentinel, msg)
+	}
+	return sentinel
+}
+
+// geminiAPIErrorMessage pulls the message out of Google's standard error
+// envelope. Returns "" when the body is not that envelope.
+func geminiAPIErrorMessage(body []byte) string {
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+			Status  string `json:"status"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(body), &envelope); err != nil {
+		return ""
+	}
+	msg := strings.TrimSpace(envelope.Error.Message)
+	if status := strings.TrimSpace(envelope.Error.Status); status != "" && msg != "" {
+		return status + ": " + msg
+	}
+	return msg
+}
+
 // FetchQuotas fetches per-model quota data from the retrieveUserQuota endpoint.
 func (c *GeminiClient) FetchQuotas(ctx context.Context) (*GeminiQuotaResponse, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -151,9 +185,9 @@ func (c *GeminiClient) FetchQuotas(ctx context.Context) (*GeminiQuotaResponse, e
 	switch {
 	case resp.StatusCode == http.StatusOK:
 	case resp.StatusCode == http.StatusUnauthorized:
-		return nil, ErrGeminiUnauthorized
+		return nil, geminiStatusError(ErrGeminiUnauthorized, resp.Body)
 	case resp.StatusCode == http.StatusForbidden:
-		return nil, ErrGeminiForbidden
+		return nil, geminiStatusError(ErrGeminiForbidden, resp.Body)
 	case resp.StatusCode >= 500:
 		return nil, ErrGeminiServerError
 	default:
@@ -217,9 +251,9 @@ func (c *GeminiClient) FetchTier(ctx context.Context) (*GeminiTierResponse, erro
 	switch {
 	case resp.StatusCode == http.StatusOK:
 	case resp.StatusCode == http.StatusUnauthorized:
-		return nil, ErrGeminiUnauthorized
+		return nil, geminiStatusError(ErrGeminiUnauthorized, resp.Body)
 	case resp.StatusCode == http.StatusForbidden:
-		return nil, ErrGeminiForbidden
+		return nil, geminiStatusError(ErrGeminiForbidden, resp.Body)
 	case resp.StatusCode >= 500:
 		return nil, ErrGeminiServerError
 	default:
