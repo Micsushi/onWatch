@@ -179,13 +179,53 @@ func preflightDatabasePath(dbPath string) error {
 	return nil
 }
 
+// sqliteDSN carries the connection pragmas in the DSN so the driver applies
+// them to every connection it opens.
+//
+// They used to be issued with db.Exec after opening, which runs on whichever
+// pooled connection happens to be free. busy_timeout and foreign_keys are
+// per-connection settings, so the pool's second connection kept the defaults -
+// a zero busy timeout, which fails a contended write immediately with
+// SQLITE_BUSY ("database is locked") instead of waiting for the writer. That
+// dropped poll snapshots whenever two agents wrote at once.
+func sqliteDSN(dbPath string) string {
+	pragmas := []string{
+		"_pragma=journal_mode(WAL)",
+		"_pragma=synchronous(NORMAL)",
+		"_pragma=cache_size(-500)",
+		"_pragma=foreign_keys(1)",
+		"_pragma=busy_timeout(10000)",
+	}
+	separator := "?"
+	if strings.Contains(dbPath, "?") {
+		separator = "&"
+	}
+	return dbPath + separator + strings.Join(pragmas, "&")
+}
+
+// CheckpointWAL folds the write-ahead log back into the database and truncates
+// it. Nothing did this before, so the WAL grew without bound - 34MB in
+// production against a 319MB database - which in turn starves the automatic
+// checkpoints that would have kept it small.
+func (s *Store) CheckpointWAL() error {
+	var busy, logFrames, checkpointed int
+	err := s.db.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed)
+	if err != nil {
+		return fmt.Errorf("store.CheckpointWAL: %w", err)
+	}
+	if busy != 0 {
+		return fmt.Errorf("store.CheckpointWAL: blocked by an active reader or writer")
+	}
+	return nil
+}
+
 // New creates a new Store with the given database path
 func New(dbPath string) (*Store, error) {
 	if err := preflightDatabasePath(dbPath); err != nil {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -200,21 +240,6 @@ func New(dbPath string) (*Store, error) {
 		db.SetMaxOpenConns(2)
 	}
 	db.SetMaxIdleConns(1)
-
-	// Configure SQLite for RAM efficiency
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL;",
-		"PRAGMA synchronous=NORMAL;",
-		"PRAGMA cache_size=-500;",
-		"PRAGMA foreign_keys=ON;",
-		"PRAGMA busy_timeout=5000;",
-	}
-
-	for _, pragma := range pragmas {
-		if _, err := db.Exec(pragma); err != nil {
-			return nil, fmt.Errorf("failed to set pragma: %w", err)
-		}
-	}
 
 	s := &Store{db: db, dbPath: dbPath}
 	if err := s.createTables(); err != nil {

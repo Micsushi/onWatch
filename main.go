@@ -1640,6 +1640,14 @@ func run() error {
 				return
 			case <-ticker.C:
 				debug.FreeOSMemory()
+				// Fold the write-ahead log back into the database. Without this
+				// the WAL grows without bound and starves its own automatic
+				// checkpoints, which surfaces as SQLITE_BUSY on writes.
+				if db != nil {
+					if err := db.CheckpointWAL(); err != nil {
+						logger.Debug("WAL checkpoint skipped", "error", err)
+					}
+				}
 				loginRateLimiter.EvictStaleEntries(5 * time.Minute)
 				// Evict expired session tokens
 				if sessions := server.GetSessionStore(); sessions != nil {
