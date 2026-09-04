@@ -1,7 +1,10 @@
 param(
     [string] $RepoDir = "C:\Users\sushi\Documents\Github\onWatch",
     [string] $InstallDir = (Join-Path $env:USERPROFILE ".onwatch"),
-    [int] $CheckIntervalSeconds = 3600
+    [int] $CheckIntervalSeconds = 3600,
+    # onwatch-dev.ps1 may rebuild from source before launching, so allow for a
+    # compile before declaring the start a failure.
+    [int] $StartTimeoutSeconds = 300
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,9 +59,18 @@ function Start-OnWatchFromRepo {
         "-File" `
         $DevScript `
         "restart"
-    if ($LASTEXITCODE -ne 0) {
-        throw "onWatch restart failed with exit code $LASTEXITCODE."
+    # wscript //B detaches immediately, so its exit code says nothing about
+    # whether onWatch came up - it was reported as "failed with exit code ."
+    # on every start. Wait for the process to appear instead.
+    $deadline = (Get-Date).AddSeconds($StartTimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-OnWatchRunning) {
+            Write-WatchdogLog "onWatch is running"
+            return
+        }
+        Start-Sleep -Seconds 2
     }
+    throw "onWatch did not start within $StartTimeoutSeconds seconds."
 }
 
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
