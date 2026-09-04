@@ -1100,6 +1100,7 @@ func run() error {
 							return api.DetectAnthropicTokenInDir(defaultDir)
 						})
 					}
+					anthropicAg.SetCredentialOwnerProfile(claudeConfigDir)
 					anthropicAg.SetCCDetectionEnabled(false)
 					logger.Info("Anthropic isolated credential owner enabled", "profile", claudeConfigDir)
 				} else {
