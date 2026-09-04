@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/api"
@@ -74,6 +75,11 @@ const ownerRefreshRetryInterval = 30 * time.Minute
 // attempts prompt means a freshly re-authenticated profile is picked up quickly.
 const maxOwnerRefreshFailures = 3
 
+// ownerRefreshTokenWarnThreshold is how far ahead of the isolated profile's
+// refresh token expiry the dashboard starts asking for a re-login. Long enough
+// to act on, short enough not to nag.
+const ownerRefreshTokenWarnThreshold = 72 * time.Hour
+
 // errCredentialOwnerBackoff is returned instead of spawning the credential owner
 // again while its retry window is still open.
 var errCredentialOwnerBackoff = errors.New("anthropic: isolated credential owner refresh in backoff")
@@ -102,6 +108,11 @@ type AnthropicAgent struct {
 	ownerRetryAt       time.Time
 	ownerFailCount     int
 	credentialOwnerDir string
+
+	// ownerRefreshTokenExpiry is when the isolated profile's refresh token dies.
+	// After that only an interactive login revives the profile, so the dashboard
+	// says so while polling still works instead of after it has gone dark.
+	ownerRefreshTokenExpiry time.Time
 
 	lastToken    string
 	notifier     agentNotifier
@@ -158,17 +169,59 @@ func (a *AnthropicAgent) recordPollSuccess() {
 		a.recordCredentialOwnerDegraded()
 		return
 	}
-	a.clearPollError()
+	if msg := a.credentialOwnerExpiringMessage(); msg != "" {
+		// The poll worked, so this is a warning, not a failure: keep the
+		// notifier on the success path and only claim the dashboard banner.
+		a.persistPollError("credential_owner_expiring", msg)
+	} else {
+		a.clearPollError()
+	}
 	if a.notifier != nil {
 		a.notifier.RecordPollSuccess("anthropic", "default")
 	}
+}
+
+// credentialOwnerExpiringMessage warns while the isolated profile still works
+// but its refresh token is about to expire. Once it does, the profile is signed
+// out for good and Anthropic data silently stops updating, so the warning has to
+// arrive before that, not after.
+func (a *AnthropicAgent) credentialOwnerExpiringMessage() string {
+	if a.ownerRefresh == nil || a.ownerRefreshTokenExpiry.IsZero() {
+		return ""
+	}
+	remaining := time.Until(a.ownerRefreshTokenExpiry)
+	if remaining >= ownerRefreshTokenWarnThreshold {
+		return ""
+	}
+	when := "in " + humanizeDuration(remaining)
+	if remaining <= 0 {
+		when = "now"
+	}
+	return "The isolated Claude profile's login expires " + when +
+		". Re-authenticate before then to avoid a gap: " + a.credentialOwnerLoginInstruction()
+}
+
+// humanizeDuration renders a coarse "2 days" / "5 hours" string for the banner.
+func humanizeDuration(d time.Duration) string {
+	if d < time.Hour {
+		return "under an hour"
+	}
+	if d < 48*time.Hour {
+		hours := int(d.Hours())
+		if hours == 1 {
+			return "1 hour"
+		}
+		return strconv.Itoa(hours) + " hours"
+	}
+	return strconv.Itoa(int(d.Hours()/24)) + " days"
 }
 
 // recordCredentialOwnerDegraded flags that polling only continues on fallback
 // credentials, so the isolated profile still needs a re-login.
 func (a *AnthropicAgent) recordCredentialOwnerDegraded() {
 	a.persistPollError("credential_owner",
-		"The isolated Claude profile is signed out. Polling continues on read-only credentials - run 'claude /login' in that profile to restore it.")
+		"The isolated Claude profile is signed out. Polling continues on read-only credentials, which expire on their owner's schedule. "+
+			a.credentialOwnerLoginInstruction())
 }
 
 func (a *AnthropicAgent) persistPollError(category, message string) {
@@ -250,7 +303,18 @@ func (a *AnthropicAgent) credentialOwnerSignedOutMessage() string {
 	}
 	return "Claude credentials are unavailable: " + profile +
 		" is signed out and no read-only Claude credentials are available either. " +
-		"Run 'claude' with CLAUDE_CONFIG_DIR set to that profile, sign in with /login, then restart onWatch."
+		a.credentialOwnerLoginInstruction()
+}
+
+// credentialOwnerLoginInstruction spells out the only command that restores the
+// isolated profile. 'claude auth' does not exist, and logging into the default
+// profile would not help, so name the profile that needs the login.
+func (a *AnthropicAgent) credentialOwnerLoginInstruction() string {
+	if a.credentialOwnerDir == "" {
+		return "Run 'claude' with CLAUDE_CONFIG_DIR set to the isolated profile, sign in with /login, then restart onWatch."
+	}
+	return "Run 'claude' with CLAUDE_CONFIG_DIR=" + a.credentialOwnerDir +
+		", sign in with /login, then restart onWatch."
 }
 
 func (a *AnthropicAgent) recordPollSkipped() {
@@ -581,6 +645,9 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 	// Claude process can safely rotate the profile it owns.
 	if a.credsRefresh != nil {
 		creds := a.credsRefresh()
+		if creds != nil {
+			a.ownerRefreshTokenExpiry = creds.RefreshTokenExpiresAt
+		}
 		if a.ownerRefresh != nil && (creds == nil || creds.IsExpired()) {
 			if err := a.refreshViaCredentialOwner(ctx, creds); err != nil {
 				// The isolated profile is unusable. Rather than going dark, poll
