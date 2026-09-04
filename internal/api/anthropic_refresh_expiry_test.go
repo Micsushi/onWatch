@@ -50,8 +50,9 @@ func TestParseFullClaudeCredentials_MissingRefreshTokenExpiry(t *testing.T) {
 	}
 }
 
-// "exit status 1" says nothing. The CLI's own last line does - and it prints the
-// real reason on stdout while stderr carries unrelated workspace warnings.
+// "exit status 1" says nothing. The probe runs with --output-format json, so the
+// reason is the envelope's "result" field on stdout; stderr only carries
+// unrelated workspace-trust warnings.
 func TestClaudeRefreshDetail(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -72,6 +73,12 @@ func TestClaudeRefreshDetail(t *testing.T) {
 			stderr: "claude: command failed\n",
 			want:   " (claude: command failed)",
 		},
+		{
+			name:   "json envelope reports its result field, not the raw blob",
+			stdout: `{"is_error":true,"session_id":"abc","result":"Failed to authenticate: OAuth session expired and could not be refreshed","type":"result"}`,
+			stderr: "Ignoring 88 permissions.allow entries\r\n",
+			want:   " (Failed to authenticate: OAuth session expired and could not be refreshed)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -85,7 +92,7 @@ func TestClaudeRefreshDetail(t *testing.T) {
 // A chatty CLI must not grow the agent's memory footprint.
 func TestBoundedBuffer_CapsRetainedOutput(t *testing.T) {
 	var b boundedBuffer
-	chunk := make([]byte, 3000)
+	chunk := make([]byte, maxCredentialRefreshOutput/2)
 	for i := range chunk {
 		chunk[i] = 'x'
 	}
@@ -95,7 +102,7 @@ func TestBoundedBuffer_CapsRetainedOutput(t *testing.T) {
 			t.Fatalf("Write = (%d, %v), want (%d, nil)", n, err, len(chunk))
 		}
 	}
-	if got := len(b.Bytes()); got != maxCredentialRefreshStderr {
-		t.Fatalf("retained %d bytes, want %d", got, maxCredentialRefreshStderr)
+	if got := len(b.Bytes()); got != maxCredentialRefreshOutput {
+		t.Fatalf("retained %d bytes, want %d", got, maxCredentialRefreshOutput)
 	}
 }

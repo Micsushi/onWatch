@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -108,11 +109,14 @@ func runClaudeCredentialRefresh(ctx context.Context, executable string, args, en
 
 // claudeRefreshDetail turns the refresh command's output into a short suffix for
 // the error. Without it every failure reads "exit status 1", which says nothing
-// about whether the profile is signed out, offline, or misconfigured. The Claude
-// CLI prints the reason on stdout and reserves stderr for unrelated workspace
-// trust warnings, so stdout is read first.
+// about whether the profile is signed out, offline, or misconfigured. The probe
+// runs with --output-format json, so the reason lives in the "result" field on
+// stdout; stderr only carries unrelated workspace-trust warnings.
 func claudeRefreshDetail(stdout, stderr []byte) string {
-	detail := lastMeaningfulLine(string(stdout))
+	detail := claudeResultField(stdout)
+	if detail == "" {
+		detail = lastMeaningfulLine(string(stdout))
+	}
 	if detail == "" {
 		detail = lastMeaningfulLine(string(stderr))
 	}
@@ -124,6 +128,18 @@ func claudeRefreshDetail(stdout, stderr []byte) string {
 		detail = detail[:maxDetail] + "..."
 	}
 	return " (" + detail + ")"
+}
+
+// claudeResultField pulls the human-readable reason out of the CLI's JSON
+// result envelope. Returns "" when the output is not that envelope.
+func claudeResultField(stdout []byte) string {
+	var envelope struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout), &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.Result)
 }
 
 // lastMeaningfulLine returns the final non-empty line, which is where the Claude
@@ -138,16 +154,17 @@ func lastMeaningfulLine(out string) string {
 	return ""
 }
 
-// boundedBuffer keeps only the first maxCredentialRefreshStderr bytes so a
-// chatty CLI cannot grow the agent's memory footprint.
+// boundedBuffer keeps only the first maxCredentialRefreshOutput bytes so a
+// chatty CLI cannot grow the agent's memory footprint. The cap has to clear a
+// whole JSON result envelope, or the reason field is truncated away.
 type boundedBuffer struct {
 	buf bytes.Buffer
 }
 
-const maxCredentialRefreshStderr = 4096
+const maxCredentialRefreshOutput = 64 * 1024
 
 func (b *boundedBuffer) Write(p []byte) (int, error) {
-	if remaining := maxCredentialRefreshStderr - b.buf.Len(); remaining > 0 {
+	if remaining := maxCredentialRefreshOutput - b.buf.Len(); remaining > 0 {
 		if len(p) > remaining {
 			b.buf.Write(p[:remaining])
 		} else {
