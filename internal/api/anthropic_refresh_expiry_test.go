@@ -50,24 +50,32 @@ func TestParseFullClaudeCredentials_MissingRefreshTokenExpiry(t *testing.T) {
 	}
 }
 
-// "exit status 1" says nothing. The CLI's own last line does.
+// "exit status 1" says nothing. The CLI's own last line does - and it prints the
+// real reason on stdout while stderr carries unrelated workspace warnings.
 func TestClaudeRefreshDetail(t *testing.T) {
 	tests := []struct {
 		name   string
+		stdout string
 		stderr string
 		want   string
 	}{
-		{"empty", "", ""},
-		{"blank lines only", "\n \r\n", ""},
+		{name: "empty"},
+		{name: "blank lines only", stdout: "\n \r\n"},
 		{
-			"last line wins over the warning preamble",
-			"Ignoring 88 permissions.allow entries\r\nFailed to authenticate: OAuth session expired\r\n",
-			" (Failed to authenticate: OAuth session expired)",
+			name:   "stdout reason wins over stderr noise",
+			stdout: "Failed to authenticate: OAuth session expired\r\n",
+			stderr: "Ignoring 88 permissions.allow entries\r\n",
+			want:   " (Failed to authenticate: OAuth session expired)",
+		},
+		{
+			name:   "falls back to stderr when stdout is silent",
+			stderr: "claude: command failed\n",
+			want:   " (claude: command failed)",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := claudeRefreshDetail([]byte(tt.stderr)); got != tt.want {
+			if got := claudeRefreshDetail([]byte(tt.stdout), []byte(tt.stderr)); got != tt.want {
 				t.Fatalf("claudeRefreshDetail = %q, want %q", got, tt.want)
 			}
 		})

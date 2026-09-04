@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,25 +91,31 @@ func runClaudeCredentialRefresh(ctx context.Context, executable string, args, en
 	refreshCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	var stderr boundedBuffer
+	var stdout, stderr boundedBuffer
 	cmd := exec.CommandContext(refreshCtx, executable, args...)
 	cmd.Env = env
-	cmd.Stdout = io.Discard
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if refreshCtx.Err() != nil {
 			return fmt.Errorf("anthropic: Claude credential refresh timed out: %w", refreshCtx.Err())
 		}
-		return fmt.Errorf("anthropic: Claude credential refresh failed: %w%s", err, claudeRefreshDetail(stderr.Bytes()))
+		return fmt.Errorf("anthropic: Claude credential refresh failed: %w%s",
+			err, claudeRefreshDetail(stdout.Bytes(), stderr.Bytes()))
 	}
 	return nil
 }
 
-// claudeRefreshDetail turns the refresh command's stderr into a short suffix for
+// claudeRefreshDetail turns the refresh command's output into a short suffix for
 // the error. Without it every failure reads "exit status 1", which says nothing
-// about whether the profile is signed out, offline, or misconfigured.
-func claudeRefreshDetail(stderr []byte) string {
-	detail := lastMeaningfulLine(string(stderr))
+// about whether the profile is signed out, offline, or misconfigured. The Claude
+// CLI prints the reason on stdout and reserves stderr for unrelated workspace
+// trust warnings, so stdout is read first.
+func claudeRefreshDetail(stdout, stderr []byte) string {
+	detail := lastMeaningfulLine(string(stdout))
+	if detail == "" {
+		detail = lastMeaningfulLine(string(stderr))
+	}
 	if detail == "" {
 		return ""
 	}
