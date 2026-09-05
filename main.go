@@ -678,7 +678,11 @@ func run() error {
 		if token := api.DetectAnthropicToken(preflightLogger); token != "" {
 			cfg.AnthropicToken = token
 			cfg.AnthropicAutoToken = true
-		} else if !cfg.AnthropicCredentialOwner {
+		} else if !cfg.AnthropicCredentialOwner && !cfg.AnthropicLocalCredentials {
+			// A credentials file that exists but holds an expired token is a
+			// temporary state: Claude Code renews it on next use and the agent
+			// re-detects it every cycle. Downgrading to statusline-only here
+			// would disable API polling until the next restart.
 			if p := agent.StatuslineDataPath(); p != "" {
 				if _, err := os.Stat(p); err == nil {
 					// No OAuth token reachable (e.g. Keychain denied in this launch
@@ -1212,6 +1216,20 @@ func run() error {
 		antigravityAg = agent.NewAntigravityAgent(antigravityClient, db, antigravityTr, cfg.PollInterval, logger, antigravitySm)
 	}
 
+	var antigravityWakeRunner *agent.AntigravityWakeRunner
+	if cfg.HasProvider("antigravity") || cfg.AntigravityQuotaWakeEnabled {
+		antigravityWakeRunner = agent.NewAntigravityWakeRunner(db, agent.AntigravityWakeConfig{
+			Enabled:     cfg.AntigravityQuotaWakeEnabled,
+			Mode:        cfg.AntigravityQuotaWakeMode,
+			RecipientID: cfg.AntigravityQuotaWakeRecipientID,
+			Model:       cfg.AntigravityQuotaWakeModel,
+			Prompt:      cfg.AntigravityQuotaWakePrompt,
+			Title:       cfg.AntigravityQuotaWakeTitle,
+			BinaryPath:  cfg.AntigravityQuotaWakePath,
+			Cooldown:    cfg.AntigravityQuotaWakeCooldown,
+		}, logger)
+	}
+
 	// Create MiniMax agent manager for multi-account support.
 	// If a legacy MINIMAX_API_KEY is configured, seed the default account metadata.
 	var minimaxMgr *agent.MiniMaxAgentManager
@@ -1461,11 +1479,22 @@ func run() error {
 			notifier.Check(status)
 		})
 	}
-	// Antigravity reset notifications are intentionally disabled: each model_id
-	// resets in the same window and resets are flappy, so wiring onReset to the
-	// notifier produced a burst of duplicate Discord pings per reset. Cycle
-	// tracking still happens inside antigravityTr.Process; only the notification
-	// side-effect is dropped.
+	if antigravityTr != nil {
+		antigravityResetDebouncer := agent.NewAntigravityResetDebouncer(15 * time.Minute)
+		antigravityTr.SetOnReset(func(modelID string) {
+			groupKey := api.AntigravityQuotaGroupForModel(modelID, "")
+			if antigravityResetDebouncer.ShouldFire(groupKey) {
+				notifier.Check(notify.QuotaStatus{
+					Provider:      "antigravity",
+					QuotaKey:      groupKey,
+					ResetOccurred: true,
+				})
+			}
+			if antigravityWakeRunner != nil {
+				antigravityWakeRunner.OnReset(modelID)
+			}
+		})
+	}
 	if minimaxTr != nil {
 		minimaxTr.SetOnReset(func(modelName string) {
 			notifier.Check(notify.QuotaStatus{Provider: "minimax", QuotaKey: modelName, ResetOccurred: true})
@@ -1555,6 +1584,9 @@ func run() error {
 	handler.SetAgentManager(agentMgr)
 	if minimaxMgr != nil {
 		handler.SetMiniMaxAgentManager(minimaxMgr)
+	}
+	if antigravityWakeRunner != nil {
+		handler.SetAntigravityWakeRunner(antigravityWakeRunner)
 	}
 	updater := update.NewUpdater(version, logger)
 	handler.SetUpdater(updater)
