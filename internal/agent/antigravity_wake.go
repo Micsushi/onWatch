@@ -25,14 +25,15 @@ const (
 
 // AntigravityWakeConfig holds configuration for Antigravity quota-wake triggering.
 type AntigravityWakeConfig struct {
-	Enabled      bool          `json:"enabled"`
-	Mode         string        `json:"mode"`          // "new-conversation" or "send-message"
-	RecipientID  string        `json:"recipient_id"`  // target conversation ID for send-message
-	Model        string        `json:"model"`         // "flash_lite", "flash", "pro", or "" (default)
-	Prompt       string        `json:"prompt"`        // prompt content to wake window
-	Title        string        `json:"title"`         // title for new conversation or message
-	BinaryPath   string        `json:"binary_path"`   // optional explicit executable path
-	Cooldown     time.Duration `json:"cooldown"`      // cooldown between wake executions
+	Enabled     bool          `json:"enabled"`
+	Mode        string        `json:"mode"`         // "new-conversation" or "send-message"
+	RecipientID string        `json:"recipient_id"` // target conversation ID for send-message
+	Model       string        `json:"model"`        // "flash_lite", "flash", "pro", or "" (default)
+	Prompt      string        `json:"prompt"`       // prompt content to wake window
+	Title       string        `json:"title"`        // title for new conversation or message
+	BinaryPath  string        `json:"binary_path"`  // optional explicit executable path
+	ProjectDir  string        `json:"project_dir"`  // directory agentapi binds the conversation to
+	Cooldown    time.Duration `json:"cooldown"`     // cooldown between wake executions
 }
 
 // AntigravityWakeResult records the outcome of a wake execution.
@@ -94,7 +95,8 @@ type AntigravityWakeRunner struct {
 	lastWakeTime time.Time
 	lastResult   *AntigravityWakeResult
 
-	cmdExecutor  func(ctx context.Context, name string, args ...string) ([]byte, error)
+	cmdExecutor  func(ctx context.Context, name string, env []string, args ...string) ([]byte, error)
+	connResolver func(ctx context.Context) (*api.AntigravityConnection, error)
 	pathResolver func(override string) (string, bool, error)
 }
 
@@ -122,6 +124,7 @@ func NewAntigravityWakeRunner(store WakeSettingStore, cfg AntigravityWakeConfig,
 		cfg:          cfg,
 		lastWakes:    make(map[string]time.Time),
 		cmdExecutor:  defaultCommandExecutor,
+		connResolver: defaultConnectionResolver,
 		pathResolver: defaultPathResolver,
 	}
 
@@ -184,7 +187,7 @@ func (r *AntigravityWakeRunner) LastResult() *AntigravityWakeResult {
 }
 
 // SetExecutor replaces the command executor (used in tests).
-func (r *AntigravityWakeRunner) SetExecutor(fn func(ctx context.Context, name string, args ...string) ([]byte, error)) {
+func (r *AntigravityWakeRunner) SetExecutor(fn func(ctx context.Context, name string, env []string, args ...string) ([]byte, error)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cmdExecutor = fn
@@ -299,7 +302,13 @@ func (r *AntigravityWakeRunner) Trigger(ctx context.Context, triggerSource strin
 		"source", triggerSource,
 	)
 
-	output, err := r.cmdExecutor(ctx, exePath, args...)
+	env, envErr := r.wakeEnvironment(ctx)
+	if envErr != nil {
+		r.logger.Warn("Antigravity quota wake cannot reach the language server", "error", envErr)
+		return nil, envErr
+	}
+
+	output, err := r.cmdExecutor(ctx, exePath, env, args...)
 	execTime := time.Now()
 	outputStr := strings.TrimSpace(string(output))
 
@@ -347,9 +356,82 @@ func (r *AntigravityWakeRunner) persistResult(res *AntigravityWakeResult) {
 	}
 }
 
-func defaultCommandExecutor(ctx context.Context, name string, args ...string) ([]byte, error) {
+func defaultCommandExecutor(ctx context.Context, name string, env []string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = env
+	}
 	return cmd.CombinedOutput()
+}
+
+func defaultConnectionResolver(ctx context.Context) (*api.AntigravityConnection, error) {
+	return api.NewAntigravityClient(slog.Default()).Detect(ctx)
+}
+
+// SetConnectionResolver replaces language server discovery (used in tests).
+func (r *AntigravityWakeRunner) SetConnectionResolver(fn func(ctx context.Context) (*api.AntigravityConnection, error)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.connResolver = fn
+}
+
+// wakeEnvironment builds the environment agentapi needs. Without it the command
+// fails before reaching a model: it has no idea which language server to talk
+// to, and refuses to start a conversation that is not bound to a project.
+//
+//	ANTIGRAVITY_LS_ADDRESS  - host:port of the running language server
+//	ANTIGRAVITY_CSRF_TOKEN  - that server's token, taken from its command line
+//	ANTIGRAVITY_PROJECT_ID  - an existing directory to attach the conversation to
+func (r *AntigravityWakeRunner) wakeEnvironment(ctx context.Context) ([]string, error) {
+	r.mu.Lock()
+	resolver := r.connResolver
+	projectDir := strings.TrimSpace(r.cfg.ProjectDir)
+	r.mu.Unlock()
+
+	if resolver == nil {
+		return nil, errors.New("antigravity wake: no language server resolver configured")
+	}
+	conn, err := resolver(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("antigravity wake: locate language server: %w", err)
+	}
+	if conn == nil || conn.Port == 0 {
+		return nil, errors.New("antigravity wake: language server is not running")
+	}
+
+	projectDir, err = resolveWakeProjectDir(projectDir)
+	if err != nil {
+		return nil, err
+	}
+
+	env := append(os.Environ(),
+		fmt.Sprintf("ANTIGRAVITY_LS_ADDRESS=127.0.0.1:%d", conn.Port),
+		"ANTIGRAVITY_PROJECT_ID="+projectDir,
+	)
+	if conn.CSRFToken != "" {
+		env = append(env, "ANTIGRAVITY_CSRF_TOKEN="+conn.CSRFToken)
+	}
+	return env, nil
+}
+
+// resolveWakeProjectDir returns a directory that exists. agentapi rejects a
+// project id it cannot stat, so fall back to a scratch directory rather than
+// failing the wake outright.
+func resolveWakeProjectDir(configured string) (string, error) {
+	if configured != "" {
+		if info, err := os.Stat(configured); err == nil && info.IsDir() {
+			return configured, nil
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("antigravity wake: resolve project directory: %w", err)
+	}
+	fallback := filepath.Join(home, ".onwatch", "antigravity-wake")
+	if err := os.MkdirAll(fallback, 0o700); err != nil {
+		return "", fmt.Errorf("antigravity wake: create project directory: %w", err)
+	}
+	return fallback, nil
 }
 
 func defaultPathResolver(override string) (string, bool, error) {

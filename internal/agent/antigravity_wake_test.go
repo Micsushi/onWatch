@@ -4,11 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/onllm-dev/onwatch/v2/internal/api"
 )
+
+// newTestWakeRunner builds a runner with language server discovery stubbed out,
+// so tests exercise the wake logic rather than whatever Antigravity is doing on
+// the machine running them.
+func newTestWakeRunner(store WakeSettingStore, cfg AntigravityWakeConfig, logger *slog.Logger) *AntigravityWakeRunner {
+	runner := NewAntigravityWakeRunner(store, cfg, logger)
+	runner.SetConnectionResolver(func(context.Context) (*api.AntigravityConnection, error) {
+		return &api.AntigravityConnection{Port: 12345, CSRFToken: "test-csrf"}, nil
+	})
+	return runner
+}
 
 type memoryWakeStore struct {
 	mu   sync.Mutex
@@ -64,14 +78,14 @@ func TestAntigravityWakeRunnerNewConversation(t *testing.T) {
 		BinaryPath: "C:\\FakePath\\language_server.exe",
 	}
 
-	runner := NewAntigravityWakeRunner(store, cfg, nil)
+	runner := newTestWakeRunner(store, cfg, nil)
 	runner.SetPathResolver(func(override string) (string, bool, error) {
 		return override, true, nil // true = isDirectLS
 	})
 
 	var executedName string
 	var executedArgs []string
-	runner.SetExecutor(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	runner.SetExecutor(func(ctx context.Context, name string, env []string, args ...string) ([]byte, error) {
 		executedName = name
 		executedArgs = args
 		resp := `{"response":{"newConversation":{"conversationId":"conv-new-12345"}}}`
@@ -143,13 +157,13 @@ func TestAntigravityWakeRunnerSendMessage(t *testing.T) {
 		BinaryPath:  "agentapi.bat",
 	}
 
-	runner := NewAntigravityWakeRunner(store, cfg, nil)
+	runner := newTestWakeRunner(store, cfg, nil)
 	runner.SetPathResolver(func(override string) (string, bool, error) {
 		return override, false, nil // false = batch/shim
 	})
 
 	var executedArgs []string
-	runner.SetExecutor(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	runner.SetExecutor(func(ctx context.Context, name string, env []string, args ...string) ([]byte, error) {
 		executedArgs = args
 		resp := `{"response":{"sendMessage":{"conversationId":"conv-target-999"}}}`
 		return []byte(resp), nil
@@ -187,13 +201,13 @@ func TestAntigravityWakeRunnerSendMessageFallback(t *testing.T) {
 		BinaryPath:  "agentapi.bat",
 	}
 
-	runner := NewAntigravityWakeRunner(store, cfg, nil)
+	runner := newTestWakeRunner(store, cfg, nil)
 	runner.SetPathResolver(func(override string) (string, bool, error) {
 		return override, false, nil
 	})
 
 	var executedArgs []string
-	runner.SetExecutor(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	runner.SetExecutor(func(ctx context.Context, name string, env []string, args ...string) ([]byte, error) {
 		executedArgs = args
 		return []byte(`{"conversationId":"conv-fallback-1"}`), nil
 	})
@@ -219,12 +233,12 @@ func TestAntigravityWakeRunnerExecutionFailure(t *testing.T) {
 		Cooldown: 100 * time.Millisecond,
 	}
 
-	runner := NewAntigravityWakeRunner(store, cfg, nil)
+	runner := newTestWakeRunner(store, cfg, nil)
 	runner.SetPathResolver(func(override string) (string, bool, error) {
 		return "agentapi", false, nil
 	})
 
-	runner.SetExecutor(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	runner.SetExecutor(func(ctx context.Context, name string, env []string, args ...string) ([]byte, error) {
 		return []byte("connection refused to language server"), errors.New("exit status 1")
 	})
 
@@ -246,7 +260,7 @@ func TestAntigravityWakeRunnerExecutionFailure(t *testing.T) {
 }
 
 func TestAntigravityWakeRunnerBinaryNotFound(t *testing.T) {
-	runner := NewAntigravityWakeRunner(nil, AntigravityWakeConfig{Enabled: true}, nil)
+	runner := newTestWakeRunner(nil, AntigravityWakeConfig{Enabled: true}, nil)
 	runner.SetPathResolver(func(override string) (string, bool, error) {
 		return "", false, fmt.Errorf("no binary available")
 	})
@@ -266,13 +280,13 @@ func TestAntigravityWakeRunnerOnReset(t *testing.T) {
 		Cooldown: 50 * time.Millisecond,
 	}
 
-	runner := NewAntigravityWakeRunner(store, cfg, nil)
+	runner := newTestWakeRunner(store, cfg, nil)
 	runner.SetPathResolver(func(override string) (string, bool, error) {
 		return "agentapi", false, nil
 	})
 
 	executed := make(chan string, 5)
-	runner.SetExecutor(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	runner.SetExecutor(func(ctx context.Context, name string, env []string, args ...string) ([]byte, error) {
 		executed <- strings.Join(args, " ")
 		return []byte(`{"conversationId":"conv-reset-1"}`), nil
 	})
