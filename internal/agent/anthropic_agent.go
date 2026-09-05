@@ -317,6 +317,18 @@ func (a *AnthropicAgent) credentialOwnerLoginInstruction() string {
 		", sign in with /login, then restart onWatch."
 }
 
+// missingCredentialsMessage explains the fix for the mode onWatch is actually
+// running in. In read-only mode there is nothing to re-authenticate: onWatch
+// reads whatever token Claude Code maintains, and Claude Code renews it on its
+// own the next time it is used.
+func (a *AnthropicAgent) missingCredentialsMessage() string {
+	if a.ownerRefresh != nil {
+		return "No Claude credentials are available. " + a.credentialOwnerLoginInstruction()
+	}
+	return "Claude Code's access token has expired. onWatch reads it read-only and " +
+		"cannot refresh it - use Claude Code once to renew it and polling resumes automatically."
+}
+
 func (a *AnthropicAgent) recordPollSkipped() {
 	if a.notifier != nil {
 		a.notifier.RecordPollSkipped("anthropic", "default")
@@ -687,6 +699,14 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 	var newToken string
 	if a.tokenRefresh != nil {
 		newToken = a.tokenRefresh()
+		// Read-only mode cannot refresh anything. Detection returning nothing
+		// means Claude Code's token has gone cold, so drop the one we hold -
+		// reusing it only earns 401s until the agent pauses polling entirely.
+		if newToken == "" && a.ownerRefresh == nil && !a.usingFallbackToken && a.client.HasToken() {
+			a.logger.Info("Anthropic credentials are not currently usable; waiting for Claude Code to refresh them")
+			a.client.SetToken("")
+			a.lastToken = ""
+		}
 		if newToken != "" && newToken != a.lastToken {
 			a.client.SetToken(newToken)
 			a.lastToken = newToken
@@ -722,8 +742,7 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 
 	// Statusline-only mode has no token; never hit the API without one.
 	if !a.client.HasToken() {
-		reportFailure("missing_credentials",
-			"No Claude credentials are available. Re-authenticate with 'claude auth' to resume polling.")
+		reportFailure("missing_credentials", a.missingCredentialsMessage())
 		return
 	}
 

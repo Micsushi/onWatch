@@ -477,9 +477,15 @@ func TestAnthropicAgentPollHealthRateLimitAndMissingCredentialsAreCategorized(t 
 		agent.client.SetToken("")
 		agent.poll(context.Background())
 		got := spy.snapshot()
+		// Read-only mode has nothing to re-authenticate: Claude Code renews the
+		// token itself, so the message must say that rather than name the
+		// nonexistent 'claude auth'.
 		if len(got.failures) != 1 || got.failures[0].category != "missing_credentials" ||
-			!strings.Contains(got.failures[0].message, "claude auth") {
+			!strings.Contains(got.failures[0].message, "Claude Code") {
 			t.Fatalf("failures = %#v", got.failures)
+		}
+		if strings.Contains(got.failures[0].message, "claude auth") {
+			t.Fatalf("message names the nonexistent 'claude auth': %q", got.failures[0].message)
 		}
 	})
 }

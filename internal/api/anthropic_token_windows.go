@@ -130,11 +130,18 @@ func detectAnthropicTokenPlatform(logger *slog.Logger) string {
 	if err != nil {
 		return ""
 	}
-	token, err := parseClaudeCredentials(data)
-	if err == nil && token != "" {
-		logger.Info("Anthropic token auto-detected from credentials file", "path", credPath)
-		return strings.TrimSpace(token)
+	creds, err := parseFullClaudeCredentials(data)
+	if err != nil || creds == nil || creds.AccessToken == "" {
+		return ""
 	}
-
-	return ""
+	// An expired token only earns 401s, and read-only mode cannot refresh it.
+	// Report no token so onWatch waits for Claude Code to renew it instead of
+	// burning auth failures until polling pauses. An unrecorded expiry is not
+	// an expired one - never refuse a token the file makes no claim about.
+	if creds.ExpiresAt.UnixMilli() > 0 && creds.IsExpired() {
+		logger.Debug("Anthropic credentials found but expired", "path", credPath, "expired_at", creds.ExpiresAt)
+		return ""
+	}
+	logger.Info("Anthropic token auto-detected from credentials file", "path", credPath)
+	return strings.TrimSpace(creds.AccessToken)
 }
