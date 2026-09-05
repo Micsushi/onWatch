@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/onllm-dev/onwatch/v2/internal/agent"
 	"github.com/onllm-dev/onwatch/v2/internal/api"
 	"github.com/onllm-dev/onwatch/v2/internal/config"
 	"github.com/onllm-dev/onwatch/v2/internal/menubar"
@@ -92,8 +93,9 @@ type Handler struct {
 	anthropicTracker     *tracker.AnthropicTracker
 	copilotTracker       *tracker.CopilotTracker
 	codexTracker         *tracker.CodexTracker
-	antigravityTracker   *tracker.AntigravityTracker
-	minimaxTracker       *tracker.MiniMaxTracker
+	antigravityTracker    *tracker.AntigravityTracker
+	antigravityWakeRunner *agent.AntigravityWakeRunner
+	minimaxTracker        *tracker.MiniMaxTracker
 	geminiTracker        *tracker.GeminiTracker
 	openrouterTracker    *tracker.OpenRouterTracker
 	cursorTracker        *tracker.CursorTracker
@@ -816,6 +818,11 @@ func (h *Handler) SetAntigravityTracker(t *tracker.AntigravityTracker) {
 	h.antigravityTracker = t
 }
 
+// SetAntigravityWakeRunner sets the Antigravity quota wake runner.
+func (h *Handler) SetAntigravityWakeRunner(r *agent.AntigravityWakeRunner) {
+	h.antigravityWakeRunner = r
+}
+
 // SetMiniMaxTracker sets the MiniMax tracker for usage summary enrichment.
 func (h *Handler) SetMiniMaxTracker(t *tracker.MiniMaxTracker) {
 	h.minimaxTracker = t
@@ -834,6 +841,66 @@ func (h *Handler) SetOpenRouterTracker(t *tracker.OpenRouterTracker) {
 // SetCursorTracker sets the Cursor tracker for usage summary enrichment.
 func (h *Handler) SetCursorTracker(t *tracker.CursorTracker) {
 	h.cursorTracker = t
+}
+
+// AntigravityWakeStatus handles GET /api/antigravity/wake - get current quota wake status and last run result.
+func (h *Handler) AntigravityWakeStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if h.antigravityWakeRunner == nil {
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"configured": false,
+			"enabled":    false,
+		})
+		return
+	}
+
+	cfg := h.antigravityWakeRunner.Config()
+	last := h.antigravityWakeRunner.LastResult()
+
+	resp := map[string]interface{}{
+		"configured":   true,
+		"enabled":      cfg.Enabled,
+		"mode":         cfg.Mode,
+		"recipient_id": cfg.RecipientID,
+		"model":        cfg.Model,
+		"prompt":       cfg.Prompt,
+		"title":        cfg.Title,
+		"cooldown":     cfg.Cooldown.String(),
+		"last_result":  last,
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// AntigravityWakeTrigger handles POST /api/antigravity/wake/trigger - manual wake trigger.
+func (h *Handler) AntigravityWakeTrigger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if h.antigravityWakeRunner == nil {
+		respondError(w, http.StatusBadRequest, "antigravity quota wake not initialized")
+		return
+	}
+
+	res, err := h.antigravityWakeRunner.Trigger(r.Context(), "manual:api")
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+			"result":  res,
+		})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"result":  res,
+	})
 }
 
 // SetAgentManager sets provider agent lifecycle controller.

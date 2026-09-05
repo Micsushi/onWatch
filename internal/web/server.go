@@ -105,6 +105,8 @@ func NewServer(port int, handler *Handler, logger *slog.Logger, username, passwo
 	mux.HandleFunc(p("/api/api-integrations/history"), handler.APIIntegrationsHistory)
 	mux.HandleFunc(p("/api/api-integrations/sessions"), handler.APIIntegrationsSessions)
 	mux.HandleFunc(p("/api/api-integrations/health"), handler.APIIntegrationsHealth)
+	mux.HandleFunc(p("/api/antigravity/wake"), handler.AntigravityWakeStatus)
+	mux.HandleFunc(p("/api/antigravity/wake/trigger"), handler.AntigravityWakeTrigger)
 
 	// System alerts (in-dashboard notifications)
 	mux.HandleFunc(p("/api/alerts"), handler.SystemAlerts)
