@@ -79,7 +79,11 @@ func (s *Store) Backup(destination string) (BackupMetadata, error) {
 	if err != nil {
 		return metadata, err
 	}
-	backupFile, err := os.OpenFile(tempPath, os.O_RDONLY, 0)
+	// Opened for writing purely so the flush is legal: Windows backs Sync with
+	// FlushFileBuffers, which requires write access and fails with "Access is
+	// denied" on a read-only handle. POSIX allows fsync on an O_RDONLY fd, so
+	// this only ever broke on Windows.
+	backupFile, err := os.OpenFile(tempPath, os.O_WRONLY, 0)
 	if err != nil {
 		return metadata, err
 	}
@@ -121,12 +125,7 @@ func (s *Store) Backup(destination string) (BackupMetadata, error) {
 		_ = os.Remove(destination)
 		return metadata, fmt.Errorf("write backup metadata: %w", err)
 	}
-	directory, err := os.Open(filepath.Dir(destination))
-	if err == nil {
-		err = directory.Sync()
-		_ = directory.Close()
-	}
-	if err != nil {
+	if err := syncDir(filepath.Dir(destination)); err != nil {
 		_ = os.Remove(destination)
 		_ = os.Remove(metadataPath)
 		return metadata, fmt.Errorf("sync backup directory: %w", err)
