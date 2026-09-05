@@ -1662,3 +1662,83 @@ func TestConfig_LogFormat_AliasesAndCaseInsensitive(t *testing.T) {
 		})
 	}
 }
+
+func TestAntigravityQuotaWakeConfig(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		clearEnvForTest()
+		defer clearEnvForTest()
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() failed: %v", err)
+		}
+		if cfg.AntigravityQuotaWakeEnabled {
+			t.Errorf("expected AntigravityQuotaWakeEnabled to default to false")
+		}
+		if cfg.AntigravityQuotaWakeMode != "new-conversation" {
+			t.Errorf("expected mode 'new-conversation', got %q", cfg.AntigravityQuotaWakeMode)
+		}
+		if cfg.AntigravityQuotaWakePrompt != "hi" {
+			t.Errorf("expected prompt 'hi', got %q", cfg.AntigravityQuotaWakePrompt)
+		}
+		if cfg.AntigravityQuotaWakeTitle != "Quota Wake" {
+			t.Errorf("expected title 'Quota Wake', got %q", cfg.AntigravityQuotaWakeTitle)
+		}
+		if cfg.AntigravityQuotaWakeCooldown != 15*time.Minute {
+			t.Errorf("expected cooldown 15m, got %v", cfg.AntigravityQuotaWakeCooldown)
+		}
+	})
+
+	t.Run("custom env vars", func(t *testing.T) {
+		clearEnvForTest()
+		os.Setenv("ANTIGRAVITY_QUOTA_WAKE_ENABLED", "true")
+		os.Setenv("ANTIGRAVITY_QUOTA_WAKE_MODE", "send-message")
+		os.Setenv("ANTIGRAVITY_QUOTA_WAKE_RECIPIENT_ID", "conv-xyz-123")
+		os.Setenv("ANTIGRAVITY_QUOTA_WAKE_MODEL", "flash_lite")
+		os.Setenv("ANTIGRAVITY_QUOTA_WAKE_PROMPT", "custom wake prompt")
+		os.Setenv("ANTIGRAVITY_QUOTA_WAKE_TITLE", "Custom Wake Title")
+		os.Setenv("ANTIGRAVITY_QUOTA_WAKE_PATH", "/custom/bin/agentapi")
+		os.Setenv("ANTIGRAVITY_QUOTA_WAKE_COOLDOWN", "5m")
+		defer clearEnvForTest()
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() failed: %v", err)
+		}
+		if !cfg.AntigravityQuotaWakeEnabled {
+			t.Errorf("expected AntigravityQuotaWakeEnabled=true")
+		}
+		if cfg.AntigravityQuotaWakeMode != "send-message" {
+			t.Errorf("expected mode 'send-message', got %q", cfg.AntigravityQuotaWakeMode)
+		}
+		if cfg.AntigravityQuotaWakeRecipientID != "conv-xyz-123" {
+			t.Errorf("expected recipient 'conv-xyz-123', got %q", cfg.AntigravityQuotaWakeRecipientID)
+		}
+		if cfg.AntigravityQuotaWakeModel != "flash_lite" {
+			t.Errorf("expected model 'flash_lite', got %q", cfg.AntigravityQuotaWakeModel)
+		}
+		if cfg.AntigravityQuotaWakePrompt != "custom wake prompt" {
+			t.Errorf("expected prompt 'custom wake prompt', got %q", cfg.AntigravityQuotaWakePrompt)
+		}
+		if cfg.AntigravityQuotaWakeTitle != "Custom Wake Title" {
+			t.Errorf("expected title 'Custom Wake Title', got %q", cfg.AntigravityQuotaWakeTitle)
+		}
+		if cfg.AntigravityQuotaWakePath != "/custom/bin/agentapi" {
+			t.Errorf("expected path '/custom/bin/agentapi', got %q", cfg.AntigravityQuotaWakePath)
+		}
+		if cfg.AntigravityQuotaWakeCooldown != 5*time.Minute {
+			t.Errorf("expected cooldown 5m, got %v", cfg.AntigravityQuotaWakeCooldown)
+		}
+	})
+
+	t.Run("validation invalid mode", func(t *testing.T) {
+		clearEnvForTest()
+		os.Setenv("ANTIGRAVITY_QUOTA_WAKE_MODE", "invalid-mode")
+		defer clearEnvForTest()
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "ANTIGRAVITY_QUOTA_WAKE_MODE") {
+			t.Fatalf("expected error containing ANTIGRAVITY_QUOTA_WAKE_MODE, got %v", err)
+		}
+	})
+}

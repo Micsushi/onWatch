@@ -442,13 +442,24 @@ func (r *AntigravityWakeRunner) wakeEnvironments(ctx context.Context) ([][]strin
 		return nil, err
 	}
 
+	// Filter out any inherited ANTIGRAVITY_* env vars to avoid project ID or
+	// session conflicts if onWatch was launched from an Antigravity shell.
+	var cleanEnv []string
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(e), "ANTIGRAVITY_") {
+			cleanEnv = append(cleanEnv, e)
+		}
+	}
+
 	var envs [][]string
 
 	// The Connect RPC port that discovery verifies is not always the gRPC port
 	// agentapi dials - the language server listens on several. Offer each one
 	// so the caller can fall through on "connection error" rather than failing.
 	for _, port := range candidateWakePorts(conn) {
-		env := append(os.Environ(),
+		env := make([]string, len(cleanEnv), len(cleanEnv)+3)
+		copy(env, cleanEnv)
+		env = append(env,
 			fmt.Sprintf("ANTIGRAVITY_LS_ADDRESS=127.0.0.1:%d", port),
 			"ANTIGRAVITY_PROJECT_ID="+projectDir,
 		)

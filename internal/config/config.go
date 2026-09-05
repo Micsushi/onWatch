@@ -64,6 +64,16 @@ type Config struct {
 	AntigravityCSRFToken string // ANTIGRAVITY_CSRF_TOKEN (for Docker)
 	AntigravityEnabled   bool   // true if auto-detection should be attempted
 
+	// Antigravity Quota Wake hook configuration
+	AntigravityQuotaWakeEnabled     bool          // ANTIGRAVITY_QUOTA_WAKE_ENABLED
+	AntigravityQuotaWakeMode        string        // ANTIGRAVITY_QUOTA_WAKE_MODE: "new-conversation" (default) or "send-message"
+	AntigravityQuotaWakeRecipientID string        // ANTIGRAVITY_QUOTA_WAKE_RECIPIENT_ID (used for "send-message")
+	AntigravityQuotaWakeModel       string        // ANTIGRAVITY_QUOTA_WAKE_MODEL (e.g. "flash_lite", "flash", "pro")
+	AntigravityQuotaWakePrompt      string        // ANTIGRAVITY_QUOTA_WAKE_PROMPT (default "hi")
+	AntigravityQuotaWakeTitle       string        // ANTIGRAVITY_QUOTA_WAKE_TITLE (default "Quota Wake")
+	AntigravityQuotaWakePath        string        // ANTIGRAVITY_QUOTA_WAKE_PATH (path override)
+	AntigravityQuotaWakeCooldown    time.Duration // ANTIGRAVITY_QUOTA_WAKE_COOLDOWN (default: 15m)
+
 	// MiniMax provider configuration
 	MiniMaxAPIKey string // MINIMAX_API_KEY
 	MiniMaxRegion string // MINIMAX_REGION ( "global" | "cn", default: "global" )
@@ -333,6 +343,23 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 		cfg.AntigravityEnabled = true
 	}
 
+	// Antigravity Quota Wake hook
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ANTIGRAVITY_QUOTA_WAKE_ENABLED"))) {
+	case "on", "true", "1", "yes":
+		cfg.AntigravityQuotaWakeEnabled = true
+	}
+	cfg.AntigravityQuotaWakeMode = strings.ToLower(strings.TrimSpace(os.Getenv("ANTIGRAVITY_QUOTA_WAKE_MODE")))
+	cfg.AntigravityQuotaWakeRecipientID = strings.TrimSpace(os.Getenv("ANTIGRAVITY_QUOTA_WAKE_RECIPIENT_ID"))
+	cfg.AntigravityQuotaWakeModel = strings.TrimSpace(os.Getenv("ANTIGRAVITY_QUOTA_WAKE_MODEL"))
+	cfg.AntigravityQuotaWakePrompt = strings.TrimSpace(os.Getenv("ANTIGRAVITY_QUOTA_WAKE_PROMPT"))
+	cfg.AntigravityQuotaWakeTitle = strings.TrimSpace(os.Getenv("ANTIGRAVITY_QUOTA_WAKE_TITLE"))
+	cfg.AntigravityQuotaWakePath = strings.TrimSpace(os.Getenv("ANTIGRAVITY_QUOTA_WAKE_PATH"))
+	if cd := strings.TrimSpace(os.Getenv("ANTIGRAVITY_QUOTA_WAKE_COOLDOWN")); cd != "" {
+		if d, err := time.ParseDuration(cd); err == nil && d > 0 {
+			cfg.AntigravityQuotaWakeCooldown = d
+		}
+	}
+
 	// MiniMax provider
 	cfg.MiniMaxAPIKey = strings.TrimSpace(os.Getenv("MINIMAX_API_KEY"))
 	cfg.MiniMaxRegion = strings.ToLower(strings.TrimSpace(os.Getenv("MINIMAX_REGION")))
@@ -537,6 +564,18 @@ func (c *Config) applyDefaults() {
 			}
 		}
 	}
+	if c.AntigravityQuotaWakeMode == "" {
+		c.AntigravityQuotaWakeMode = "new-conversation"
+	}
+	if c.AntigravityQuotaWakePrompt == "" {
+		c.AntigravityQuotaWakePrompt = "hi"
+	}
+	if c.AntigravityQuotaWakeTitle == "" {
+		c.AntigravityQuotaWakeTitle = "Quota Wake"
+	}
+	if c.AntigravityQuotaWakeCooldown == 0 {
+		c.AntigravityQuotaWakeCooldown = 15 * time.Minute
+	}
 }
 
 // Validate checks the configuration for errors.
@@ -562,6 +601,12 @@ func (c *Config) Validate() error {
 	}
 	if c.APIIntegrationsRetention < 0 {
 		return fmt.Errorf("API integrations retention must be non-negative")
+	}
+	if c.AntigravityQuotaWakeMode != "new-conversation" && c.AntigravityQuotaWakeMode != "send-message" {
+		return fmt.Errorf("ANTIGRAVITY_QUOTA_WAKE_MODE must be 'new-conversation' or 'send-message'")
+	}
+	if c.AntigravityQuotaWakeCooldown < 0 {
+		return fmt.Errorf("ANTIGRAVITY_QUOTA_WAKE_COOLDOWN must be non-negative")
 	}
 
 	return nil
