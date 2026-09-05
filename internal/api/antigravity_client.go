@@ -40,6 +40,11 @@ type AntigravityConnection struct {
 	CSRFToken string
 	Port      int
 	Protocol  string // "https" or "http"
+
+	// Ports lists every port the language server process is listening on. The
+	// Connect RPC endpoint and the gRPC endpoint agentapi speaks are not always
+	// the same one, so callers that shell out need the alternatives.
+	Ports []int
 }
 
 // AntigravityClient is a client for the Antigravity local language server API.
@@ -126,6 +131,7 @@ func (c *AntigravityClient) Detect(ctx context.Context) (*AntigravityConnection,
 		return nil, err
 	}
 
+	conn.Ports = append([]int(nil), ports...)
 	c.connection = conn
 	c.logger.Info("connected to Antigravity language server",
 		"port", conn.Port,

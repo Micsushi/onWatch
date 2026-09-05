@@ -329,13 +329,24 @@ func (r *AntigravityWakeRunner) Trigger(ctx context.Context, triggerSource strin
 		"source", triggerSource,
 	)
 
-	env, envErr := r.wakeEnvironment(ctx)
+	envs, envErr := r.wakeEnvironments(ctx)
 	if envErr != nil {
 		r.logger.Warn("Antigravity quota wake cannot reach the language server", "error", envErr)
 		return nil, envErr
 	}
 
-	output, err := r.cmdExecutor(ctx, exePath, env, args...)
+	var output []byte
+	for i, env := range envs {
+		output, err = r.cmdExecutor(ctx, exePath, env, args...)
+		if err == nil && !isWakeConnectionError(string(output), nil) {
+			break
+		}
+		if !isWakeConnectionError(string(output), err) || i == len(envs)-1 {
+			break
+		}
+		r.logger.Debug("Antigravity quota wake retrying on another language server port",
+			"attempt", i+1)
+	}
 	execTime := time.Now()
 	outputStr := strings.TrimSpace(string(output))
 
@@ -409,7 +420,7 @@ func (r *AntigravityWakeRunner) SetConnectionResolver(fn func(ctx context.Contex
 //	ANTIGRAVITY_LS_ADDRESS  - host:port of the running language server
 //	ANTIGRAVITY_CSRF_TOKEN  - that server's token, taken from its command line
 //	ANTIGRAVITY_PROJECT_ID  - an existing directory to attach the conversation to
-func (r *AntigravityWakeRunner) wakeEnvironment(ctx context.Context) ([]string, error) {
+func (r *AntigravityWakeRunner) wakeEnvironments(ctx context.Context) ([][]string, error) {
 	r.mu.Lock()
 	resolver := r.connResolver
 	projectDir := strings.TrimSpace(r.cfg.ProjectDir)
@@ -431,14 +442,55 @@ func (r *AntigravityWakeRunner) wakeEnvironment(ctx context.Context) ([]string, 
 		return nil, err
 	}
 
-	env := append(os.Environ(),
-		fmt.Sprintf("ANTIGRAVITY_LS_ADDRESS=127.0.0.1:%d", conn.Port),
-		"ANTIGRAVITY_PROJECT_ID="+projectDir,
-	)
-	if conn.CSRFToken != "" {
-		env = append(env, "ANTIGRAVITY_CSRF_TOKEN="+conn.CSRFToken)
+	var envs [][]string
+
+	// The Connect RPC port that discovery verifies is not always the gRPC port
+	// agentapi dials - the language server listens on several. Offer each one
+	// so the caller can fall through on "connection error" rather than failing.
+	for _, port := range candidateWakePorts(conn) {
+		env := append(os.Environ(),
+			fmt.Sprintf("ANTIGRAVITY_LS_ADDRESS=127.0.0.1:%d", port),
+			"ANTIGRAVITY_PROJECT_ID="+projectDir,
+		)
+		if conn.CSRFToken != "" {
+			env = append(env, "ANTIGRAVITY_CSRF_TOKEN="+conn.CSRFToken)
+		}
+		envs = append(envs, env)
 	}
-	return env, nil
+	return envs, nil
+}
+
+// candidateWakePorts puts the verified port first, then any other port the
+// language server process is listening on.
+func candidateWakePorts(conn *api.AntigravityConnection) []int {
+	ports := []int{conn.Port}
+	for _, port := range conn.Ports {
+		if port != conn.Port && port > 0 {
+			ports = append(ports, port)
+		}
+	}
+	return ports
+}
+
+// isWakeConnectionError reports whether a failure looks like agentapi dialling
+// the wrong port, which is worth retrying against the alternatives.
+func isWakeConnectionError(output string, err error) bool {
+	haystack := output
+	if err != nil {
+		haystack += " " + err.Error()
+	}
+	for _, marker := range []string{
+		"error reading server preface",
+		"code = Unavailable",
+		"connection error",
+		"connection refused",
+		"forcibly closed",
+	} {
+		if strings.Contains(haystack, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveWakeProjectDir returns a directory that exists. agentapi rejects a
