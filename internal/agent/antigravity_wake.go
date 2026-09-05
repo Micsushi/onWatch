@@ -173,6 +173,33 @@ func (r *AntigravityWakeRunner) UpdateConfig(cfg AntigravityWakeConfig) {
 		cfg.Cooldown = 15 * time.Minute
 	}
 	r.cfg = cfg
+	// Wake settings are edited from the dashboard, so they have to outlive the
+	// process that received the edit.
+	if r.store != nil {
+		if raw, err := json.Marshal(cfg); err == nil {
+			if err := r.store.SetSetting(AntigravityWakeConfigSetting, string(raw)); err != nil {
+				r.logger.Debug("Failed to persist Antigravity wake config", "error", err)
+			}
+		}
+	}
+}
+
+// LoadAntigravityWakeConfig restores the stored wake configuration, falling back
+// to the supplied defaults when nothing is saved or the saved value is
+// unreadable. Wake is opt-in, so an absent config never enables it.
+func LoadAntigravityWakeConfig(store WakeSettingStore, fallback AntigravityWakeConfig) AntigravityWakeConfig {
+	if store == nil {
+		return fallback
+	}
+	raw, err := store.GetSetting(AntigravityWakeConfigSetting)
+	if err != nil || raw == "" {
+		return fallback
+	}
+	var saved AntigravityWakeConfig
+	if err := json.Unmarshal([]byte(raw), &saved); err != nil {
+		return fallback
+	}
+	return saved
 }
 
 // LastResult returns the most recent wake execution result.

@@ -1218,7 +1218,9 @@ func run() error {
 
 	var antigravityWakeRunner *agent.AntigravityWakeRunner
 	if cfg.HasProvider("antigravity") || cfg.AntigravityQuotaWakeEnabled {
-		antigravityWakeRunner = agent.NewAntigravityWakeRunner(db, agent.AntigravityWakeConfig{
+		// Environment supplies the defaults; anything saved from the dashboard
+		// wins, so an edit made there survives the next restart.
+		wakeDefaults := agent.AntigravityWakeConfig{
 			Enabled:     cfg.AntigravityQuotaWakeEnabled,
 			Mode:        cfg.AntigravityQuotaWakeMode,
 			RecipientID: cfg.AntigravityQuotaWakeRecipientID,
@@ -1227,7 +1229,12 @@ func run() error {
 			Title:       cfg.AntigravityQuotaWakeTitle,
 			BinaryPath:  cfg.AntigravityQuotaWakePath,
 			Cooldown:    cfg.AntigravityQuotaWakeCooldown,
-		}, logger)
+		}
+		antigravityWakeRunner = agent.NewAntigravityWakeRunner(
+			db,
+			agent.LoadAntigravityWakeConfig(db, wakeDefaults),
+			logger,
+		)
 	}
 
 	// Create MiniMax agent manager for multi-account support.
