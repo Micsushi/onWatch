@@ -80,6 +80,11 @@ const maxOwnerRefreshFailures = 3
 // to act on, short enough not to nag.
 const ownerRefreshTokenWarnThreshold = 72 * time.Hour
 
+// ownerAlertRepeatInterval is how often the isolated profile's login problem is
+// re-sent to email and push. The banner is always current; this only paces the
+// notifications so a multi-day warning window does not become a poll-rate feed.
+const ownerAlertRepeatInterval = 12 * time.Hour
+
 // errCredentialOwnerBackoff is returned instead of spawning the credential owner
 // again while its retry window is still open.
 var errCredentialOwnerBackoff = errors.New("anthropic: isolated credential owner refresh in backoff")
@@ -113,6 +118,12 @@ type AnthropicAgent struct {
 	// After that only an interactive login revives the profile, so the dashboard
 	// says so while polling still works instead of after it has gone dark.
 	ownerRefreshTokenExpiry time.Time
+
+	// ownerAlertKind and ownerAlertAt throttle the out-of-browser alert about the
+	// isolated profile. The dashboard banner repeats on every poll harmlessly, but
+	// email and push do not, so the same warning is only sent once per window.
+	ownerAlertKind string
+	ownerAlertAt   time.Time
 
 	lastToken    string
 	notifier     agentNotifier
@@ -171,10 +182,17 @@ func (a *AnthropicAgent) recordPollSuccess() {
 	}
 	if msg := a.credentialOwnerExpiringMessage(); msg != "" {
 		// The poll worked, so this is a warning, not a failure: keep the
-		// notifier on the success path and only claim the dashboard banner.
+		// notifier on the poll-health success path and only claim the banner.
+		// The alert still has to leave the browser, because the whole point of
+		// warning early is reaching someone who is not watching the dashboard.
 		a.persistPollError("credential_owner_expiring", msg)
+		a.notifyCredentialOwner("credential_owner_expiring", "Isolated Claude profile login expiring", msg)
 	} else {
 		a.clearPollError()
+		// A healthy login re-arms the alert, so the next problem is not silenced
+		// by a throttle left over from the previous one.
+		a.ownerAlertKind = ""
+		a.ownerAlertAt = time.Time{}
 	}
 	if a.notifier != nil {
 		a.notifier.RecordPollSuccess("anthropic", "default")
@@ -219,9 +237,10 @@ func humanizeDuration(d time.Duration) string {
 // recordCredentialOwnerDegraded flags that polling only continues on fallback
 // credentials, so the isolated profile still needs a re-login.
 func (a *AnthropicAgent) recordCredentialOwnerDegraded() {
-	a.persistPollError("credential_owner",
-		"The isolated Claude profile is signed out. Polling continues on read-only credentials, which expire on their owner's schedule. "+
-			a.credentialOwnerLoginInstruction())
+	msg := "The isolated Claude profile is signed out. Polling continues on read-only credentials, which expire on their owner's schedule. " +
+		a.credentialOwnerLoginInstruction()
+	a.persistPollError("credential_owner", msg)
+	a.notifyCredentialOwner("credential_owner", "Isolated Claude profile signed out", msg)
 }
 
 func (a *AnthropicAgent) persistPollError(category, message string) {
@@ -1062,4 +1081,36 @@ processResponse:
 		"quota_count", quotaCount,
 		"max_utilization", maxUtil,
 	)
+}
+
+// authErrorNotifier is the subset of the notification engine that delivers
+// credential problems to email, push and Discord. It is kept separate from
+// agentNotifier because only the Anthropic agent owns a credential store that
+// needs an interactive login to repair, and poll-health incidents deliberately
+// do not reach this channel.
+type authErrorNotifier interface {
+	SendAuthErrorNotification(notify.AuthErrorAlert) bool
+}
+
+// notifyCredentialOwner sends one credential-owner alert per kind per window.
+// Isolated-profile problems are never recoverable without a human at a terminal,
+// so they are flagged as such and repeated until someone acts.
+func (a *AnthropicAgent) notifyCredentialOwner(kind, title, message string) {
+	sender, ok := a.notifier.(authErrorNotifier)
+	if !ok || sender == nil {
+		return
+	}
+	now := time.Now()
+	if a.ownerAlertKind == kind && now.Sub(a.ownerAlertAt) < ownerAlertRepeatInterval {
+		return
+	}
+	a.ownerAlertKind = kind
+	a.ownerAlertAt = now
+	sender.SendAuthErrorNotification(notify.AuthErrorAlert{
+		Provider:    "anthropic",
+		AccountID:   "default",
+		Title:       title,
+		Message:     message,
+		IsRecovable: false,
+	})
 }
