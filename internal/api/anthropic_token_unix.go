@@ -66,10 +66,10 @@ func detectAnthropicTokenPlatform(logger *slog.Logger) string {
 			"-a", username,
 			"-w").Output()
 		if err == nil {
-			token, err := parseClaudeCredentials(out)
-			if err == nil && token != "" {
+			creds, err := parseFullClaudeCredentials(out)
+			if err == nil && creds != nil && !creds.IsExpired() {
 				logger.Info("Anthropic token auto-detected from macOS Keychain")
-				return token
+				return strings.TrimSpace(creds.AccessToken)
 			}
 		}
 	}
@@ -80,10 +80,10 @@ func detectAnthropicTokenPlatform(logger *slog.Logger) string {
 			"service", "Claude Code-credentials",
 			"account", username).Output()
 		if err == nil {
-			token, err := parseClaudeCredentials(out)
-			if err == nil && token != "" {
+			creds, err := parseFullClaudeCredentials(out)
+			if err == nil && creds != nil && !creds.IsExpired() {
 				logger.Info("Anthropic token auto-detected from Linux keyring")
-				return token
+				return strings.TrimSpace(creds.AccessToken)
 			}
 		}
 	}
@@ -105,17 +105,21 @@ func detectAnthropicTokenPlatform(logger *slog.Logger) string {
 		logger.Debug("Credential file not readable", "path", credPath, "error", err)
 		return ""
 	}
-	token, err := parseClaudeCredentials(data)
+	creds, err := parseFullClaudeCredentials(data)
 	if err != nil {
 		logger.Debug("Failed to parse credentials", "path", credPath, "error", err)
 		return ""
 	}
-	if token == "" {
+	if creds == nil || creds.AccessToken == "" {
 		logger.Debug("Credentials file has empty access token", "path", credPath)
 		return ""
 	}
+	if creds.IsExpired() {
+		logger.Debug("Anthropic credentials found but expired", "path", credPath, "expired_at", creds.ExpiresAt)
+		return ""
+	}
 	logger.Info("Anthropic token auto-detected from credentials file", "path", credPath)
-	return strings.TrimSpace(token)
+	return strings.TrimSpace(creds.AccessToken)
 }
 
 // detectAnthropicCredentialsPlatform tries to detect full OAuth credentials.

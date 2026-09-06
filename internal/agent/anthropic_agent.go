@@ -726,10 +726,16 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 			a.client.SetToken("")
 			a.lastToken = ""
 		}
-		if newToken != "" && newToken != a.lastToken {
+		if newToken != "" && (newToken != a.lastToken || a.usingFallbackToken) {
 			a.client.SetToken(newToken)
 			a.lastToken = newToken
 			a.logger.Info("Anthropic token refreshed from credentials")
+			if a.usingFallbackToken {
+				// A token appearing from the isolated profile means its owner has
+				// recovered. Stop labeling healthy primary polls as degraded.
+				a.usingFallbackToken = false
+				a.logger.Info("Anthropic isolated credentials recovered; resumed primary token")
+			}
 
 			// If we were paused due to auth failures and credentials changed, resume
 			if a.authPaused && newToken != a.lastFailedToken {

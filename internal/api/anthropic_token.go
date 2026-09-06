@@ -59,6 +59,9 @@ func (c *AnthropicCredentials) IsExpiringSoon(threshold time.Duration) bool {
 
 // IsExpired returns true if the token has already expired.
 func (c *AnthropicCredentials) IsExpired() bool {
+	if c.ExpiresAt.IsZero() {
+		return false
+	}
 	return c.ExpiresIn <= 0
 }
 
@@ -83,9 +86,13 @@ func parseFullClaudeCredentials(data []byte) (*AnthropicCredentials, error) {
 		return nil, nil // no credentials
 	}
 
-	// Convert expiresAt from Unix milliseconds to time.Time
-	expiresAt := time.UnixMilli(oauth.ExpiresAt)
-	expiresIn := time.Until(expiresAt)
+	var expiresAt time.Time
+	var expiresIn time.Duration
+	if oauth.ExpiresAt > 0 {
+		// Convert expiresAt from Unix milliseconds to time.Time.
+		expiresAt = time.UnixMilli(oauth.ExpiresAt)
+		expiresIn = time.Until(expiresAt)
+	}
 
 	var refreshExpiresAt time.Time
 	if oauth.RefreshTokenExpiresAt > 0 {

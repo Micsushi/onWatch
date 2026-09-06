@@ -138,7 +138,7 @@ func detectAnthropicTokenPlatform(logger *slog.Logger) string {
 	// Report no token so onWatch waits for Claude Code to renew it instead of
 	// burning auth failures until polling pauses. An unrecorded expiry is not
 	// an expired one - never refuse a token the file makes no claim about.
-	if creds.ExpiresAt.UnixMilli() > 0 && creds.IsExpired() {
+	if creds.IsExpired() {
 		logger.Debug("Anthropic credentials found but expired", "path", credPath, "expired_at", creds.ExpiresAt)
 		return ""
 	}

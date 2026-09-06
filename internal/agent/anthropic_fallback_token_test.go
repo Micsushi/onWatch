@@ -253,6 +253,67 @@ func TestAnthropicAgent_ResumesWhenFallbackTokenReappears(t *testing.T) {
 	}
 }
 
+// Once the isolated profile becomes usable again, the next primary token must
+// clear the degraded state instead of leaving the dashboard warning forever.
+func TestAnthropicAgent_PrimaryTokenRecoveryClearsFallback(t *testing.T) {
+	var authHeader atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader.Store(r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(anthropicResponse(12, 34)))
+	}))
+	defer server.Close()
+
+	str, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	defer str.Close()
+
+	logger := slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))
+	client := api.NewAnthropicClient("", logger, api.WithAnthropicBaseURL(server.URL))
+	agent := NewAnthropicAgent(client, str, tracker.NewAnthropicTracker(str, logger), time.Minute, logger, nil)
+	isolatedAvailable := false
+	agent.SetCredentialsRefresh(func() *api.AnthropicCredentials {
+		if !isolatedAvailable {
+			return nil
+		}
+		return &api.AnthropicCredentials{
+			AccessToken: "isolated-profile-token",
+			ExpiresAt:   time.Now().Add(time.Hour),
+			ExpiresIn:   time.Hour,
+		}
+	})
+	agent.SetTokenRefresh(func() string {
+		if isolatedAvailable {
+			return "isolated-profile-token"
+		}
+		return ""
+	})
+	agent.SetCredentialOwnerRefresh(func(context.Context) error {
+		return errors.New("Claude login required")
+	})
+	agent.SetFallbackToken(func() string { return "main-profile-token" })
+
+	agent.poll(context.Background())
+	if !agent.usingFallbackToken {
+		t.Fatal("expected the first poll to use fallback credentials")
+	}
+
+	isolatedAvailable = true
+	agent.poll(context.Background())
+
+	if agent.usingFallbackToken {
+		t.Fatal("primary token recovery left the agent in degraded mode")
+	}
+	if got, _ := authHeader.Load().(string); got != "Bearer isolated-profile-token" {
+		t.Fatalf("Authorization = %q, want the recovered primary token", got)
+	}
+	if raw, err := str.GetSetting(store.AnthropicPollErrorSetting); err != nil || raw != "" {
+		t.Fatalf("degraded warning not cleared after primary recovery: raw=%q err=%v", raw, err)
+	}
+}
+
 // A signed-out profile fails forever and every attempt spawns a Claude
 // subprocess, so attempts must be spaced out once the failure looks durable.
 func TestAnthropicAgent_OwnerRefreshBacksOffAfterRepeatedFailures(t *testing.T) {

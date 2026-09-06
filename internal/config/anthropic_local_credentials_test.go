@@ -66,3 +66,35 @@ func TestLoad_DetectsLocalClaudeCredentials(t *testing.T) {
 		t.Fatal("HasProvider(anthropic) = false in read-only mode")
 	}
 }
+
+func TestLoad_DetectsLocalClaudeCredentialsInConfiguredProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	profile := filepath.Join(t.TempDir(), "claude-profile")
+	t.Setenv("CLAUDE_CONFIG_DIR", profile)
+	t.Setenv("ANTHROPIC_TOKEN_ROTATION", "")
+	t.Setenv("ANTHROPIC_TOKEN", "")
+
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		t.Fatalf("mkdir profile: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(profile, ".credentials.json"),
+		[]byte(`{"claudeAiOauth":{"accessToken":"x"}}`),
+		0o600,
+	); err != nil {
+		t.Fatalf("write credentials: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.AnthropicLocalCredentials {
+		t.Fatal("AnthropicLocalCredentials = false for the configured Claude profile")
+	}
+	if !cfg.HasProvider("anthropic") {
+		t.Fatal("HasProvider(anthropic) = false for the configured Claude profile")
+	}
+}

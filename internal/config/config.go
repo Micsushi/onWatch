@@ -616,11 +616,15 @@ func (c *Config) Validate() error {
 // Read-only mode polls with those and needs no configuration of its own, so
 // without this check the dashboard would hide a provider that polls fine.
 func hasLocalClaudeCredentials() bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
+	credentialsDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
+	if credentialsDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		credentialsDir = filepath.Join(home, ".claude")
 	}
-	info, err := os.Stat(filepath.Join(home, ".claude", ".credentials.json"))
+	info, err := os.Stat(filepath.Join(credentialsDir, ".credentials.json"))
 	return err == nil && !info.IsDir() && info.Size() > 0
 }
 

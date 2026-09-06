@@ -107,6 +107,29 @@ func TestParseFullClaudeCredentials_EmptyAccessToken(t *testing.T) {
 	}
 }
 
+func TestParseFullClaudeCredentials_UnknownAccessTokenExpiry(t *testing.T) {
+	data := []byte(`{
+		"claudeAiOauth": {
+			"accessToken": "test-access-token",
+			"refreshToken": "test-refresh-token"
+		}
+	}`)
+
+	creds, err := parseFullClaudeCredentials(data)
+	if err != nil {
+		t.Fatalf("parseFullClaudeCredentials failed: %v", err)
+	}
+	if creds == nil {
+		t.Fatal("expected non-nil credentials")
+	}
+	if !creds.ExpiresAt.IsZero() || creds.ExpiresIn != 0 {
+		t.Fatalf("unknown expiry = %v / %v, want zero values", creds.ExpiresAt, creds.ExpiresIn)
+	}
+	if creds.IsExpired() {
+		t.Fatal("credentials with unknown expiry reported as expired")
+	}
+}
+
 func TestParseFullClaudeCredentials_InvalidJSON(t *testing.T) {
 	data := []byte(`{not valid json}`)
 	_, err := parseFullClaudeCredentials(data)
@@ -181,8 +204,13 @@ func TestAnthropicCredentials_IsExpired(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			expiresAt := time.Time{}
+			if tt.want {
+				expiresAt = time.Now().Add(tt.expiresIn)
+			}
 			creds := &AnthropicCredentials{
 				ExpiresIn: tt.expiresIn,
+				ExpiresAt: expiresAt,
 			}
 			got := creds.IsExpired()
 			if got != tt.want {
