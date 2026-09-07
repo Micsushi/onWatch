@@ -3,11 +3,58 @@ package collector
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/onllm-dev/onwatch/v2/internal/api"
 	"github.com/onllm-dev/onwatch/v2/internal/ingest"
 )
+
+func TestGeminiQuotaRefreshReusesTokenAndChangesWithCredential(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		calls++
+		if err := request.ParseForm(); err != nil || request.Form.Get("grant_type") != "refresh_token" {
+			t.Error("expected OAuth refresh")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"fresh","expires_in":3600}`))
+	}))
+	defer server.Close()
+	api.SetGeminiOAuthTokenURLForTest(server.URL)
+	t.Cleanup(func() { api.SetGeminiOAuthTokenURLForTest("") })
+	now := time.Now()
+	r := &Runtime{now: func() time.Time { return now }}
+	credentials := &api.GeminiCredentials{AccessToken: "expired", RefreshToken: "refresh", ExpiresAt: now.Add(-time.Hour)}
+	for i := 0; i < 2; i++ {
+		token, err := r.geminiAccessToken(context.Background(), credentials)
+		if err != nil || token != "fresh" {
+			t.Fatalf("token=%q err=%v", token, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("refreshed %d times", calls)
+	}
+	credentials.RefreshToken = "new-account"
+	if _, err := r.geminiAccessToken(context.Background(), credentials); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatal("reused token after credential changed")
+	}
+	now = now.Add(time.Hour)
+	if _, err := r.geminiAccessToken(context.Background(), credentials); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatal("reused expired token")
+	}
+	if credentials.AccessToken != "expired" {
+		t.Fatal("modified source credentials")
+	}
+}
 
 func TestQuotaBackoffSurvivesRestartAndSkipsEarlyPoll(t *testing.T) {
 	cfg := Config{SpoolDir: t.TempDir(), SpoolMaxBytes: 1 << 20, HomeDir: t.TempDir()}

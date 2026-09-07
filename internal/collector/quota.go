@@ -21,6 +21,35 @@ type quotaPollState struct {
 	NextPoll time.Time `json:"next_poll"`
 }
 
+// Refreshed credentials stay in device memory; the CLI's shared file is untouched.
+type geminiQuotaToken struct {
+	sourceAccess, refresh, access string
+	expiresAt                     time.Time
+}
+
+func (r *Runtime) geminiAccessToken(ctx context.Context, credentials *api.GeminiCredentials) (string, error) {
+	if credentials == nil {
+		return "", fmt.Errorf("Gemini credential unavailable")
+	}
+	now := r.quotaNow()
+	if credentials.AccessToken != "" && (credentials.ExpiresAt.IsZero() || credentials.ExpiresAt.After(now.Add(time.Minute))) {
+		return credentials.AccessToken, nil
+	}
+	if cached := r.geminiToken; cached != nil && cached.sourceAccess == credentials.AccessToken && cached.refresh == credentials.RefreshToken && cached.expiresAt.After(now.Add(time.Minute)) {
+		return cached.access, nil
+	}
+	if credentials.RefreshToken == "" {
+		return "", fmt.Errorf("Gemini credential expired; reauthenticate Gemini CLI")
+	}
+	client := api.DetectGeminiClientCredentials()
+	token, err := api.RefreshGeminiToken(ctx, credentials.RefreshToken, client.ClientID, client.ClientSecret)
+	if err != nil {
+		return "", err
+	}
+	r.geminiToken = &geminiQuotaToken{sourceAccess: credentials.AccessToken, refresh: credentials.RefreshToken, access: token.AccessToken, expiresAt: now.Add(time.Duration(token.ExpiresIn) * time.Second)}
+	return token.AccessToken, nil
+}
+
 func quotaPollDelay(interval time.Duration, failures int, random float64) time.Duration {
 	if interval <= 0 {
 		interval = time.Minute
@@ -187,10 +216,11 @@ func (r *Runtime) pollQuota(ctx context.Context, assignment ingest.ProviderAssig
 		}
 	case "gemini":
 		credentials := api.DetectGeminiCredentials(r.logger)
-		if credentials == nil || credentials.AccessToken == "" {
-			return ingest.Event{}, fmt.Errorf("Gemini credential unavailable")
+		token, err := r.geminiAccessToken(ctx, credentials)
+		if err != nil {
+			return ingest.Event{}, err
 		}
-		client := api.NewGeminiClient(credentials.AccessToken, r.logger)
+		client := api.NewGeminiClient(token, r.logger)
 		tier, err := client.FetchTier(ctx)
 		if err != nil {
 			return ingest.Event{}, err

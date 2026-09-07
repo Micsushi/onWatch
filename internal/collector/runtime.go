@@ -39,6 +39,7 @@ type Runtime struct {
 	retryUntil     time.Time
 	retryAttempt   int
 	quotaPolls     map[string]quotaPollState
+	geminiToken    *geminiQuotaToken
 	now            func() time.Time
 	random         func() float64
 }

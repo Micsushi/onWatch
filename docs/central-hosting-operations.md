@@ -12,7 +12,7 @@ This runbook moves onWatch from independent full daemons to one canonical Server
 
 ## Server2 deployment
 
-Prerequisites: Docker, the external `homelab` network, the existing Cloudflare Tunnel container, Tailscale, and a checked-out exact release SHA.
+Prerequisites: Docker, the external `homelab` network, the existing Server1 Traefik/Authelia gateway, Tailscale, and a checked-out exact release SHA.
 
 1. Create `/srv/onwatch/data`, `/srv/onwatch/backups`, `/srv/onwatch/config`, and `/srv/onwatch/release`. Set data and backup ownership to UID/GID 65532.
 2. Copy `deploy/server2/onwatch.env.example` to `/srv/onwatch/config/onwatch.env`. Replace every placeholder. Set mode 0600.
@@ -29,7 +29,7 @@ Prerequisites: Docker, the external `homelab` network, the existing Cloudflare T
 
 Expected within 90 seconds: health is `healthy` and the revision equals the pushed main SHA. Reversal: run the same Compose command from the prior release checkout with its prior SHA.
 
-5. Configure Cloudflare Tunnel to send `onwatch.mshi.ca` to `http://onwatch:9211`. Do not publish dashboard port 9211 on the host.
+5. Use the existing Authelia gateway procedure below to forward `onwatch.mshi.ca` to Server2. Keep the dashboard host port bound to loopback.
 6. Preflight Tailscale Serve before mutation:
 
    ```sh
@@ -151,7 +151,7 @@ Complete `docs/central-cutover-manifest.example` privately before starting.
 3. Target: Server2. Deploy the exact pushed main SHA and record container image ID. Expected: both health routes pass within 90 seconds. Reversal: deploy prior SHA.
 4. Target: devices. Enroll collectors while old full daemons still run usage logging. Do not assign provider quota owners yet. Expected: heartbeat current and queue drains within 5 minutes. Reversal: collector uninstall, spool preserved.
 5. Target: each provider account. Stop the old quota poller, clear old ownership, assign the new owner, then confirm one fresh snapshot. Timeout: two poll intervals. Reversal: unassign new owner and restart old poller.
-6. Target: Cloudflare. Route `onwatch.mshi.ca` to Server2 dashboard. Expected: unauthenticated request is denied by Access, authenticated login works. Reversal: restore the prior route.
+6. Target: Server1 gateway. Forward `onwatch.mshi.ca` to Server2 dashboard. Expected: unauthenticated requests redirect to Authelia, authenticated login works. Reversal: stop the gateway and restart the retained old app.
 7. Target: old full daemons. Stop only after central history, settings, imports, collector health, every graph mode, backup, and alerts pass. Retain old databases and launch configuration for 30 days. Reversal: restart the old daemon and pause the corresponding central poll owner.
 
 Rollback triggers are loss of authenticated access, database integrity failure, unexplained duplicate quota polling, ingest unavailability over two poll intervals, graph corruption, or inability to create a verified backup. Decide within 30 minutes of route switch. Queued usage events remain on devices and drain once central returns.
@@ -163,7 +163,7 @@ Rollback triggers are loss of authenticated access, database integrity failure, 
 - Use the configured human Git identity. No force push or history rewrite.
 - Record onWatch main SHA, `origin` URL, CI run URL/result, Ansible main SHA, image tag, image ID/digest, and build time.
 - Deploy the exact pushed onWatch SHA. Re-run Ansible and require idempotence.
-- Verify Cloudflare Access, built-in login, secure cookies, Tailscale HTTPS ingest, invalid token rejection, valid token acceptance, restart persistence, backup, restore selection, device health, and every graph range/mode.
+- Verify Authelia, built-in login, secure cookies, Tailscale HTTPS ingest, invalid token rejection, valid token acceptance, restart persistence, backup, restore selection, device health, and every graph range/mode.
 - Stop and roll back on any security, persistence, required gate, or data-loss failure.
 
 ## Monitoring and troubleshooting
