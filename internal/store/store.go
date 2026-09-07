@@ -252,6 +252,8 @@ func New(dbPath string) (*Store, error) {
 // createTables creates the database schema
 func (s *Store) createTables() error {
 	schema := `
+ CREATE TABLE IF NOT EXISTS subscription_meter_observations (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, account_name TEXT NOT NULL, plan TEXT NOT NULL, quota TEXT NOT NULL, captured_at TEXT NOT NULL, resets_at TEXT NOT NULL, utilization REAL NOT NULL CHECK(utilization>=0 AND utilization<=100), UNIQUE(provider,account_name,plan,quota,captured_at));
+
 		CREATE TABLE IF NOT EXISTS schema_version (
 			version INTEGER NOT NULL
 		);
@@ -322,8 +324,9 @@ func (s *Store) createTables() error {
 			origin_record_id TEXT NOT NULL,
 			PRIMARY KEY (table_name, origin_id, origin_record_id)
 		);
-		CREATE INDEX IF NOT EXISTS idx_data_transfer_records_local
-			ON data_transfer_records(table_name, local_record_id);
+		CREATE INDEX IF NOT EXISTS idx_data_transfer_records_provenance
+			ON data_transfer_records(table_name, local_record_id, origin_id, origin_record_id);
+		DROP INDEX IF EXISTS idx_data_transfer_records_local;
 
 		-- System alerts for in-dashboard notifications
 		CREATE TABLE IF NOT EXISTS system_alerts (

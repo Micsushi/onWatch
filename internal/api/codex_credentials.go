@@ -63,6 +63,27 @@ type codexAuthFile struct {
 	} `json:"tokens"`
 }
 
+// ReadCodexCredentialsFromHome borrows only the access token from its owner.
+// Refresh credentials remain private to the CLI that owns this home.
+func ReadCodexCredentialsFromHome(home string) *CodexCredentials {
+	if strings.TrimSpace(home) == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(home, "auth.json"))
+	if err != nil {
+		return nil
+	}
+	var auth codexAuthFile
+	if json.Unmarshal(data, &auth) != nil || auth.Tokens.AccessToken == "" {
+		return nil
+	}
+	expiry := ParseIDTokenExpiry(auth.Tokens.AccessToken)
+	if expiry.IsZero() {
+		expiry = ParseIDTokenExpiry(auth.Tokens.IDToken)
+	}
+	return &CodexCredentials{AccessToken: auth.Tokens.AccessToken, IDToken: auth.Tokens.IDToken, AccountID: auth.Tokens.AccountID, UserID: ParseIDTokenUserID(auth.Tokens.IDToken), ExpiresAt: expiry, ExpiresIn: time.Until(expiry)}
+}
+
 // DetectCodexCredentials loads Codex credentials from CODEX_HOME/auth.json or ~/.codex/auth.json.
 // Falls back to CODEX_TOKEN for environments without a persistent Codex auth file.
 func DetectCodexCredentials(logger *slog.Logger) *CodexCredentials {

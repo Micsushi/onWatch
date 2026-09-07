@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,7 +25,7 @@ const (
 	SourceAntigravity  = "antigravity"
 
 	initialScanWindow  = 6 * time.Hour
-	sourcePathCacheTTL = 5 * time.Minute
+	sourcePathCacheTTL = 30 * time.Second
 )
 
 type Source struct {
@@ -107,6 +108,7 @@ func (c *Collector) CollectOnce() error {
 	}
 	var wrote bool
 	for _, source := range c.sources {
+		previousFiles, previousCodex, previousAntigravity := maps.Clone(c.fileStates), maps.Clone(c.codexStates), maps.Clone(c.antigravity)
 		events, err := c.collectSource(source)
 		if err != nil {
 			c.logger.Warn("agent usage collector skipped source", "path", source.Path, "kind", source.Kind, "error", err)
@@ -131,6 +133,10 @@ func (c *Collector) CollectOnce() error {
 		}
 		if len(lines) > 0 {
 			if err := appendLines(outPath, lines); err != nil {
+				for _, key := range newKeys {
+					delete(c.seen, key)
+				}
+				c.fileStates, c.codexStates, c.antigravity = previousFiles, previousCodex, previousAntigravity
 				return err
 			}
 			if err := appendSeenKeys(c.seenPath(), newKeys); err != nil {
@@ -332,7 +338,7 @@ func appendLines(path string, lines [][]byte) error {
 			return err
 		}
 	}
-	return nil
+	return file.Sync()
 }
 
 func appendSeenKeys(path string, keys []string) error {
@@ -700,6 +706,7 @@ func DefaultSources(home string) []Source {
 		}
 	}
 	addDir(SourceCodex, filepath.Join(home, ".codex", "sessions"), "codex", "openai", false)
+	addDir(SourceCodex, filepath.Join(home, ".codex", "archived_sessions"), "codex", "openai", false)
 	addDir(SourceClaude, filepath.Join(home, ".claude", "projects"), "claude", "anthropic", false)
 	if geminiDataDir := strings.TrimSpace(os.Getenv("GEMINI_DATA_DIR")); geminiDataDir != "" {
 		for _, rawPath := range strings.Split(geminiDataDir, ",") {

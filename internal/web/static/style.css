@@ -4573,3 +4573,58 @@ select.settings-input {
   height: 16px;
   margin-top: 1px;
 }
+
+/* One quota horizon at a time, with no overlapping fills. */
+.antigravity-history-section .section-header {
+  align-items: flex-start;
+  gap: 16px;
+}
+.antigravity-history-section .chart-controls { flex: 1; }
+.antigravity-history-section .graph-history-control { flex-basis: 100%; }
+.antigravity-history-section .chart-container { height: 340px; }
+#antigravity-window-select button { min-height: 40px; }
+#antigravity-window-select button[hidden] { display: none; }
+@media (max-width: 640px) {
+  .antigravity-history-section .section-header { flex-direction: column; }
+  .antigravity-history-section .chart-controls { justify-content: flex-start; }
+  .antigravity-history-section .chart-container { height: 280px; }
+}
+
+@media (max-width: 640px) {
+  .antigravity-history-section .usage-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.subscription-value { padding: 24px; }
+.subscription-value details { margin: 16px 0; }
+.subscription-value summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
+.subscription-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.subscription-controls label { display: flex; flex-direction: column; gap: 6px; font-size: .85rem; max-width: 100%; }
+.subscription-controls input, .subscription-controls select { min-height: 40px; max-width: 100%; padding: 8px; background: var(--surface-card); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 8px; }
+.subscription-note { color: var(--text-secondary); font-size: .85rem; line-height: 1.5; margin: 12px 0; }
+.subscription-chart { height: 260px; position: relative; margin: 16px 0; }
+.subscription-chart p { position: absolute; inset: 30% 8%; text-align: center; color: var(--text-secondary); }
+.subscription-value td { font-variant-numeric: tabular-nums; }
+.subscription-value .table-container { overflow-x: auto; }
+.subscription-value table { min-width: 760px; width: 100%; }
+#subscription-warnings { color: var(--text-secondary); font-size: .85rem; padding-left: 20px; }
+#subscription-warnings li { margin-bottom: 8px; }
+@media (max-width: 640px) { .subscription-value { padding: 16px; } .subscription-value .usage-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .subscription-controls { align-items: stretch; } #subscription-cycle { width: 100%; } }
+
+.subscription-controls button { min-height: 40px; padding: 8px 14px; color: var(--text-primary); background: var(--surface-card); border: 1px solid var(--border-default); border-radius: 8px; cursor: pointer; }
+/* Keep the phone dashboard focused on quota, value and freshness. */
+.dashboard-detail > summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
+.dashboard-detail[open] > summary { margin-bottom: 16px; }
+@media (max-width: 768px) {
+ .app-header .provider-tabs { order: 4; flex: 1 0 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
+ .app-header .header-controls { margin-left: auto; }
+ .app-header .header-actions { order: 5; width: 100%; margin: 0; }
+ .provider-tab, .header-btn, .theme-toggle, .notification-bell { min-height: 44px; }
+ .graph-history-presets { flex-wrap: wrap; }
+ .subscription-value .section-header { width: 100%; }
+ .subscription-controls input, .subscription-controls select, .subscription-controls button { min-height: 44px; }
+ .subscription-controls label { min-width: 0; }
+ .subscription-note, .device-health-row { overflow-wrap: anywhere; }
+ .platform-cost-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+ .platform-cost-metric { min-width: 0; }
+ .platform-cost-metric strong { font-size: 20px; overflow-wrap: anywhere; }
+}

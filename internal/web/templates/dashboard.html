@@ -451,7 +451,33 @@
             </div>
         </section>
 
-        {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex")}}
+        {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}}
+        <section class="sessions-section subscription-value" id="subscription-value" data-provider="{{.CurrentProvider}}">
+            <div class="section-header"><h2>Subscription Value</h2><div class="subscription-controls">
+                <label>Period <select id="subscription-days"><option value="30">Last 30 days</option><option value="7">Last 7 days</option><option value="1">Last 24 hours</option></select></label>
+                <button type="button" class="btn" id="subscription-refresh">Refresh</button>
+            </div></div>
+            <p class="subscription-note">API-equivalent usage compared with observed quota consumption. A value multiple measures API dollars per subscription dollar, not task quality.</p>
+            <details id="subscription-plan-details"><summary>Plan and comparison settings</summary>
+                <form id="subscription-plan-form" class="subscription-controls">
+                    <label>Plan name <input id="subscription-plan-name" maxlength="100" placeholder="Your plan"></label>
+                    <label>Monthly USD <input id="subscription-price" type="number" min="0" max="100000" step="0.01"></label>
+                    <label>Usage multiplier <input id="subscription-multiplier" type="number" min="0" max="10000" step="0.1"></label>
+                    <button class="btn" type="submit">Save plan</button><button class="btn" type="button" id="subscription-undo" disabled>Undo plan change</button>
+                </form><p id="subscription-plan-source" class="subscription-note"></p>
+            </details>
+            <p id="subscription-status" role="status" class="subscription-note">Loading subscription observations...</p>
+            <div id="subscription-summary" class="usage-summary"></div>
+            <div class="subscription-controls"><label>Observed allowance <select id="subscription-cycle" aria-describedby="subscription-cycle-note"></select></label></div>
+            <p id="subscription-cycle-note" class="subscription-note"></p>
+            <div class="subscription-chart"><canvas id="subscription-chart" role="img" aria-label="Observed API value versus quota consumption" aria-describedby="subscription-cycle-note"></canvas><p id="subscription-chart-empty" hidden>No matched cost and quota observations yet.</p></div>
+            <details><summary>Models, effort and speed</summary><p class="subscription-note">Quota comparisons use the selected allowance, with single-model weekly intervals spanning at least 5 percentage points. Mixed activity stays unattributed. More output per percent can still mean more retries or lower-quality work.</p>
+                <div class="table-container"><table class="data-table"><thead><tr><th>Model / effort / speed</th><th>API value</th><th>Codex credits</th><th>Priced requests</th><th>Cache hit</th><th>Matched quota</th><th>API / 100%</th><th>Output / 1%</th></tr></thead><tbody id="subscription-models"></tbody></table></div>
+            </details>
+            <details><summary>Allowance history</summary><div class="table-container"><table class="data-table"><thead><tr><th>Observed span</th><th>Quota / plan</th><th>Meter movement</th><th>Matched API</th><th>API / 100%</th><th>Evidence</th></tr></thead><tbody id="subscription-cycles"></tbody></table></div></details>
+            <details><summary>Other plans and monthly capacity</summary><p class="subscription-note">Linear scenarios from the selected weekly allowance, using 30/7 weekly allowances per 30 days. Assumes full use and unchanged rules; excludes bonus resets, paid top-ups and promotions. It does not predict another account's entitlement.</p><div class="table-container"><table class="data-table"><thead><tr><th>Scenario</th><th>Monthly fee</th><th>API / weekly 100%</th><th>30-day capacity</th><th>Capacity / fee</th></tr></thead><tbody id="subscription-plans"></tbody></table></div></details>
+            <details><summary>Devices and data quality</summary><div id="subscription-devices"></div><ul id="subscription-warnings"></ul><p id="subscription-basis" class="subscription-note"></p></details>
+        </section>
         <section class="sessions-section platform-cost-section" id="platform-cost-section" data-provider="{{.CurrentProvider}}">
             <header class="section-header">
                 <h3 class="section-title">
@@ -527,16 +553,23 @@
         {{end}}
 
         {{if ne .CurrentProvider "both"}}
-        <section class="chart-section">
+        <section class="chart-section{{if eq .CurrentProvider "antigravity"}} antigravity-history-section{{end}}">
             <header class="section-header">
                 <h3 class="section-title">
                     <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M3 3v18h18"/>
                         <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
                     </svg>
-                    {{if eq .CurrentProvider "api-integrations"}}Cost Over Time{{else}}Usage Graphs{{end}}
+                    {{if eq .CurrentProvider "api-integrations"}}Cost Over Time{{else if eq .CurrentProvider "antigravity"}}Quota History{{else}}Usage Graphs{{end}}
                 </h3>
                 <div class="chart-controls">
+                    {{if eq .CurrentProvider "antigravity"}}
+                    <div class="range-selector" id="antigravity-window-select" role="group" aria-label="Quota window">
+                        <button class="range-btn active" type="button" data-quota-window="weekly" aria-pressed="true">Weekly</button>
+                        <button class="range-btn" type="button" data-quota-window="five_hour" aria-pressed="false">5-hour</button>
+                        <button class="range-btn" type="button" data-quota-window="unknown" aria-pressed="false">Other</button>
+                    </div>
+                    {{end}}
                     {{if eq .CurrentProvider "api-integrations"}}
                     <select class="page-size-select" id="api-integrations-metric-select" aria-label="API integrations chart metric">
                         <option value="tokenPerCall">Tokens per Request</option>
@@ -546,8 +579,8 @@
                     </select>
                     {{end}}
                     <div class="range-selector graph-mode-toggle" id="chart-mode-select" role="group" aria-label="Graph style">
-                        <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative" aria-pressed="true">Cumulative</button>
-                        <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket" aria-pressed="false">Per Period</button>
+                        <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative" aria-pressed="true">{{if eq .CurrentProvider "antigravity"}}Quota Used{{else}}Cumulative{{end}}</button>
+                        <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket" aria-pressed="false">{{if eq .CurrentProvider "antigravity"}}Usage Change{{else}}Per Period{{end}}</button>
                     </div>
                     <div class="graph-history-control" data-history-scope="chart">
                         <div class="range-selector graph-history-presets" role="group" aria-label="Usage graph time range">
@@ -603,8 +636,9 @@
         </section>
         {{end}}
 
-        {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex")}}
-        <section class="sessions-section platform-cost-breakdown-section" id="platform-cost-breakdown-section" data-provider="{{.CurrentProvider}}">
+        {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}}
+        <details class="sessions-section platform-cost-breakdown-section dashboard-detail" id="platform-cost-breakdown-section" data-provider="{{.CurrentProvider}}">
+            <summary>Token cost details</summary>
             <header class="section-header">
                 <h3 class="section-title">
                     <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -663,7 +697,7 @@
                     </tbody>
                 </table>
             </div>
-        </section>
+        </details>
         {{end}}
 
         {{if eq .CurrentProvider "api-integrations"}}

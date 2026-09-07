@@ -6079,8 +6079,46 @@ function renderUsageAccessibleSummary(datasets, range, mode = State.graphMode) {
       + `${formatNumber(gapCount)} collection gaps and ${formatNumber(resetCount)} observed resets.`;
 }
 
+function antigravityWindowDatasets(datasets) {
+  State.antigravityHistoryDatasets = datasets;
+  if (!State.antigravityQuotaWindow && datasets.length) {
+    State.antigravityQuotaWindow = datasets.some(item => item._antigravityWindow === 'weekly') ? 'weekly' : datasets[0]._antigravityWindow;
+  }
+  document.querySelectorAll('#antigravity-window-select button').forEach(button => {
+    const windowKind = button.dataset.quotaWindow;
+    const active = windowKind === State.antigravityQuotaWindow;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+    button.hidden = windowKind === 'unknown' && !datasets.some(item => item._antigravityWindow === 'unknown');
+    button.onclick = () => {
+      State.antigravityQuotaWindow = windowKind;
+      setMainChartDatasets(State.antigravityHistoryDatasets || [], selectedChartRange(), { preserveExistingOnEmpty: false });
+    };
+  });
+  return datasets.filter(item => item._antigravityWindow === State.antigravityQuotaWindow);
+}
+
+function renderAntigravityUsageSummary(datasets) {
+  const summary = document.getElementById('usage-summary');
+  if (!summary) return;
+  const timestamps = new Set();
+  let latestTime = 0;
+  const metrics = datasets.map(dataset => {
+    const points = (dataset.data || []).map(usageSummaryPoint).filter(Boolean);
+    points.forEach(point => { timestamps.add(point.end.getTime()); latestTime = Math.max(latestTime, point.end.getTime()); });
+    const latest = points[points.length - 1];
+    return `<div class="platform-cost-metric"><span class="platform-cost-label">${escapeHTML(dataset.label)}</span><strong>${latest ? formatUsagePercent(latest.value) : '--'}</strong></div>`;
+  });
+  summary.innerHTML = metrics.join('')
+    + `<div class="platform-cost-metric"><span class="platform-cost-label">Observed Samples</span><strong>${formatNumber(timestamps.size)}</strong></div>`
+    + `<div class="platform-cost-metric"><span class="platform-cost-label">Last Observed</span><strong>${latestTime ? escapeHTML(formatDateTime(new Date(latestTime).toISOString())) : '--'}</strong></div>`;
+}
+
 function setMainChartDatasets(datasets, range, options = {}) {
   if (!State.chart) return;
+  const sourceDatasets = datasets;
+  const isAntigravity = getCurrentProvider() === 'antigravity';
+  if (isAntigravity) datasets = antigravityWindowDatasets(datasets);
   const mode = normalizeGraphMode(options.mode || State.graphMode);
   const selectedWindowStart = options.windowStart
     || (options.xBounds ? new Date(options.xBounds.min).toISOString() : State.historyWindowStart);
@@ -6108,7 +6146,8 @@ function setMainChartDatasets(datasets, range, options = {}) {
       setChartEmptyState('usage-chart', false);
       return;
     }
-    renderUsageSummary([], range, mode);
+    if (isAntigravity) renderAntigravityUsageSummary(datasets);
+    else renderUsageSummary([], range, mode);
     renderUsageCoverageNote([]);
     renderUsageAccessibleSummary([], range, mode);
     setChartEmptyState('usage-chart', true, options.emptyMessage || noUsageMessage(range));
@@ -6131,9 +6170,10 @@ function setMainChartDatasets(datasets, range, options = {}) {
   setChartEmptyState('usage-chart', false);
   renderUsageCoverageNote(datasets);
   const summaryDatasets = isPeriodGraphMode(mode) ? chartDatasets : datasets;
-  renderUsageSummary(summaryDatasets, range, mode);
+  if (isAntigravity) renderAntigravityUsageSummary(summaryDatasets);
+  else renderUsageSummary(summaryDatasets, range, mode);
   renderUsageAccessibleSummary(chartDatasets, range, mode);
-  const nextYMax = computeYMax(chartDatasets, State.chart, { cap });
+  const nextYMax = isAntigravity && !isPeriodGraphMode(mode) ? 100 : computeYMax(chartDatasets, State.chart, { cap });
   const xBounds = options.xBounds || usageChartTimeBounds(range);
   const renderState = {
     provider: getCurrentProvider(),
@@ -6160,7 +6200,7 @@ function setMainChartDatasets(datasets, range, options = {}) {
   State.currentChartWindowStart = selectedWindowStart;
   State.currentChartWindowEnd = selectedWindowEnd;
   if (State.currentChartProvider && State.currentChartProvider !== 'api-integrations' && State.currentChartProvider !== 'both') {
-    updateCachedProviderData('history', State.currentChartProvider, historySelectionKey(range), { chartDatasets: datasets });
+    updateCachedProviderData('history', State.currentChartProvider, historySelectionKey(range), { chartDatasets: sourceDatasets });
   }
 }
 
@@ -6438,14 +6478,21 @@ function buildFlatUsageDatasets(rows, range, provider, displayNames, colorMap, f
 function buildProviderHistoryDatasets(provider, range, data) {
   if (provider === 'antigravity') {
     const labels = data.labels || [];
-    const defaultColors = ['#D97757', '#10B981', '#3B82F6'];
-    return (data.datasets || []).map((dataset, index) => usageLineDataset(
-      dataset.label || dataset.modelId,
-      dataset.modelId,
-      (dataset.data || []).map((value, pointIndex) => ({ x: new Date(labels[pointIndex]), y: value })),
-      dataset.borderColor || defaultColors[index % defaultColors.length],
-      range,
-    ));
+    return (data.datasets || []).map(dataset => ({
+      ...usageLineDataset(
+        dataset.label || dataset.modelId,
+        dataset.modelId,
+        (dataset.data || []).map((value, index) => ({ x: new Date(labels[index]), y: value })),
+        dataset.borderColor || '#0D9488',
+        range,
+      ),
+      _antigravityWindow: dataset.windowKind || 'unknown',
+      fill: false,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      borderWidth: 2,
+      tension: 0,
+    }));
   }
 
   const rows = Array.isArray(data) ? data : [];
@@ -7789,7 +7836,9 @@ function renderPlatformCostPanel(provider = getCurrentProvider()) {
   section.hidden = false;
   if (!entry) {
     if (State.apiIntegrationsCurrentLoaded) {
-      renderPlatformCostEmptyPanel();
+      renderPlatformCostEmptyPanel(provider === 'antigravity'
+        ? 'No Antigravity token usage recorded. Quota percentages cannot be converted into cost.'
+        : 'No cost telemetry yet.');
     }
     bindPlatformCostRangeControls(State.platformCostRange || DEFAULT_CHART_RANGE);
     return;
@@ -7926,9 +7975,9 @@ function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
       </div>
     `;
   }
-  if (subtitle) subtitle.textContent = message;
+  if (subtitle) subtitle.textContent = getCurrentProvider() === 'antigravity' ? 'No token records' : message;
   setPlatformCostChartLoading(false);
-  setChartEmptyState('platform-cost-chart', false);
+  setChartEmptyState('platform-cost-chart', true, message);
   setPlatformCostRangeControlsLoading(State.platformCostRange || DEFAULT_CHART_RANGE, false);
   if (State.platformCostChart) {
     State.platformCostChart.destroy();
@@ -8167,6 +8216,9 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     || Number(row.totalTokens || 0) > 0
     || Number(row.requestCount || 0) > 0)
     || hasPlatformCostUsage(rangeTotals);
+  const emptyCostMessage = provider === 'antigravity'
+    ? 'No Antigravity token usage recorded for this range. Quota percentages cannot be converted into cost.'
+    : noUsageMessage(range);
   const hasPeriodCostPoints = periodMode
     && pointSeriesHaveUsage(bucketed.cost, bucketed.tokens);
   if (subtitle) {
@@ -8174,14 +8226,14 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
       ? (periodMode
         ? `${formatNumber(bucketed.cost.length)} periods`
         : `${formatNumber(cumulative.cost.length)} chats`)
-      : noUsageMessage(range);
+      : (provider === 'antigravity' ? 'No token records' : emptyCostMessage);
   }
   setPlatformCostChartLoading(false);
   setPlatformCostRangeControlsLoading(range, false);
   updatePlatformCostSummaryForRange(provider, range, rows);
   if (!hasUsageInRange && !hasPeriodCostPoints) {
     renderPlatformCostAccessibleSummary([], [], range, graphMode);
-    setChartEmptyState('platform-cost-chart', true, noUsageMessage(range));
+    setChartEmptyState('platform-cost-chart', true, emptyCostMessage);
     if (State.platformCostChart) {
       updateChartWhenChanged('platformCostChartRenderSignature', {
         provider,

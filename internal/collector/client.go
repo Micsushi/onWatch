@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/ingest"
@@ -73,4 +74,13 @@ func min(a, b int) int {
 	}
 	return b
 }
-func Version() string { return "1" }
+func Version() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				return setting.Value
+			}
+		}
+	}
+	return "dev"
+}

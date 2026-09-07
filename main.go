@@ -1026,7 +1026,7 @@ func run() error {
 
 	// Create Z.ai tracker
 	var zaiTr *tracker.ZaiTracker
-	if cfg.HasProvider("zai") {
+	if cfg.HasProvider("zai") || cfg.IngestPort > 0 {
 		zaiTr = tracker.NewZaiTracker(db, logger)
 	}
 
@@ -1038,7 +1038,7 @@ func run() error {
 
 	// Create Anthropic tracker
 	var anthropicTr *tracker.AnthropicTracker
-	if cfg.HasProvider("anthropic") {
+	if cfg.HasProvider("anthropic") || cfg.IngestPort > 0 {
 		anthropicTr = tracker.NewAnthropicTracker(db, logger)
 	}
 
@@ -1147,7 +1147,7 @@ func run() error {
 
 	// Create Copilot tracker
 	var copilotTr *tracker.CopilotTracker
-	if cfg.HasProvider("copilot") {
+	if cfg.HasProvider("copilot") || cfg.IngestPort > 0 {
 		copilotTr = tracker.NewCopilotTracker(db, logger)
 	}
 
@@ -1159,7 +1159,7 @@ func run() error {
 
 	// Create Codex tracker
 	var codexTr *tracker.CodexTracker
-	if cfg.HasProvider("codex") {
+	if cfg.HasProvider("codex") || cfg.IngestPort > 0 {
 		codexTr = tracker.NewCodexTracker(db, logger)
 	}
 
@@ -1186,27 +1186,27 @@ func run() error {
 
 	// Create Antigravity tracker
 	var antigravityTr *tracker.AntigravityTracker
-	if cfg.HasProvider("antigravity") {
+	if cfg.HasProvider("antigravity") || cfg.IngestPort > 0 {
 		antigravityTr = tracker.NewAntigravityTracker(db, logger)
 	}
 
 	var minimaxTr *tracker.MiniMaxTracker
-	if cfg.HasProvider("minimax") {
+	if cfg.HasProvider("minimax") || cfg.IngestPort > 0 {
 		minimaxTr = tracker.NewMiniMaxTracker(db, logger)
 	}
 
 	var openrouterTr *tracker.OpenRouterTracker
-	if cfg.HasProvider("openrouter") {
+	if cfg.HasProvider("openrouter") || cfg.IngestPort > 0 {
 		openrouterTr = tracker.NewOpenRouterTracker(db, logger)
 	}
 
 	var geminiTr *tracker.GeminiTracker
-	if cfg.HasProvider("gemini") {
+	if cfg.HasProvider("gemini") || cfg.IngestPort > 0 {
 		geminiTr = tracker.NewGeminiTracker(db, logger)
 	}
 
 	var cursorTr *tracker.CursorTracker
-	if cfg.HasProvider("cursor") {
+	if cfg.HasProvider("cursor") || cfg.IngestPort > 0 {
 		cursorTr = tracker.NewCursorTracker(db, logger)
 	}
 
@@ -1612,6 +1612,10 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	pollHealthMonitorDone := startPollHealthMonitor(ctx, notifier)
+	var centralMonitorDone <-chan struct{}
+	if ingestServer != nil {
+		centralMonitorDone = startCentralQuotaMonitor(ctx, db, logger, notifier.Check)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -1712,6 +1716,9 @@ func run() error {
 	cancel()
 	agentMgr.StopAll()
 	<-pollHealthMonitorDone
+	if centralMonitorDone != nil {
+		<-centralMonitorDone
+	}
 	notifier.ShutdownPollHealthDeliveries()
 	_ = stopMenubarProcess(cfg.TestMode)
 

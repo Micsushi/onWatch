@@ -1,0 +1,32 @@
+name: onwatch-gateway
+services:
+  gateway:
+    image: nginx:1.28-alpine
+    container_name: onwatch-gateway
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./default.conf:/etc/nginx/conf.d/default.conf:ro
+    tmpfs:
+      - /var/cache/nginx:mode=1777
+      - /var/run:mode=1777
+    networks: [homelab]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.onwatch-secure.entrypoints: https
+      traefik.http.routers.onwatch-secure.rule: Host(`onwatch.mshi.ca`)
+      traefik.http.routers.onwatch-secure.middlewares: authelia@docker
+      traefik.http.routers.onwatch-secure.tls: "true"
+      traefik.http.routers.onwatch-secure.tls.certresolver: cloudflare
+      traefik.http.routers.onwatch-secure.service: onwatch-central
+      traefik.http.services.onwatch-central.loadbalancer.server.port: "9211"
+      traefik.http.routers.onwatch.entrypoints: http
+      traefik.http.routers.onwatch.rule: Host(`onwatch.mshi.ca`)
+      traefik.http.routers.onwatch.middlewares: onwatch-https-redirect
+      traefik.http.middlewares.onwatch-https-redirect.redirectscheme.scheme: https
+networks:
+  homelab:
+    external: true

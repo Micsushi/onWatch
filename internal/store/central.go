@@ -596,6 +596,9 @@ func storeIngestEvent(tx *sql.Tx, deviceID string, event ingest.Event, now time.
 			result.Status, result.Code = "rejected", "payload_envelope_mismatch"
 			return result, nil
 		}
+		if err := recordSubscriptionTelemetry(tx, eventRecord); err != nil {
+			return result, err
+		}
 		metadata, storedMetadata := normalizedAPIIntegrationMetadata(eventRecord)
 		insert, err := tx.Exec(`INSERT OR IGNORE INTO api_integration_usage_events (
 			captured_at, integration_name, provider, account_name, model, request_id, prompt_tokens, completion_tokens,
@@ -699,11 +702,11 @@ func mirrorCentralQuotaSnapshot(tx *sql.Tx, provider, externalID string, capture
 		id, _ := result.LastInsertId()
 		return insertValues(`INSERT INTO anthropic_quota_values(snapshot_id, quota_name, utilization, resets_at) VALUES(?, ?, ?, ?)`, id, false)
 	case "openai":
-		accountID := int64(1)
-		if parsed, err := strconv.ParseInt(externalID, 10, 64); err == nil && parsed > 0 {
-			accountID = parsed
+		accountID, err := centralCodexAccountID(tx, externalID, captured)
+		if err != nil {
+			return err
 		}
-		result, err := tx.Exec(`INSERT INTO codex_snapshots(captured_at, account_id, raw_json, quota_count) VALUES(?, ?, '', ?)`, captured, accountID, len(snapshot.Metrics))
+		result, err := tx.Exec(`INSERT INTO codex_snapshots(captured_at, account_id, raw_json, quota_count, plan_type) VALUES(?, ?, '', ?, ?)`, captured, accountID, len(snapshot.Metrics), snapshot.Plan)
 		if err != nil {
 			return err
 		}
@@ -778,7 +781,7 @@ func mirrorCentralQuotaSnapshot(tx *sql.Tx, provider, externalID string, capture
 		_, err := tx.Exec(`INSERT INTO openrouter_snapshots(captured_at, label, usage, usage_daily, usage_weekly, usage_monthly, credit_limit, limit_remaining) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, captured, externalID, usage, daily, weekly, monthly, limit, remaining)
 		return err
 	case "antigravity":
-		result, err := tx.Exec(`INSERT INTO antigravity_snapshots(captured_at, raw_json, model_count) VALUES(?, '', ?)`, captured, len(snapshot.Metrics))
+		result, err := tx.Exec(`INSERT INTO antigravity_snapshots(captured_at, raw_json, model_count, plan_name) VALUES(?, '', ?, ?)`, captured, len(snapshot.Metrics), snapshot.Plan)
 		if err != nil {
 			return err
 		}
@@ -788,6 +791,12 @@ func mirrorCentralQuotaSnapshot(tx *sql.Tx, provider, externalID string, capture
 			var reset any
 			if metric.ResetsAt != nil {
 				reset = metric.ResetsAt.UTC().Format(time.RFC3339Nano)
+			}
+			if metric.Group != "" {
+				if _, err := tx.Exec(`INSERT INTO antigravity_quota_summary_buckets(snapshot_id,group_key,group_display_name,group_description,bucket_id,bucket_display_name,bucket_description,window_kind,remaining_fraction,remaining_percent,reset_time) VALUES(?,?,?,'',?,?,'',?,?,?,?)`, id, metric.Group, metric.Group, metric.Name, metric.Name, metric.Window, remaining/100, remaining, reset); err != nil {
+					return err
+				}
+				continue
 			}
 			if _, err := tx.Exec(`INSERT INTO antigravity_model_values(snapshot_id, model_id, label, remaining_fraction, remaining_percent, is_exhausted, reset_time) VALUES(?, ?, ?, ?, ?, ?, ?)`, id, metric.Name, metric.Name, remaining/100, remaining, boolInt(remaining <= 0), reset); err != nil {
 				return err
@@ -833,6 +842,32 @@ func mirrorCentralQuotaSnapshot(tx *sql.Tx, provider, externalID string, capture
 		return err
 	}
 	return nil
+}
+
+// Resolve the provider identity inside the ingest transaction. External account
+// IDs are not local SQLite row IDs; falling back to row 1 merges unrelated users.
+func centralCodexAccountID(tx *sql.Tx, externalID, captured string) (int64, error) {
+	var id int64
+	err := tx.QueryRow(`SELECT id FROM provider_accounts WHERE provider = 'codex' AND external_id = ? ORDER BY id LIMIT 1`, externalID).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	// Retain the numeric account assignments supported by earlier releases.
+	if parsed, err := strconv.ParseInt(externalID, 10, 64); err == nil && parsed > 0 {
+		if err := tx.QueryRow(`SELECT id FROM provider_accounts WHERE provider = 'codex' AND id = ?`, parsed).Scan(&id); err == nil {
+			return id, nil
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return 0, err
+		}
+	}
+	result, err := tx.Exec(`INSERT INTO provider_accounts(provider, name, created_at, external_id) VALUES('codex', ?, ?, ?)`, "central:"+externalID, captured, externalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
 }
 
 func quotaMetricMap(metrics []ingest.QuotaMetric) map[string]*ingest.QuotaMetric {

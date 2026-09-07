@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -281,6 +282,42 @@ func TestParseCodexUsageFileAppliesGPT56FastPricingBelowLongContextThreshold(t *
 	}
 	if events[0].SpeedMultiplier != 2 {
 		t.Fatalf("speed multiplier = %v, want 2", events[0].SpeedMultiplier)
+	}
+}
+
+func TestParseCodexAstraPricing(t *testing.T) {
+	pricing, err := DefaultPricingMap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, usage string
+		fast        bool
+		want        float64
+	}{
+		{"standard", `"input_tokens":1000,"cached_input_tokens":500,"output_tokens":100,"total_tokens":1100`, false, 0.0105},
+		{"fast", `"input_tokens":1000,"cached_input_tokens":500,"output_tokens":100,"total_tokens":1100`, true, 0.021},
+		{"long", `"input_tokens":300000,"cached_input_tokens":100000,"output_tokens":10000,"total_tokens":310000`, false, 4.95},
+		{"long-fast", `"input_tokens":300000,"cached_input_tokens":100000,"output_tokens":10000,"total_tokens":310000`, true, 9.9},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rollout-astra.jsonl")
+			fast := "false"
+			if tc.fast {
+				fast = "true"
+			}
+			writeFixture(t, path, []string{
+				`{"type":"turn_context","payload":{"model":"gpt-6-astra","fast_mode":` + fast + `}}`,
+				`{"type":"event_msg","timestamp":"2026-09-07T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{` + tc.usage + `}}}}`,
+			})
+			events, err := ParseCodexUsageFile(path, pricing)
+			if err != nil || len(events) != 1 {
+				t.Fatalf("events=%v err=%v", events, err)
+			}
+			if got := events[0].CostUSD; got < tc.want-1e-9 || got > tc.want+1e-9 {
+				t.Fatalf("cost=%v want=%v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -749,5 +786,33 @@ func TestForkedCodexSessionReplayGetsSameEventKeyAcrossFiles(t *testing.T) {
 	}
 	if eventKey(originalEvents[0], origLine) != eventKey(forkEvents[0], forkLine) {
 		t.Fatalf("replayed fork event got a different key:\n%s\n%s", origLine, forkLine)
+	}
+}
+
+func TestCodexExplicitSpeedAndQuotaTelemetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	data := `{"type":"session_meta","payload":{"id":"s","model":"gpt-6-astra"}}
+{"type":"turn_context","payload":{"model":"gpt-6-astra"}}
+{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"priority"}}}
+{"timestamp":"2026-09-07T02:36:35Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110},"total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}},"rate_limits":{"limit_id":"codex","plan_type":"pro","credits":{"balance":"secret-not-retained"},"primary":{"used_percent":0,"window_minutes":10080,"resets_at":1789353385}}}}
+`
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := DefaultPricingMap()
+	events, err := ParseCodexUsageFile(path, p)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("parse %v %+v", err, events)
+	}
+	e := events[0]
+	if e.SpeedMode != "fast" || e.SpeedSource != "codex_thread_settings" || e.QuotaTelemetry["seven_day"] == nil {
+		t.Fatalf("lost settings or zero quota: %+v", e)
+	}
+	line, err := e.ToAPIIntegrationLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(line), "secret-not-retained") {
+		t.Fatal("quota telemetry retained credit payload")
 	}
 }

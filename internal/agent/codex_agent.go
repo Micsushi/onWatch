@@ -50,18 +50,20 @@ func isCodexAuthError(err error) bool {
 
 // CodexAgent manages the background polling loop for Codex quota tracking.
 type CodexAgent struct {
-	client       *api.CodexClient
-	store        *store.Store
-	tracker      *tracker.CodexTracker
-	interval     time.Duration
-	logger       *slog.Logger
-	sm           *SessionManager
-	notifier     agentNotifier
-	pollingCheck func() bool
-	tokenRefresh CodexTokenRefreshFunc
-	credsRefresh CodexCredentialsRefreshFunc
-	tokenSave    CodexTokenSaveFunc
-	lastToken    string
+	client         *api.CodexClient
+	store          *store.Store
+	tracker        *tracker.CodexTracker
+	interval       time.Duration
+	logger         *slog.Logger
+	sm             *SessionManager
+	notifier       agentNotifier
+	pollingCheck   func() bool
+	tokenRefresh   CodexTokenRefreshFunc
+	credsRefresh   CodexCredentialsRefreshFunc
+	tokenSave      CodexTokenSaveFunc
+	lastToken      string
+	tokenRotation  bool
+	refreshRequest func(context.Context, string) (*api.CodexOAuthTokenResponse, error)
 
 	// Multi-account support
 	accountID   int64  // Database account ID from provider_accounts
@@ -196,14 +198,18 @@ func (a *CodexAgent) poll(ctx context.Context) {
 	authPauseMessage := ""
 
 	// Proactive OAuth refresh: check if token expires soon and refresh via OAuth API
-	if a.credsRefresh != nil {
+	if a.credsRefresh != nil && a.tokenRotation && !a.authPaused {
 		if creds := a.credsRefresh(); creds != nil {
 			// Check if token is expiring soon or already expired
 			if creds.IsExpiringSoon(codexTokenRefreshThreshold) && creds.RefreshToken != "" {
 				a.logger.Info("Codex token expiring soon, attempting proactive OAuth refresh",
 					"expires_in", creds.ExpiresIn.Round(time.Second))
 
-				newTokens, err := api.RefreshCodexToken(ctx, creds.RefreshToken)
+				refresh := a.refreshRequest
+				if refresh == nil {
+					refresh = api.RefreshCodexToken
+				}
+				newTokens, err := refresh(ctx, creds.RefreshToken)
 				if err != nil {
 					if errors.Is(err, api.ErrCodexRefreshTokenReused) {
 						// Unrecoverable - token is dead, user must re-authenticate
@@ -259,6 +265,10 @@ func (a *CodexAgent) poll(ctx context.Context) {
 	// Refresh token before each poll (picks up rotated credentials from disk)
 	if a.tokenRefresh != nil {
 		newToken := a.tokenRefresh()
+		if newToken == "" {
+			a.recordPollFailure("missing_credentials", "Codex credentials are unavailable. Sign in using the configured credential owner.")
+			return
+		}
 		if newToken != "" && newToken != a.lastToken {
 			a.client.SetToken(newToken)
 			a.lastToken = newToken

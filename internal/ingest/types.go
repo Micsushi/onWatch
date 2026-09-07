@@ -92,6 +92,8 @@ type HeartbeatResponse struct {
 }
 
 type QuotaMetric struct {
+	Group    string     `json:"group,omitempty"`
+	Window   string     `json:"window,omitempty"`
 	Name     string     `json:"name"`
 	Value    float64    `json:"value"`
 	Limit    *float64   `json:"limit,omitempty"`
@@ -101,6 +103,7 @@ type QuotaMetric struct {
 }
 
 type QuotaSnapshot struct {
+	Plan    string        `json:"plan,omitempty"`
 	Version int           `json:"version"`
 	Metrics []QuotaMetric `json:"metrics"`
 }
@@ -173,12 +176,12 @@ func (event Event) Validate(now time.Time) error {
 		var snapshot QuotaSnapshot
 		decoder := json.NewDecoder(bytes.NewReader(event.Payload))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&snapshot); err != nil || snapshot.Version != 1 || len(snapshot.Metrics) == 0 || len(snapshot.Metrics) > 128 {
+		if err := decoder.Decode(&snapshot); err != nil || snapshot.Version != 1 || len(snapshot.Metrics) == 0 || len(snapshot.Metrics) > 128 || len(snapshot.Plan) > 128 {
 			return fmt.Errorf("invalid_quota_payload")
 		}
 		for _, metric := range snapshot.Metrics {
 			if strings.TrimSpace(metric.Name) == "" || len(metric.Name) > 128 || strings.TrimSpace(metric.Unit) == "" || len(metric.Unit) > 32 ||
-				math.IsNaN(metric.Value) || math.IsInf(metric.Value, 0) || (metric.Limit != nil && (math.IsNaN(*metric.Limit) || math.IsInf(*metric.Limit, 0))) || len(metric.Status) > 64 {
+				math.IsNaN(metric.Value) || math.IsInf(metric.Value, 0) || (metric.Limit != nil && (math.IsNaN(*metric.Limit) || math.IsInf(*metric.Limit, 0))) || len(metric.Status) > 64 || len(metric.Group) > 128 || len(metric.Window) > 32 {
 				return fmt.Errorf("invalid_quota_payload")
 			}
 		}

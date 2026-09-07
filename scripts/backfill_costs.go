@@ -1,15 +1,15 @@
 //go:build ignore
 
 // Fills missing generated agent usage costs without changing stored historical
-// costs. Uses each row's captured_at timestamp and metadata_json token breakdown
-// to avoid double-counting prompt_tokens, which is stored as
-// input+cached+cacheCreation combined.
+// costs. Uses captured_at and normalized token columns, including cached input.
+// Compact metadata intentionally omits those token counts.
 
 package main
 
 import (
 	"database/sql"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +22,7 @@ import (
 
 type row struct {
 	id, input, cached, cacheCreation, cacheCreation1h, output, reasoning int
-	integration, provider, model, metadata                               string
+	integration, provider, model, metadata, speedMode                    string
 	capturedAt                                                           time.Time
 }
 
@@ -32,21 +32,16 @@ func main() {
 		home, _ = os.UserHomeDir()
 	}
 	dbPath := filepath.Join(home, ".onwatch", "data", "onwatch.db")
+	flag.StringVar(&dbPath, "db", dbPath, "database to backfill")
+	model := flag.String("model", "", "only backfill this model")
+	dryRun := flag.Bool("dry-run", false, "calculate without changing rows")
+	flag.Parse()
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		panic(err)
 	}
 	defer db.Close()
 	if _, err := db.Exec(`PRAGMA busy_timeout=10000`); err != nil {
-		panic(err)
-	}
-	if _, err := db.Exec(`
-		UPDATE api_integration_usage_events
-		SET metadata_json = json_remove(metadata_json, '$.fast_mode', '$.speed_mode', '$.speed_multiplier', '$.speed_source')
-		WHERE integration_name = 'Codex CLI'
-		  AND json_valid(metadata_json)
-		  AND json_extract(metadata_json, '$.source_path') LIKE '%archived_sessions%'
-	`); err != nil {
 		panic(err)
 	}
 
@@ -56,17 +51,15 @@ func main() {
 	}
 
 	rows, err := db.Query(`
-		SELECT id, captured_at, integration_name, provider, model, COALESCE(metadata_json, ''),
-		       CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json,'$.input_tokens'), prompt_tokens) AS INTEGER) ELSE prompt_tokens END,
-		       CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json,'$.cached_input_tokens'),0) AS INTEGER) ELSE 0 END,
-		       CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json,'$.cache_creation_input_tokens'),0) AS INTEGER) ELSE 0 END,
+		SELECT id, captured_at, integration_name, provider, model, COALESCE(metadata_json, ''), speed_mode,
+		       input_tokens, cached_input_tokens, cache_creation_input_tokens,
 		       CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json,'$.cache_creation_1h_input_tokens'),0) AS INTEGER) ELSE 0 END,
-		       CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json,'$.output_tokens'), completion_tokens) AS INTEGER) ELSE completion_tokens END,
-		       CASE WHEN json_valid(metadata_json) THEN CAST(COALESCE(json_extract(metadata_json,'$.reasoning_output_tokens'),0) AS INTEGER) ELSE 0 END
+		       output_tokens, reasoning_output_tokens
 		FROM api_integration_usage_events
 		WHERE cost_usd IS NULL
+		  AND (? = '' OR model = ?)
 		  AND integration_name IN ('Claude Code','Codex CLI','Gemini CLI','Antigravity')
-	`)
+	`, *model, *model)
 	if err != nil {
 		panic(err)
 	}
@@ -75,7 +68,7 @@ func main() {
 	for rows.Next() {
 		var r row
 		var capturedAt string
-		if err := rows.Scan(&r.id, &capturedAt, &r.integration, &r.provider, &r.model, &r.metadata, &r.input, &r.cached, &r.cacheCreation, &r.cacheCreation1h, &r.output, &r.reasoning); err != nil {
+		if err := rows.Scan(&r.id, &capturedAt, &r.integration, &r.provider, &r.model, &r.metadata, &r.speedMode, &r.input, &r.cached, &r.cacheCreation, &r.cacheCreation1h, &r.output, &r.reasoning); err != nil {
 			panic(err)
 		}
 		r.capturedAt, err = time.Parse(time.RFC3339Nano, capturedAt)
@@ -85,11 +78,15 @@ func main() {
 		}
 		toUpdate = append(toUpdate, r)
 	}
+	if err := rows.Err(); err != nil {
+		panic(err)
+	}
 	rows.Close()
 
 	fmt.Printf("rows to backfill: %d\n", len(toUpdate))
 
 	updated, skipped := 0, 0
+	totalCost := 0.0
 	for _, r := range toUpdate {
 		opts := costOptionsForRow(r)
 		cost := pricing.CalculateCostAt(r.model, r.capturedAt, agentusage.TokenCounts{
@@ -104,13 +101,16 @@ func main() {
 			skipped++
 			continue
 		}
-		metadata := normalizeCostMetadata(r, opts)
-		if _, err := db.Exec(`UPDATE api_integration_usage_events SET cost_usd=?, metadata_json=? WHERE id=? AND cost_usd IS NULL`, cost, metadata, r.id); err != nil {
-			panic(err)
+		if !*dryRun {
+			if _, err := db.Exec(`UPDATE api_integration_usage_events SET cost_usd=? WHERE id=? AND cost_usd IS NULL`, cost, r.id); err != nil {
+				panic(err)
+			}
 		}
+		totalCost += cost
 		updated++
 	}
 	fmt.Printf("updated: %d  skipped (unknown model/zero): %d\n", updated, skipped)
+	fmt.Printf("dry-run: %v, added estimated cost: $%.4f\n", *dryRun, totalCost)
 
 	// Spot-check: show per-model totals
 	fmt.Println("\nper-model 24h totals after backfill:")
@@ -139,9 +139,10 @@ func costOptionsForRow(r row) agentusage.CostOptions {
 	_ = json.Unmarshal([]byte(r.metadata), &metadata)
 	switch strings.ToLower(strings.TrimSpace(r.integration)) {
 	case "codex cli":
-		if !codexSourceIsArchived(metadataString(metadata, "source_path")) && (metadataBool(metadata, "fast_mode") || codexMetadataRequestsFast(metadata)) {
-			opts.CostMultiplier = codexFastModeCostMultiplier(r.model)
-		}
+		fast := r.speedMode == "fast" || r.speedMode == "priority"
+		opts = agentusage.CodexCostOptions(r.model, agentusage.TokenCounts{
+			InputTokens: r.input, CachedInputTokens: r.cached, CacheCreationTokens: r.cacheCreation,
+		}, fast)
 	case "gemini cli", "antigravity":
 		opts.ReasoningBilledAsOutput = true
 		opts.ProviderPrefixes = agentusage.GoogleFamilyProviderPrefixes
@@ -152,83 +153,4 @@ func costOptionsForRow(r row) agentusage.CostOptions {
 		}
 	}
 	return opts
-}
-
-func normalizeCostMetadata(r row, opts agentusage.CostOptions) string {
-	if strings.TrimSpace(r.metadata) == "" {
-		return r.metadata
-	}
-	var metadata map[string]any
-	if err := json.Unmarshal([]byte(r.metadata), &metadata); err != nil || metadata == nil {
-		return r.metadata
-	}
-	if strings.ToLower(strings.TrimSpace(r.integration)) == "codex cli" {
-		if codexSourceIsArchived(metadataString(metadata, "source_path")) {
-			delete(metadata, "fast_mode")
-			delete(metadata, "speed_mode")
-			delete(metadata, "speed_multiplier")
-			delete(metadata, "speed_source")
-		} else if opts.CostMultiplier > 0 {
-			metadata["speed_multiplier"] = opts.CostMultiplier
-		} else {
-			delete(metadata, "speed_multiplier")
-		}
-	}
-	encoded, err := json.Marshal(metadata)
-	if err != nil {
-		return r.metadata
-	}
-	return string(encoded)
-}
-
-func codexMetadataRequestsFast(metadata map[string]any) bool {
-	switch metadataString(metadata, "speed_mode") {
-	case "fast", "priority":
-		return true
-	default:
-		return false
-	}
-}
-
-func codexSourceIsArchived(sourcePath string) bool {
-	return strings.Contains(strings.ToLower(sourcePath), "archived_sessions")
-}
-
-func codexFastModeCostMultiplier(model string) float64 {
-	normalized := strings.ToLower(strings.TrimSpace(model))
-	switch {
-	case strings.HasPrefix(normalized, "gpt-5.5"):
-		return 2.5
-	case strings.HasPrefix(normalized, "gpt-5.4") && !strings.HasPrefix(normalized, "gpt-5.4-mini"):
-		return 2
-	default:
-		return 0
-	}
-}
-
-func metadataBool(metadata map[string]any, key string) bool {
-	value, ok := metadata[key]
-	if !ok {
-		return false
-	}
-	switch typed := value.(type) {
-	case bool:
-		return typed
-	case float64:
-		return typed != 0
-	case string:
-		switch strings.ToLower(strings.TrimSpace(typed)) {
-		case "true", "1", "yes", "fast", "enabled", "on":
-			return true
-		}
-	}
-	return false
-}
-
-func metadataString(metadata map[string]any, key string) string {
-	value, ok := metadata[key].(string)
-	if !ok {
-		return ""
-	}
-	return strings.ToLower(strings.TrimSpace(value))
 }

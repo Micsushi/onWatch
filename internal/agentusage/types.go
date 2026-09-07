@@ -30,6 +30,7 @@ type CostOptions struct {
 }
 
 type UsageEvent struct {
+	QuotaTelemetry        map[string]any
 	Timestamp             time.Time
 	Source                string
 	Provider              string
@@ -115,6 +116,9 @@ func (e UsageEvent) ToAPIIntegrationLine() ([]byte, error) {
 		metadata["speed_source"] = strings.TrimSpace(e.SpeedSource)
 	}
 
+	if len(e.QuotaTelemetry) > 0 {
+		metadata["quota_telemetry"] = e.QuotaTelemetry
+	}
 	wire := struct {
 		TS               string         `json:"ts"`
 		Integration      string         `json:"integration"`

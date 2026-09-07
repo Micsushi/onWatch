@@ -4,8 +4,8 @@ This runbook moves onWatch from independent full daemons to one canonical Server
 
 ## Security boundary
 
-- The dashboard listens on container port 9211 only. It is reachable through the existing `homelab` Docker network and Cloudflare Tunnel at `onwatch.mshi.ca`.
-- Cloudflare Access and onWatch login both remain enabled. `ONWATCH_TRUST_PROXY_AUTH` stays false because other containers share the Docker network.
+- The dashboard listens on container port 9211, published only to loopback port 9213. Tailscale Serve HTTPS 9444 carries dashboard traffic to the existing Server1 Authelia gateway at `onwatch.mshi.ca`. The optional direct Cloudflare Tunnel route requires its own access policy.
+- Authelia and onWatch login both remain enabled. `ONWATCH_TRUST_PROXY_AUTH` stays false because other containers share the Docker network.
 - Ingest listens on container port 9212 and is published only to `127.0.0.1:9212`. Tailscale Serve exposes HTTPS 9443 to tailnet peers.
 - Every ingest request still requires a device ID and bearer token. Only the SHA-256 token digest is stored.
 - Provider credentials remain on the one device assigned to poll that account. They are never uploaded.
@@ -64,16 +64,30 @@ onwatch collector status --json
 
 `collector install` uses the distinct `dev.onllm.onwatch.collector` LaunchAgent on macOS and `onWatch Collector` Scheduled Task on Windows. It does not replace the full daemon. Windows installation restricts the token file ACL to the current user. `collector uninstall` preserves queued events unless `--purge-spool` is explicitly supplied.
 
+Linux uses the [native user service](../../deploy/linux/README.md). Install it
+under the user who owns the usage logs, including on Server2 when that host also
+runs coding tools. The central container itself needs no provider credentials.
+
 ## Account poll ownership
 
 Assign exactly one owner per provider account:
 
 ```sh
-docker exec onwatch /app/onwatch device assign --provider codex --account 1 --owner device --device-id DEVICE_ID --poll-interval 60s
+docker exec onwatch /app/onwatch device assign --provider codex --account PROVIDER_EXTERNAL_ID --owner device --device-id DEVICE_ID --credential-alias ONWATCH_CODEX_WORK_HOME --poll-interval 60s
 docker exec onwatch /app/onwatch device owners --json
 ```
 
 Use `--owner server` when Server2 has the credential. To transfer ownership, first stop the old poller, then unassign, then assign the new owner. There is no automatic failover. `device unassign` preserves history and removes the assignment from the device heartbeat configuration.
+
+For Codex, use the credential's external account identity, preferably the
+account/user composite used by the existing imported profile. Set the named
+credential alias in the device's `~/.onwatch/.env` to that account's `CODEX_HOME`
+directory. The collector reads the owner's current access token and verifies the
+identity on each poll. It does not rotate a shared refresh grant. Numeric local
+database IDs remain readable for legacy history, but are not credential identities.
+
+The server evaluates fresh collector quotas every 15 seconds from a persistent
+cursor. Offline history and superseded samples do not generate live alerts.
 
 Rotation prints a replacement token once and invalidates the prior token:
 
@@ -161,3 +175,9 @@ Rollback triggers are loss of authenticated access, database integrity failure, 
 - HTTP 401 or 403 pauses uploads for 15 minutes. Rotate or correct the token file. Do not delete the spool.
 - A full spool stops new collection and preserves every unacknowledged event. Restore ingest before resuming.
 - Import/export does not repair live sync. Use the collector for ongoing data.
+
+## Existing Authelia gateway
+
+Where public DNS already points to Server1, use `deploy/server1-gateway` to replace only the obsolete onWatch app with an nginx forwarding container. It preserves existing Traefik TLS and Authelia labels. Other services and the Traefik process need no restart. The gateway verifies Server2's Tailscale certificate and strips trusted-user headers; onWatch retains its own login.
+
+Before starting the gateway, enable the unused Server2 route with `tailscale serve --bg --https=9444 http://127.0.0.1:9213`. Preserve existing 9443 ingest. Check HTTPS health through the tailnet. Stop the old Server1 onWatch container, then start the gateway. Roll back by stopping the gateway and starting the retained old container. Do not delete its database. No dashboard port is published on an external host interface.

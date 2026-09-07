@@ -185,6 +185,12 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_input_token_cost": 0.0000125,
 			"cache_creation_1h_input_token_cost": 0.00002
 		},
+		"gpt-6-astra": {
+			"input_cost_per_token": 0.00001,
+			"output_cost_per_token": 0.00005,
+			"cache_read_input_token_cost": 0.000001,
+			"cache_creation_input_token_cost": 0.0000125
+		},
 		"gpt-5.6-sol": {
 			"history": [{
 				"effective_from": "2026-06-26T00:00:00Z",

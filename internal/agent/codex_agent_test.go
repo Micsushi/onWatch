@@ -138,6 +138,10 @@ func TestCodexAgent_ProactiveRefreshFailures_PausesAfterMax(t *testing.T) {
 	// Simulate: proactive refresh has already failed maxCodexAuthFailures-1 times.
 	// One more failure should trigger pause.
 	ag.proactiveRefreshFailures = maxCodexAuthFailures - 1
+	ag.tokenRotation = true
+	ag.refreshRequest = func(context.Context, string) (*api.CodexOAuthTokenResponse, error) {
+		return nil, fmt.Errorf("refresh unavailable")
+	}
 
 	// Set creds to return expired tokens (triggers proactive refresh path).
 	// Use "oauth_token" as access token - matches what tokenRefresh returns,
@@ -187,6 +191,10 @@ func TestCodexAgent_ProactiveRefreshFailures_NotPausedBeforeMax(t *testing.T) {
 	client := api.NewCodexClient("oauth_token", logger, api.WithCodexBaseURL(server.URL))
 	tr := tracker.NewCodexTracker(st, logger)
 	ag := NewCodexAgent(client, st, tr, time.Hour, logger, nil)
+	ag.tokenRotation = true
+	ag.refreshRequest = func(context.Context, string) (*api.CodexOAuthTokenResponse, error) {
+		return nil, fmt.Errorf("refresh unavailable")
+	}
 
 	ag.SetCredentialsRefresh(func() *api.CodexCredentials {
 		return &api.CodexCredentials{

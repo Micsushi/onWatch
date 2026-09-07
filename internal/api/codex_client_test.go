@@ -127,12 +127,12 @@ func TestCodexClient_FetchUsage_ContextCancelled(t *testing.T) {
 
 func TestCodexClient_FetchUsage_FallbacksToWhamOnCodexPath404(t *testing.T) {
 	var gotPath atomic.Value
-	var gotChatClaudeAccount atomic.Value
+	var gotChatGPTAccount atomic.Value
 	var gotXAccount atomic.Value
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath.Store(r.URL.Path)
-		gotChatClaudeAccount.Store(r.Header.Get("ChatClaude-Account-Id"))
+		gotChatGPTAccount.Store(r.Header.Get("ChatGPT-Account-Id"))
 		gotXAccount.Store(r.Header.Get("X-Account-Id"))
 		switch r.URL.Path {
 		case "/api/codex/usage":
@@ -164,9 +164,9 @@ func TestCodexClient_FetchUsage_FallbacksToWhamOnCodexPath404(t *testing.T) {
 	if path != "/backend-api/wham/usage" {
 		t.Fatalf("last request path = %q, want /backend-api/wham/usage", path)
 	}
-	chatClaudeAccount, _ := gotChatClaudeAccount.Load().(string)
-	if chatClaudeAccount != "acct_123" {
-		t.Fatalf("ChatClaude-Account-Id = %q, want acct_123", chatClaudeAccount)
+	chatGPTAccount, _ := gotChatGPTAccount.Load().(string)
+	if chatGPTAccount != "acct_123" {
+		t.Fatalf("ChatGPT-Account-Id = %q, want acct_123", chatGPTAccount)
 	}
 	xAccount, _ := gotXAccount.Load().(string)
 	if xAccount != "acct_123" {

@@ -140,6 +140,7 @@ type codexParseState struct {
 	currentReasoningEffort string
 	currentMode            string
 	currentFastMode        *bool
+	currentSpeedSource     string
 	partial                []byte
 	fileInfo               os.FileInfo
 	checkpoint             [sha256.Size]byte
@@ -214,6 +215,24 @@ func parseCodexUsageFile(path string, pricing *PricingMap, state codexParseState
 			}
 			if fastMode, ok := boolValue(payload, "fast_mode", "fastMode", "use_fast_model", "useFastModel"); ok {
 				next.currentFastMode = &fastMode
+				next.currentSpeedSource = "codex_turn_context"
+			}
+			continue
+		}
+		if firstString(obj, "type") == "event_msg" && firstString(payload, "type") == "thread_settings_applied" {
+			tier := firstString(object(payload["thread_settings"]), "service_tier")
+			switch tier {
+			case "fast", "priority":
+				fast := true
+				next.currentFastMode = &fast
+				next.currentSpeedSource = "codex_thread_settings"
+			case "default":
+				fast := false
+				next.currentFastMode = &fast
+				next.currentSpeedSource = "codex_thread_settings"
+			default:
+				next.currentFastMode = nil
+				next.currentSpeedSource = "unknown"
 			}
 			continue
 		}
@@ -271,7 +290,10 @@ func parseCodexUsageFile(path string, pricing *PricingMap, state codexParseState
 			} else {
 				speedMode = "standard"
 			}
-			speedSource = "codex_turn_context"
+			speedSource = next.currentSpeedSource
+			if speedSource == "" {
+				speedSource = "codex_turn_context"
+			}
 		}
 		event := UsageEvent{
 			Timestamp:           timeValue(obj, "timestamp", "ts"),
@@ -294,11 +316,8 @@ func parseCodexUsageFile(path string, pricing *PricingMap, state codexParseState
 			SourcePath:          path,
 			UsageSignature:      contentSignature,
 		}
-		costOptions := codexCostOptions(event.Model, counts)
-		longContext := costOptions.InputMultiplier > 0 || costOptions.OutputMultiplier > 0
-		if !longContext && speedMode == "fast" {
-			costOptions.CostMultiplier = codexFastModeCostMultiplier(event.Model)
-		}
+		event.QuotaTelemetry = codexQuotaTelemetry(object(payload["rate_limits"]))
+		costOptions := CodexCostOptions(event.Model, counts, speedMode == "fast")
 		event.SpeedMultiplier = costOptions.CostMultiplier
 		event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, costOptions)
 		events = append(events, event)
@@ -483,7 +502,7 @@ func codexUsageSignature(usage map[string]any) string {
 func codexFastModeCostMultiplier(model string) float64 {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	switch {
-	case strings.HasPrefix(normalized, "gpt-5.6"):
+	case strings.HasPrefix(normalized, "gpt-6-astra"), strings.HasPrefix(normalized, "gpt-5.6"):
 		return 2
 	case strings.HasPrefix(normalized, "gpt-5.5"):
 		return 2.5
@@ -494,13 +513,19 @@ func codexFastModeCostMultiplier(model string) float64 {
 	}
 }
 
-func codexCostOptions(model string, counts TokenCounts) CostOptions {
+// CodexCostOptions shares request-size and speed pricing with historical backfills.
+func CodexCostOptions(model string, counts TokenCounts, fast bool) CostOptions {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	requestInput := counts.InputTokens + counts.CachedInputTokens + counts.CacheCreationTokens
-	if strings.HasPrefix(normalized, "gpt-5.6") && requestInput > 272_000 {
-		return CostOptions{InputMultiplier: 2, OutputMultiplier: 1.5}
+	astra := strings.HasPrefix(normalized, "gpt-6-astra")
+	opts := CostOptions{}
+	if (astra || strings.HasPrefix(normalized, "gpt-5.6")) && requestInput > 272_000 {
+		opts.InputMultiplier, opts.OutputMultiplier = 2, 1.5
 	}
-	return CostOptions{}
+	if fast && (astra || opts.InputMultiplier == 0) {
+		opts.CostMultiplier = codexFastModeCostMultiplier(model)
+	}
+	return opts
 }
 
 func ParseGeminiUsageFile(path, source, provider string, pricing *PricingMap) ([]UsageEvent, error) {
@@ -1126,4 +1151,29 @@ func defaultAntigravityModel(provider string) string {
 	default:
 		return "unknown"
 	}
+}
+
+// Keep only quota counters and plan, never account identifiers or credit balances.
+func codexQuotaTelemetry(limits map[string]any) map[string]any {
+	if firstString(limits, "limit_id") != "codex" {
+		return nil
+	}
+	out := map[string]any{"plan": firstString(limits, "plan_type")}
+	for _, key := range []string{"primary", "secondary"} {
+		w := object(limits[key])
+		minutes := intValue(w, "window_minutes")
+		name := ""
+		if minutes == 10080 {
+			name = "seven_day"
+		} else if minutes == 300 {
+			name = "five_hour"
+		}
+		if name != "" {
+			out[name] = map[string]any{"used": w["used_percent"], "reset": w["resets_at"]}
+		}
+	}
+	if len(out) == 1 {
+		return nil
+	}
+	return out
 }

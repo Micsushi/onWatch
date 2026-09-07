@@ -8,6 +8,34 @@ import (
 	"time"
 )
 
+func TestAuditCollectorRetriesAfterOutputFailure(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "claude.jsonl")
+	writeFixture(t, source, []string{`{"timestamp":"2026-05-25T12:34:56Z","sessionId":"s1","requestId":"req_1","message":{"id":"m1","model":"claude-sonnet-4-5","usage":{"input_tokens":100,"output_tokens":10}}}`})
+	out := filepath.Join(dir, "out")
+	if err := os.MkdirAll(out, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(out, "agent-usage-"+time.Now().UTC().Format("2006-01-02")+".jsonl")
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	c := NewCollector(out, testPricing(t), []Source{{Kind: SourceClaude, Path: source}}, nil)
+	if c.CollectOnce() == nil {
+		t.Fatal("expected output failure")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CollectOnce(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		t.Fatalf("failed write lost usage: %v", err)
+	}
+}
+
 func TestCollectorWritesNormalizedJSONLAndSkipsAlreadySeenEvents(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "claude.jsonl")
@@ -738,4 +766,19 @@ func TestCollectorAntigravityClearsStateForDeletedCachedPath(t *testing.T) {
 	if _, ok := collector.antigravity[source]; ok {
 		t.Fatal("deleted cached path retained stale Antigravity state")
 	}
+}
+
+func TestDefaultSourcesIncludesArchivedCodexBackfill(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "archived_sessions")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ONWATCH_AGENT_USAGE_INITIAL_BACKFILL", "1")
+	for _, source := range DefaultSources(home) {
+		if source.Path == path && source.Kind == SourceCodex && source.InitialBackfill {
+			return
+		}
+	}
+	t.Fatal("archived Codex sessions missing from backfill sources")
 }

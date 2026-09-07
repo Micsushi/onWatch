@@ -61,6 +61,73 @@ func NewSpool(dir string, maxBytes int64) (*Spool, error) {
 	return spool, nil
 }
 
+// Preserve interrupted writes before removing only their incomplete suffix.
+func (s *Spool) recoverPartialTails() error {
+	files, err := s.eventFiles()
+	if err != nil {
+		return err
+	}
+	for _, name := range files {
+		path := filepath.Join(s.dir, name)
+		file, err := os.OpenFile(path, os.O_RDWR, 0600)
+		if err != nil {
+			return err
+		}
+		info, err := file.Stat()
+		if err != nil {
+			file.Close()
+			return err
+		}
+		start := info.Size() - int64(ingest.MaxEventBytes+4096)
+		if start < 0 {
+			start = 0
+		}
+		tail := make([]byte, info.Size()-start)
+		_, err = file.ReadAt(tail, start)
+		if err != nil && err != io.EOF {
+			file.Close()
+			return err
+		}
+		if len(tail) == 0 || tail[len(tail)-1] == '\n' {
+			file.Close()
+			continue
+		}
+		cut := strings.LastIndexByte(string(tail), '\n') + 1
+		if cut == 0 && start != 0 {
+			file.Close()
+			return fmt.Errorf("oversized incomplete spool record")
+		}
+		backup, err := os.CreateTemp(s.dir, "partial-*.jsonl")
+		if err != nil {
+			file.Close()
+			return err
+		}
+		if err = backup.Chmod(0600); err == nil {
+			_, err = backup.Write(tail[cut:])
+		}
+		if err == nil {
+			err = backup.Sync()
+		}
+		closeErr := backup.Close()
+		if err != nil {
+			file.Close()
+			return err
+		}
+		if closeErr != nil {
+			file.Close()
+			return closeErr
+		}
+		if err = file.Truncate(start + int64(cut)); err == nil {
+			err = file.Sync()
+		}
+		file.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Spool) Append(event ingest.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,6 +144,30 @@ func (s *Spool) Append(event ingest.Event) error {
 		return fmt.Errorf("collector spool full; upload must recover before collection resumes")
 	}
 	path := filepath.Join(s.dir, "events-"+time.Now().UTC().Format("2006-01-02")+".jsonl")
+	// A crash can leave an incomplete record. Refuse to concatenate another
+	// event onto it; the source must retain the new event until repair.
+	if tail, err := os.Open(path); err == nil {
+		info, statErr := tail.Stat()
+		if statErr != nil {
+			tail.Close()
+			return statErr
+		}
+		if info.Size() > 0 {
+			var last [1]byte
+			_, readErr := tail.ReadAt(last[:], info.Size()-1)
+			if readErr != nil {
+				tail.Close()
+				return readErr
+			}
+			if last[0] != '\n' {
+				tail.Close()
+				return fmt.Errorf("collector spool has incomplete final record; repair required")
+			}
+		}
+		tail.Close()
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
@@ -128,8 +219,8 @@ func (s *Spool) Batch(limit int, maxBytes int64) ([]SpoolRecord, error) {
 			}
 			var event ingest.Event
 			if json.Unmarshal(line, &event) != nil {
-				position -= int64(len(line))
-				break
+				file.Close()
+				return nil, fmt.Errorf("collector spool contains invalid record in %s", name)
 			}
 			records = append(records, SpoolRecord{Event: event, File: name, EndOffset: position})
 			total += int64(len(line))

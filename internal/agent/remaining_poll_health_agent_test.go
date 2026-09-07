@@ -182,7 +182,7 @@ func newRemainingPollHealthHarness(t *testing.T, provider string, fail *atomic.B
 
 func TestRemainingProviderPollHealthFailureAndRecovery(t *testing.T) {
 	for _, provider := range []string{
-		"synthetic", "zai", "copilot", "minimax", "openrouter", "cursor",
+		"synthetic", "zai", "copilot", "antigravity", "minimax", "openrouter", "gemini", "cursor",
 	} {
 		t.Run(provider, func(t *testing.T) {
 			var fail atomic.Bool
@@ -209,7 +209,7 @@ func TestRemainingProviderPollHealthFailureAndRecovery(t *testing.T) {
 
 func TestRemainingProviderPollHealthRegistersAndSkipsDisabled(t *testing.T) {
 	for _, provider := range []string{
-		"synthetic", "zai", "copilot", "minimax", "openrouter", "cursor",
+		"synthetic", "zai", "copilot", "antigravity", "minimax", "openrouter", "gemini", "cursor",
 	} {
 		t.Run(provider, func(t *testing.T) {
 			var fail atomic.Bool
@@ -248,7 +248,7 @@ func TestRemainingProviderPollHealthRegistersAndSkipsDisabled(t *testing.T) {
 
 func TestRemainingProviderPollHealthCanceledPollIsSkipped(t *testing.T) {
 	for _, provider := range []string{
-		"synthetic", "zai", "copilot", "minimax", "openrouter", "cursor",
+		"synthetic", "zai", "copilot", "antigravity", "minimax", "openrouter", "gemini", "cursor",
 	} {
 		t.Run(provider, func(t *testing.T) {
 			var fail atomic.Bool
@@ -268,12 +268,13 @@ func TestRemainingProviderPollHealthCanceledPollIsSkipped(t *testing.T) {
 
 func TestRemainingProviderPollHealthStoreFailurePreservesExistingDownstreamFlow(t *testing.T) {
 	preservesDownstream := map[string]bool{
-		"copilot": true,
-		"minimax": true,
-		"cursor":  true,
+		"copilot":     true,
+		"antigravity": true,
+		"minimax":     true,
+		"cursor":      true,
 	}
 	for _, provider := range []string{
-		"synthetic", "zai", "copilot", "minimax", "openrouter", "cursor",
+		"synthetic", "zai", "copilot", "antigravity", "minimax", "openrouter", "gemini", "cursor",
 	} {
 		t.Run(provider, func(t *testing.T) {
 			var fail atomic.Bool
@@ -292,60 +293,6 @@ func TestRemainingProviderPollHealthStoreFailurePreservesExistingDownstreamFlow(
 				t.Fatalf("quota checks = 0, want preexisting downstream processing after %s storage failure", provider)
 			}
 		})
-	}
-}
-
-func TestAntigravityDoesNotReportPollHealth(t *testing.T) {
-	var fail atomic.Bool
-	fail.Store(true)
-	h := newRemainingPollHealthHarness(t, "antigravity", &fail)
-
-	h.poll(context.Background())
-	fail.Store(false)
-	h.poll(context.Background())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := h.run(ctx); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	got := h.spy.snapshot()
-	if len(got.registered)+len(got.unregistered)+len(got.failures)+len(got.successes)+len(got.skips) != 0 {
-		t.Fatalf(
-			"poll health calls = registered:%d unregistered:%d failures:%d successes:%d skips:%d, want none",
-			len(got.registered), len(got.unregistered), len(got.failures), len(got.successes), len(got.skips),
-		)
-	}
-	if len(got.checks) == 0 {
-		t.Fatal("quota notifications were disabled with poll health")
-	}
-}
-
-func TestGeminiDoesNotReportPollHealth(t *testing.T) {
-	var fail atomic.Bool
-	fail.Store(true)
-	h := newRemainingPollHealthHarness(t, "gemini", &fail)
-
-	h.poll(context.Background())
-	fail.Store(false)
-	h.poll(context.Background())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := h.run(ctx); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	got := h.spy.snapshot()
-	if len(got.registered)+len(got.unregistered)+len(got.failures)+len(got.successes)+len(got.skips) != 0 {
-		t.Fatalf(
-			"poll health calls = registered:%d unregistered:%d failures:%d successes:%d skips:%d, want none",
-			len(got.registered), len(got.unregistered), len(got.failures), len(got.successes), len(got.skips),
-		)
-	}
-	if len(got.checks) == 0 {
-		t.Fatal("quota notifications were disabled with poll health")
 	}
 }
 
@@ -385,7 +332,7 @@ func TestSyntheticAgentPollHealthInFlightCancellationIsSkipped(t *testing.T) {
 	}
 }
 
-func TestGeminiSuccessfulRetryDoesNotReportPollHealth(t *testing.T) {
+func TestGeminiSuccessfulRetryReportsOneSuccess(t *testing.T) {
 	var quotaRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -431,13 +378,13 @@ func TestGeminiSuccessfulRetryDoesNotReportPollHealth(t *testing.T) {
 	if quotaRequests.Load() != 2 {
 		t.Fatalf("quota requests = %d, want initial request plus retry", quotaRequests.Load())
 	}
-	if len(got.failures) != 0 || len(got.successes) != 0 || got.directAuthCalls != 0 {
-		t.Fatalf("failures=%#v successes=%#v directAuth=%d, want no poll-health notification",
+	if len(got.failures) != 0 || len(got.successes) != 1 || got.directAuthCalls != 0 {
+		t.Fatalf("failures=%#v successes=%#v directAuth=%d, want one poll-health success",
 			got.failures, got.successes, got.directAuthCalls)
 	}
 }
 
-func TestGeminiAuthPauseDoesNotReportPollHealth(t *testing.T) {
+func TestGeminiAuthPauseReportsAttemptedPollsAndLeavesLaterTickForMonitor(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1internal:loadCodeAssist":
@@ -475,8 +422,8 @@ func TestGeminiAuthPauseDoesNotReportPollHealth(t *testing.T) {
 	if !ag.authPaused {
 		t.Fatal("expected Gemini polling to pause")
 	}
-	if len(got.failures) != 0 || len(got.skips) != 0 || got.directAuthCalls != 0 {
-		t.Fatalf("failures=%d skips=%d directAuth=%d, want no poll-health notification",
+	if len(got.failures) != maxGeminiAuthFailures || len(got.skips) != 0 || got.directAuthCalls != 0 {
+		t.Fatalf("failures=%d skips=%d directAuth=%d, want one failure per attempted poll and no paused-tick outcome",
 			len(got.failures), len(got.skips), got.directAuthCalls)
 	}
 }

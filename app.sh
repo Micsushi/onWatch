@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VERSION=$(cat "$SCRIPT_DIR/VERSION")
+VERSION=${ONWATCH_BUILD_VERSION:-$(cat "$SCRIPT_DIR/VERSION")}
 BINARY="onwatch"
 DARWIN_FULL_TAGS="menubar,desktop,production"
 DARWIN_CGO_LDFLAGS="-framework UniformTypeIdentifiers -Wl,-no_warn_duplicate_libraries"

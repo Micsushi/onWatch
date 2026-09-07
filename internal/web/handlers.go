@@ -87,38 +87,38 @@ type MiniMaxAccountReloader interface {
 
 // Handler handles HTTP requests for the web dashboard
 type Handler struct {
-	store                *store.Store
-	tracker              *tracker.Tracker
-	zaiTracker           *tracker.ZaiTracker
-	anthropicTracker     *tracker.AnthropicTracker
-	copilotTracker       *tracker.CopilotTracker
-	codexTracker         *tracker.CodexTracker
+	store                 *store.Store
+	tracker               *tracker.Tracker
+	zaiTracker            *tracker.ZaiTracker
+	anthropicTracker      *tracker.AnthropicTracker
+	copilotTracker        *tracker.CopilotTracker
+	codexTracker          *tracker.CodexTracker
 	antigravityTracker    *tracker.AntigravityTracker
 	antigravityWakeRunner *agent.AntigravityWakeRunner
 	minimaxTracker        *tracker.MiniMaxTracker
-	geminiTracker        *tracker.GeminiTracker
-	openrouterTracker    *tracker.OpenRouterTracker
-	cursorTracker        *tracker.CursorTracker
-	updater              *update.Updater
-	notifier             Notifier
-	agentManager         ProviderAgentController
-	minimaxAgentMgr      MiniMaxAccountReloader
-	logger               *slog.Logger
-	dashboardTmpl        *template.Template
-	loginTmpl            *template.Template
-	settingsTmpl         *template.Template
-	sessions             *SessionStore
-	config               *config.Config
-	metrics              *metrics.Metrics
-	version              string
-	smtpTestMu           sync.Mutex
-	smtpTestLastSent     time.Time
-	pushTestMu           sync.Mutex
-	pushTestLastSent     time.Time
-	discordTestMu        sync.Mutex
-	discordTestLastSent  time.Time
-	rateLimiter          *LoginRateLimiter // Per-IP rate limiting for login attempts
-	apiIntegrationsCache apiIntegrationResponseCache
+	geminiTracker         *tracker.GeminiTracker
+	openrouterTracker     *tracker.OpenRouterTracker
+	cursorTracker         *tracker.CursorTracker
+	updater               *update.Updater
+	notifier              Notifier
+	agentManager          ProviderAgentController
+	minimaxAgentMgr       MiniMaxAccountReloader
+	logger                *slog.Logger
+	dashboardTmpl         *template.Template
+	loginTmpl             *template.Template
+	settingsTmpl          *template.Template
+	sessions              *SessionStore
+	config                *config.Config
+	metrics               *metrics.Metrics
+	version               string
+	smtpTestMu            sync.Mutex
+	smtpTestLastSent      time.Time
+	pushTestMu            sync.Mutex
+	pushTestLastSent      time.Time
+	discordTestMu         sync.Mutex
+	discordTestLastSent   time.Time
+	rateLimiter           *LoginRateLimiter // Per-IP rate limiting for login attempts
+	apiIntegrationsCache  apiIntegrationResponseCache
 }
 
 // DefaultCodexAccountID is the default account ID for single-account setups.
@@ -8736,36 +8736,53 @@ func (h *Handler) historyAntigravity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	step := downsampleStep(len(snapshots), maxChartPoints)
-	var labels []string
-	for i := 0; i < len(snapshots); i += step {
-		labels = append(labels, snapshots[i].CapturedAt.Format(time.RFC3339))
-	}
-
-	groupKeys := api.AntigravityQuotaGroupOrder()
-	groupedSeries := make(map[string][]float64, len(groupKeys))
-	for _, key := range groupKeys {
-		groupedSeries[key] = make([]float64, 0, len(labels))
-	}
-
-	for i := 0; i < len(snapshots); i += step {
-		groups := api.GroupAntigravityModelsByLogicalQuota(snapshots[i].Models)
-		valueByGroup := make(map[string]float64, len(groups))
-		for _, g := range groups {
-			valueByGroup[g.GroupKey] = g.UsagePercent
-		}
-		for _, key := range groupKeys {
-			groupedSeries[key] = append(groupedSeries[key], valueByGroup[key])
+	selected := make([]*api.AntigravitySnapshot, 0, maxChartPoints+1)
+	for i, snapshot := range snapshots {
+		if i%step == 0 || i == len(snapshots)-1 {
+			selected = append(selected, snapshot)
 		}
 	}
-
-	datasets := make([]map[string]interface{}, 0, len(groupKeys))
-	for _, key := range groupKeys {
+	labels := make([]string, len(selected))
+	type historySeries struct {
+		key, label, window, color string
+		values                    []*float64
+	}
+	series := map[string]*historySeries{}
+	add := func(index int, group, label, window string, usage float64) {
+		key := group + ":" + window
+		if series[key] == nil {
+			series[key] = &historySeries{key: key, label: label + " · " + api.AntigravityQuotaWindowLabel(window), window: window, color: api.AntigravityQuotaGroupColor(group), values: make([]*float64, len(selected))}
+		}
+		series[key].values[index] = &usage
+	}
+	for i, snapshot := range selected {
+		labels[i] = snapshot.CapturedAt.Format(time.RFC3339Nano)
+		if len(snapshot.SummaryGroups) > 0 {
+			for _, group := range snapshot.SummaryGroups {
+				for _, bucket := range group.Buckets {
+					add(i, group.GroupKey, group.DisplayName, bucket.Window, 100-bucket.RemainingFraction*100)
+				}
+			}
+			continue
+		}
+		// Legacy captures have model quotas only. Never combine their reset windows.
+		for _, group := range api.GroupAntigravityModelsByLogicalQuota(snapshot.Models) {
+			for _, window := range group.Windows {
+				add(i, group.GroupKey, group.DisplayName, window.Kind, window.UsagePercent)
+			}
+		}
+	}
+	keys := make([]string, 0, len(series))
+	for key := range series {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	datasets := make([]map[string]interface{}, 0, len(keys))
+	for _, key := range keys {
+		item := series[key]
 		datasets = append(datasets, map[string]interface{}{
-			"modelId":     key,
-			"label":       api.AntigravityQuotaGroupDisplayName(key),
-			"data":        groupedSeries[key],
-			"borderColor": api.AntigravityQuotaGroupColor(key),
-			"fill":        false,
+			"modelId": item.key, "label": item.label, "windowKind": item.window,
+			"data": item.values, "borderColor": item.color, "fill": false,
 		})
 	}
 

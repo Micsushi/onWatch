@@ -20,11 +20,12 @@ import (
 
 // CodexProfile represents a saved Codex credential profile.
 type CodexProfile struct {
-	Name      string    `json:"name"`
-	AccountID string    `json:"account_id"` // Codex's account ID (string from API)
-	UserID    string    `json:"user_id,omitempty"`
-	SavedAt   time.Time `json:"saved_at"`
-	Tokens    struct {
+	Name           string    `json:"name"`
+	CredentialHome string    `json:"credential_home,omitempty"`
+	AccountID      string    `json:"account_id"` // Codex's account ID (string from API)
+	UserID         string    `json:"user_id,omitempty"`
+	SavedAt        time.Time `json:"saved_at"`
+	Tokens         struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 		IDToken      string `json:"id_token"`
@@ -214,7 +215,9 @@ func (m *CodexAgentManager) loadAndStartProfiles() error {
 		// Track file modification time
 		if info, err := entry.Info(); err == nil {
 			profileName := strings.TrimSuffix(entry.Name(), ".json")
+			m.mu.Lock()
 			m.lastScanProfiles[profileName] = info.ModTime()
+			m.mu.Unlock()
 		}
 	}
 
@@ -257,7 +260,10 @@ func (m *CodexAgentManager) loadAndStartProfile(path string) error {
 
 func codexCredentialsFromProfile(profile CodexProfile) *api.CodexCredentials {
 	idToken := strings.TrimSpace(profile.Tokens.IDToken)
-	expiresAt := api.ParseIDTokenExpiry(idToken)
+	expiresAt := api.ParseIDTokenExpiry(strings.TrimSpace(profile.Tokens.AccessToken))
+	if expiresAt.IsZero() {
+		expiresAt = api.ParseIDTokenExpiry(idToken)
+	}
 	var expiresIn time.Duration
 	if !expiresAt.IsZero() {
 		expiresIn = time.Until(expiresAt)
@@ -294,6 +300,16 @@ func readCodexProfileCredentials(profilePath string) *api.CodexCredentials {
 	return codexCredentialsFromProfile(profile)
 }
 
+func readCodexOwnedCredentials(profile CodexProfile) *api.CodexCredentials {
+	owned := api.ReadCodexCredentialsFromHome(profile.CredentialHome)
+	if owned == nil || strings.TrimSpace(profile.AccountID) == "" || owned.AccountID != profile.AccountID {
+		return nil
+	}
+	if profile.UserID != "" && owned.UserID != profile.UserID {
+		return nil
+	}
+	return owned
+}
 func shouldUseSystemCredsForProfile(profileCreds, systemCreds *api.CodexCredentials, expectedAccountID, expectedUserID string) bool {
 	if systemCreds == nil {
 		return false
@@ -479,6 +495,7 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 
 	// Create client for this profile
 	client := api.NewCodexClient(creds.AccessToken, nil)
+	client.SetAccountID(creds.AccountID)
 
 	// Create session manager for this profile
 	sm := NewSessionManager(m.store, fmt.Sprintf("codex:%d", dbAccount.ID), 5*time.Minute, m.logger)
@@ -494,6 +511,12 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 	isDefaultProfile := profile.Name == "default"
 
 	agent.SetTokenRefresh(func() string {
+		if profile.CredentialHome != "" {
+			if owned := readCodexOwnedCredentials(profile); owned != nil {
+				return owned.AccessToken
+			}
+			return ""
+		}
 		if isDefaultProfile {
 			if systemCreds := api.DetectCodexCredentials(m.logger); systemCreds != nil {
 				return systemCreds.AccessToken
@@ -532,6 +555,9 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 	})
 
 	agent.SetCredentialsRefresh(func() *api.CodexCredentials {
+		if profile.CredentialHome != "" {
+			return readCodexOwnedCredentials(profile)
+		}
 		if isDefaultProfile {
 			return api.DetectCodexCredentials(m.logger)
 		}
@@ -555,6 +581,9 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 
 		return profileCreds
 	})
+	// Credential snapshots may share a rotating grant with Codex or Quota Wake.
+	// Only an explicitly isolated login may opt into direct token rotation.
+	agent.tokenRotation = strings.EqualFold(os.Getenv("CODEX_TOKEN_ROTATION"), "on") && profile.CredentialHome == ""
 
 	// Token save: named profiles write to their profile file, default writes to global auth.json.
 	// After writing, update lastScanProfiles so the profile scanner doesn't
@@ -697,7 +726,9 @@ func (m *CodexAgentManager) scanForProfileChanges() {
 			continue
 		}
 
+		m.mu.RLock()
 		lastMod, known := m.lastScanProfiles[profileName]
+		m.mu.RUnlock()
 		if !known || info.ModTime().After(lastMod) {
 			// New or modified profile
 			profilePath := filepath.Join(m.profilesDir, entry.Name())
@@ -714,7 +745,9 @@ func (m *CodexAgentManager) scanForProfileChanges() {
 				m.logger.Warn("failed to start agent for profile", "profile", profileName, "error", err)
 			}
 
+			m.mu.Lock()
 			m.lastScanProfiles[profileName] = info.ModTime()
+			m.mu.Unlock()
 		}
 	}
 
@@ -733,7 +766,9 @@ func (m *CodexAgentManager) scanForProfileChanges() {
 		if _, err := os.Stat(profilePath); os.IsNotExist(err) {
 			m.logger.Info("profile deleted, stopping agent", "profile", name)
 			m.stopAgent(name)
+			m.mu.Lock()
 			delete(m.lastScanProfiles, name)
+			m.mu.Unlock()
 			// Mark the provider account as deleted in the database
 			if m.store != nil {
 				if err := m.store.MarkProviderAccountDeleted("codex", name); err != nil {

@@ -152,7 +152,7 @@ func (c *CodexClient) doUsageRequest(ctx context.Context, usageURL string) (*htt
 	req.Header.Set("User-Agent", "onwatch/1.0")
 	if accountID := c.getAccountID(); accountID != "" {
 		req.Header.Set("X-Account-Id", accountID)
-		req.Header.Set("ChatClaude-Account-Id", accountID)
+		req.Header.Set("ChatGPT-Account-Id", accountID)
 	}
 
 	resp, err := c.httpClient.Do(req)

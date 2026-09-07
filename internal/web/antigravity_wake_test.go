@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/agent"
+	"github.com/onllm-dev/onwatch/v2/internal/api"
 )
 
 func TestAntigravityWakeStatus(t *testing.T) {
@@ -119,6 +120,9 @@ func TestAntigravityWakeTrigger(t *testing.T) {
 		})
 		runner.SetExecutor(func(ctx context.Context, name string, env []string, args ...string) ([]byte, error) {
 			return []byte(`{"conversationId":"conv-trigger-1"}`), nil
+		})
+		runner.SetConnectionResolver(func(context.Context) (*api.AntigravityConnection, error) {
+			return &api.AntigravityConnection{Port: 12345, CSRFToken: "test"}, nil
 		})
 		h.SetAntigravityWakeRunner(runner)
 

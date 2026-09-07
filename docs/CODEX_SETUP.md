@@ -227,6 +227,20 @@ Refresh your Codex login so `auth.json` has a new access token, then restart onW
 
 ### Token security
 
+onWatch reads shared Codex credentials without rotating their refresh tokens.
+For a named profile maintained by another Codex installation or Quota Wake,
+add `"credential_home": "<absolute CODEX_HOME directory>"` to its local profile
+JSON. The account and user identity must match the saved profile. Credentials
+are reread on each poll, and refresh tokens are never borrowed from that home.
+
+Direct rotation is available only with `CODEX_TOKEN_ROTATION=on` for an isolated
+login that no other process uses. A profile with `credential_home` always stays
+read-only. Log in through the credential owner when its grant expires.
+
+For collector assignments, `credential_alias` may name a local environment
+variable containing that account's CODEX_HOME directory. The runner verifies
+the assigned external account identity before submitting quota observations.
+
 - Keep `.env` out of version control
 - onWatch only sends the token to Codex usage endpoints
 - Usage history stays local in SQLite

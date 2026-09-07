@@ -34,6 +34,7 @@ services:
       ONWATCH_CENTRAL_SERVER: "true"
       ONWATCH_API_INTEGRATIONS_ENABLED: "false"
     ports:
+      - "127.0.0.1:${ONWATCH_DASHBOARD_HOST_PORT:-9213}:9211"
       - "127.0.0.1:${ONWATCH_INGEST_HOST_PORT:-9212}:9212"
     expose:
       - "9211"

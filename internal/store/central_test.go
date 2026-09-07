@@ -11,6 +11,68 @@ import (
 	"github.com/onllm-dev/onwatch/v2/internal/ingest"
 )
 
+func TestCentralCodexExternalAccountsStaySeparate(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "central.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	device, _, err := s.CreateDevice("laptop", "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, externalID := range []string{"account-work", "account-personal"} {
+		if err := s.SetPollOwner("codex", externalID, "device", device.ID); err != nil {
+			t.Fatal(err)
+		}
+		payload, _ := json.Marshal(ingest.QuotaSnapshot{Version: 1, Metrics: []ingest.QuotaMetric{{Name: "weekly", Value: 42, Unit: "percent"}}})
+		event := ingest.Event{EventID: "evt_" + externalID, Kind: "quota_snapshot", CapturedAt: now, Provider: "codex", Account: ingest.Account{ExternalID: externalID}, Payload: payload}
+		results, err := s.StoreIngestBatch(device, []ingest.Event{event}, now)
+		if err != nil || len(results) != 1 || results[0].Status != "accepted" {
+			t.Fatalf("result=%v err=%v", results, err)
+		}
+	}
+	var distinct int
+	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT account_id) FROM codex_snapshots`).Scan(&distinct); err != nil || distinct != 2 {
+		t.Fatalf("distinct accounts=%d err=%v", distinct, err)
+	}
+}
+
+func TestCentralExportProvenanceUsesLocalRecordLookup(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "central.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN SELECT source.id, record.origin_id
+		FROM anthropic_snapshots source LEFT JOIN data_transfer_records record ON record.rowid = (
+		SELECT candidate.rowid FROM data_transfer_records candidate
+		WHERE candidate.table_name = ? AND candidate.local_record_id = CAST(source.id AS TEXT)
+		ORDER BY candidate.origin_id, candidate.origin_record_id LIMIT 1) ORDER BY source.id`, "anthropic_snapshots")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	indexed := false
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(detail, "candidate") && strings.Contains(detail, "local_record_id=?") {
+			indexed = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !indexed {
+		t.Fatal("export scans provider history for every source row")
+	}
+}
+
 func TestCentralIngestMirrorsQuotaAndTracksEnrichment(t *testing.T) {
 	s, err := New(filepath.Join(t.TempDir(), "central.db"))
 	if err != nil {

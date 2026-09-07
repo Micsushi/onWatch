@@ -65,3 +65,24 @@ func TestCentralS2F1T5(t *testing.T) {
 		t.Fatalf("unacknowledged event was lost: %d %v", len(records), err)
 	}
 }
+
+func BenchmarkSpoolBoundedBatch(b *testing.B) {
+	spool, err := NewSpool(b.TempDir(), 4<<20)
+	if err != nil {
+		b.Fatal(err)
+	}
+	event := ingest.Event{EventID: "evt_resource", Kind: "quota_snapshot", CapturedAt: time.Now().UTC(), Provider: "openai", Account: ingest.Account{ExternalID: "test"}, Payload: json.RawMessage(`{"version":1,"metrics":[{"name":"weekly","value":1,"unit":"percent"}]}`)}
+	for range 1000 {
+		if err := spool.Append(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		records, err := spool.Batch(100, 64<<10)
+		if err != nil || len(records) != 100 {
+			b.Fatalf("bounded batch: %d %v", len(records), err)
+		}
+	}
+}

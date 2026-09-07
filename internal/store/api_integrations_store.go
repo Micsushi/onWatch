@@ -235,6 +235,9 @@ func (s *Store) InsertAPIIntegrationUsageEvent(event *apiintegrations.UsageEvent
 	if event == nil {
 		return 0, fmt.Errorf("API integration usage event is nil")
 	}
+	if err := s.recordSubscriptionTelemetry(event); err != nil {
+		return 0, err
+	}
 	metadata, storedMetadataJSON := normalizedAPIIntegrationMetadata(event)
 	res, err := s.db.Exec(`
 		INSERT INTO api_integration_usage_events (

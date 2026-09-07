@@ -691,3 +691,24 @@ func TestTransferSchemaCreatesStableInstallationAndProvenance(t *testing.T) {
 		t.Fatalf("query transfer state: %v", err)
 	}
 }
+
+func TestTransferRejectsRawAndHourlyOverlap(t *testing.T) {
+	source := newTransferTestStore(t)
+	destination := newTransferTestStore(t)
+	insertAPIIntegrationUsageEventForTest(t, source, `{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"cost_usd":0.25}`, "test")
+	raw := exportTransferBytes(t, source)
+	if _, err := destination.ImportData(bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.CompactAPIIntegrationUsageEvents(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	hourly := exportTransferBytes(t, source)
+	if _, err := destination.ImportData(bytes.NewReader(hourly)); err == nil {
+		t.Fatal("overlap silently doubled usage")
+	}
+	var count int
+	if err := destination.db.QueryRow(`SELECT COUNT(*) FROM api_integration_usage_hourly`).Scan(&count); err != nil || count != 0 {
+		t.Fatal("failed import was not atomic")
+	}
+}

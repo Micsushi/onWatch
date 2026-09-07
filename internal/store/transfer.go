@@ -67,6 +67,7 @@ type transferTable struct {
 }
 
 var transferTables = []transferTable{
+	{name: "subscription_meter_observations", id: "id", columns: []string{"provider", "account_name", "plan", "quota", "captured_at", "resets_at", "utilization"}},
 	{
 		name: "quota_snapshots",
 		id:   "id",
@@ -881,6 +882,16 @@ func (s *Store) ImportData(r io.Reader) (ImportSummary, error) {
 			return summary, err
 		}
 	}
+	// A raw archive and its later hourly compaction are alternate representations.
+	// Refuse ambiguous overlap rather than silently increasing usage totals.
+	var overlap int
+	err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM api_integration_usage_hourly h JOIN api_integration_usage_events e ON e.integration_name=h.integration_name AND e.account_name=h.account_name AND e.model=h.model AND e.reasoning_effort=h.reasoning_effort AND e.mode=h.mode AND e.speed_mode=h.speed_mode AND e.captured_at COLLATE ONWATCH_RFC3339>=h.first_captured_at COLLATE ONWATCH_RFC3339 AND e.captured_at COLLATE ONWATCH_RFC3339<=h.last_captured_at COLLATE ONWATCH_RFC3339 JOIN data_transfer_records d ON d.table_name='api_integration_usage_events' AND d.local_record_id=CAST(e.id AS TEXT) WHERE d.origin_id=h.origin_scope)`).Scan(&overlap)
+	if err != nil {
+		return summary, err
+	}
+	if overlap != 0 {
+		return summary, fmt.Errorf("store.ImportData: raw and hourly history overlap for the same origin; reconcile the source archive before importing")
+	}
 	if err := tx.Commit(); err != nil {
 		return summary, fmt.Errorf("store.ImportData: commit destination transaction: %w", err)
 	}
@@ -1360,6 +1371,14 @@ func importTransferTable(tx *sql.Tx, source *sql.DB, table transferTable, accoun
 		}
 		if table.name == "api_integration_usage_events" {
 			namespaceAPIIntegrationPayload(payload, origin)
+			var compacted int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM api_integration_usage_compacted_fingerprints WHERE fingerprint=?`, payload["fingerprint"]).Scan(&compacted); err != nil {
+				return err
+			}
+			if compacted > 0 {
+				incrementImportSummary(summary, table.name, "skipped")
+				continue
+			}
 			for index, column := range columns {
 				if column == "fingerprint" || column == "source_path" {
 					values[index] = payload[column]
