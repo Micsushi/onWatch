@@ -14,25 +14,118 @@ import (
 	"github.com/onllm-dev/onwatch/v2/internal/ingest"
 )
 
-func (r *Runtime) collectAssignedQuotas(ctx context.Context) error {
+const maxQuotaPollBackoff = time.Hour
+
+type quotaPollState struct {
+	Failures int       `json:"failures,omitempty"`
+	NextPoll time.Time `json:"next_poll"`
+}
+
+func quotaPollDelay(interval time.Duration, failures int, random float64) time.Duration {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	delay := interval
+	ceiling := max(maxQuotaPollBackoff, interval)
+	for i := 1; i < failures; i++ {
+		if delay >= ceiling || delay > ceiling/2 {
+			delay = ceiling
+			break
+		}
+		delay *= 2
+	}
+	if delay > maxQuotaPollBackoff && interval <= maxQuotaPollBackoff {
+		delay = maxQuotaPollBackoff
+	}
+	if random < 0 {
+		random = 0
+	} else if random > 1 {
+		random = 1
+	}
+	// Spread healthy and retry traffic across a 20% window on either side.
+	delay = time.Duration(float64(delay) * (0.8 + 0.4*random))
+	if interval <= maxQuotaPollBackoff && delay > maxQuotaPollBackoff {
+		return maxQuotaPollBackoff
+	}
+	return delay
+}
+
+func (r *Runtime) quotaNow() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
+}
+
+func (r *Runtime) quotaRandom() float64 {
+	if r.random != nil {
+		return r.random()
+	}
+	return 0.5
+}
+
+func (r *Runtime) collectAssignedQuotas(ctx context.Context) (result error) {
+	if r.quotaPolls == nil {
+		r.quotaPolls = map[string]quotaPollState{}
+	}
+	stateChanged := false
+	active := make(map[string]bool, len(r.desired.Assignments))
 	for _, assignment := range r.desired.Assignments {
+		active[strings.ToLower(assignment.Provider)+"\x00"+assignment.ExternalID] = true
+	}
+	for key := range r.quotaPolls {
+		if !active[key] {
+			delete(r.quotaPolls, key)
+			stateChanged = true
+		}
+	}
+	defer func() {
+		if stateChanged {
+			if err := r.saveLocalState(); err != nil {
+				r.logger.Warn("failed to persist assigned quota poll schedule", "error", err)
+				if result == nil {
+					result = err
+				}
+			}
+		}
+	}()
+	for _, assignment := range r.desired.Assignments {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		interval, err := time.ParseDuration(assignment.PollInterval)
 		if err != nil || interval <= 0 {
 			interval = time.Minute
 		}
 		key := strings.ToLower(assignment.Provider) + "\x00" + assignment.ExternalID
-		if time.Since(r.lastQuotaPoll[key]) < interval {
+		now := r.quotaNow()
+		state := r.quotaPolls[key]
+		if now.Before(state.NextPoll) {
 			continue
 		}
 		event, err := r.pollQuota(ctx, assignment)
-		r.lastQuotaPoll[key] = time.Now()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
+			state.Failures++
+			state.NextPoll = now.Add(quotaPollDelay(interval, state.Failures, r.quotaRandom()))
+			r.quotaPolls[key] = state
+			stateChanged = true
 			r.logger.Warn("assigned quota poll failed", "provider", assignment.Provider, "account", assignment.ExternalID, "error", err)
 			continue
 		}
 		if err := r.spool.Append(event); err != nil {
+			state.Failures++
+			state.NextPoll = now.Add(quotaPollDelay(interval, state.Failures, r.quotaRandom()))
+			r.quotaPolls[key] = state
+			stateChanged = true
 			return err
 		}
+		state.Failures = 0
+		state.NextPoll = now.Add(quotaPollDelay(interval, 0, r.quotaRandom()))
+		r.quotaPolls[key] = state
+		stateChanged = true
 	}
 	return nil
 }

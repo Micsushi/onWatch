@@ -1,0 +1,21 @@
+[Unit]
+Description=onWatch device collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/onwatch collector run
+EnvironmentFile=%h/.config/onwatch/collector.env
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.onwatch/collector-spool
+
+[Install]
+WantedBy=default.target

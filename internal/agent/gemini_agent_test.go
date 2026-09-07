@@ -118,6 +118,108 @@ func TestGeminiAgent_SetNotifier(t *testing.T) {
 	agent.SetPollingCheck(func() bool { return false })
 }
 
+func TestGeminiAuthRetryDelayBacksOffWithJitterAndCap(t *testing.T) {
+	tests := []struct {
+		name    string
+		attempt int
+		random  float64
+		want    time.Duration
+	}{
+		{name: "first low jitter", attempt: 1, random: 0, want: 48 * time.Minute},
+		{name: "first high jitter", attempt: 1, random: 1, want: 72 * time.Minute},
+		{name: "second midpoint", attempt: 2, random: 0.5, want: 2 * time.Hour},
+		{name: "eventual cap", attempt: 20, random: 1, want: 24 * time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := geminiAuthRetryDelay(tt.attempt, tt.random); got != tt.want {
+				t.Fatalf("geminiAuthRetryDelay(%d, %v) = %v, want %v", tt.attempt, tt.random, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGeminiAuthPauseDefersSameCredentialLineage(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	now := time.Date(2026, 9, 3, 8, 0, 0, 0, time.UTC)
+	st := newTestGeminiStore(t)
+	ag := NewGeminiAgent(api.NewGeminiClient("bad", nil, api.WithGeminiBaseURL(srv.URL)), st, nil, time.Minute, nil, nil)
+	ag.SetCredentialsRefresh(func() *api.GeminiCredentials {
+		return &api.GeminiCredentials{
+			AccessToken:  "rotated-access-token",
+			RefreshToken: "same-refresh-token",
+			ExpiresAt:    now.Add(time.Hour),
+			ExpiresIn:    time.Hour,
+		}
+	})
+	ag.SetClientCredentials(&api.GeminiClientCredentials{ClientID: "id", ClientSecret: "secret"})
+	ag.authPaused = true
+	ag.authFailCount = maxGeminiAuthFailures
+	ag.failedRefresh = "same-refresh-token"
+	ag.authRetryAt = now.Add(time.Hour)
+	ag.now = func() time.Time { return now }
+
+	ag.poll(context.Background())
+
+	if calls != 0 {
+		t.Fatalf("provider calls = %d, want none before auth retry deadline", calls)
+	}
+	if !ag.authPaused {
+		t.Fatal("same credential lineage lifted the auth pause")
+	}
+}
+
+func TestGeminiAuthPauseNewCredentialLineageResumesImmediately(t *testing.T) {
+	var quotaCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1internal:loadCodeAssist":
+			_, _ = w.Write([]byte(`{"tier":"standard","cloudAICompanionProject":"project"}`))
+		case "/v1internal:retrieveUserQuota":
+			quotaCalls++
+			_, _ = w.Write([]byte(`{"buckets":[{"modelId":"gemini-2.5-pro","remainingFraction":0.8}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	now := time.Date(2026, 9, 3, 8, 0, 0, 0, time.UTC)
+	st := newTestGeminiStore(t)
+	ag := NewGeminiAgent(api.NewGeminiClient("bad", nil, api.WithGeminiBaseURL(srv.URL)), st, nil, time.Minute, nil, nil)
+	ag.SetCredentialsRefresh(func() *api.GeminiCredentials {
+		return &api.GeminiCredentials{
+			AccessToken:  "new-access-token",
+			RefreshToken: "new-refresh-token",
+			ExpiresAt:    now.Add(time.Hour),
+			ExpiresIn:    time.Hour,
+		}
+	})
+	ag.SetClientCredentials(&api.GeminiClientCredentials{ClientID: "id", ClientSecret: "secret"})
+	ag.authPaused = true
+	ag.authFailCount = maxGeminiAuthFailures
+	ag.failedRefresh = "old-refresh-token"
+	ag.authRetryAt = now.Add(12 * time.Hour)
+	ag.now = func() time.Time { return now }
+
+	ag.poll(context.Background())
+
+	if quotaCalls != 1 {
+		t.Fatalf("quota calls = %d, want immediate poll after credential rotation", quotaCalls)
+	}
+	if ag.authPaused || ag.authFailCount != 0 || ag.authRetryCount != 0 || !ag.authRetryAt.IsZero() {
+		t.Fatalf("auth state not reset after recovery: paused=%v failures=%d retries=%d retryAt=%v",
+			ag.authPaused, ag.authFailCount, ag.authRetryCount, ag.authRetryAt)
+	}
+}
+
 // TestGeminiAgent_TokenPersistenceOnRefresh verifies that after an OAuth token refresh,
 // tokens are persisted to the DB so they survive container restarts.
 func TestGeminiAgent_TokenPersistenceOnRefresh(t *testing.T) {

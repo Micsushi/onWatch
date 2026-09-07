@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -37,7 +38,9 @@ type Runtime struct {
 	authPauseUntil time.Time
 	retryUntil     time.Time
 	retryAttempt   int
-	lastQuotaPoll  map[string]time.Time
+	quotaPolls     map[string]quotaPollState
+	now            func() time.Time
+	random         func() float64
 }
 
 func NewRuntime(cfg Config, logger *slog.Logger) (*Runtime, error) {
@@ -54,7 +57,11 @@ func NewRuntime(cfg Config, logger *slog.Logger) (*Runtime, error) {
 	}
 	outputDir := filepath.Join(cfg.SpoolDir, "source-output")
 	usage := agentusage.NewCollector(outputDir, pricing, agentusage.DefaultSources(cfg.HomeDir), logger)
-	runtime := &Runtime{cfg: cfg, spool: spool, client: NewClient(cfg.ServerURL, cfg.DeviceID, cfg.Token), usage: usage, logger: logger, sourceOffsets: map[string]int64{}, lastQuotaPoll: map[string]time.Time{}}
+	runtime := &Runtime{
+		cfg: cfg, spool: spool, client: NewClient(cfg.ServerURL, cfg.DeviceID, cfg.Token), usage: usage,
+		logger: logger, sourceOffsets: map[string]int64{}, quotaPolls: map[string]quotaPollState{},
+		now: time.Now, random: rand.Float64,
+	}
 	runtime.loadLocalState()
 	return runtime, nil
 }
@@ -288,11 +295,12 @@ func (r *Runtime) heartbeatOnce(ctx context.Context) error {
 }
 
 type localState struct {
-	SourceOffsets  map[string]int64     `json:"source_offsets"`
-	ConfigRevision int64                `json:"config_revision"`
-	DesiredConfig  ingest.DesiredConfig `json:"desired_config"`
-	AuthPauseUntil *time.Time           `json:"auth_pause_until,omitempty"`
-	AuthPaused     bool                 `json:"auth_paused,omitempty"`
+	SourceOffsets  map[string]int64          `json:"source_offsets"`
+	ConfigRevision int64                     `json:"config_revision"`
+	DesiredConfig  ingest.DesiredConfig      `json:"desired_config"`
+	QuotaPolls     map[string]quotaPollState `json:"quota_polls,omitempty"`
+	AuthPauseUntil *time.Time                `json:"auth_pause_until,omitempty"`
+	AuthPaused     bool                      `json:"auth_paused,omitempty"`
 }
 
 func (r *Runtime) loadLocalState() {
@@ -304,6 +312,9 @@ func (r *Runtime) loadLocalState() {
 	if json.Unmarshal(data, &state) == nil {
 		if state.SourceOffsets != nil {
 			r.sourceOffsets = state.SourceOffsets
+		}
+		if state.QuotaPolls != nil {
+			r.quotaPolls = state.QuotaPolls
 		}
 		r.revision = state.ConfigRevision
 		r.desired = state.DesiredConfig
@@ -323,7 +334,7 @@ func (r *Runtime) saveLocalState() error {
 		pause := r.authPauseUntil
 		authPauseUntil = &pause
 	}
-	state := localState{SourceOffsets: r.sourceOffsets, ConfigRevision: r.revision, DesiredConfig: r.desired, AuthPauseUntil: authPauseUntil, AuthPaused: r.authPaused}
+	state := localState{SourceOffsets: r.sourceOffsets, ConfigRevision: r.revision, DesiredConfig: r.desired, QuotaPolls: r.quotaPolls, AuthPauseUntil: authPauseUntil, AuthPaused: r.authPaused}
 	encoded, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err

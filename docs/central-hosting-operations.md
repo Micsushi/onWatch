@@ -161,3 +161,34 @@ Rollback triggers are loss of authenticated access, database integrity failure, 
 - HTTP 401 or 403 pauses uploads for 15 minutes. Rotate or correct the token file. Do not delete the spool.
 - A full spool stops new collection and preserves every unacknowledged event. Restore ingest before resuming.
 - Import/export does not repair live sync. Use the collector for ongoing data.
+# Collector resilience and Linux operation
+
+Linux user-service setup and reversible binary upgrades are documented in
+`deploy/linux/README.md`. macOS and Windows retain their existing native
+collector service installers.
+
+Assigned provider quota polls retain their next retry time and failure count in
+the private collector state file. Repeated failures double the interval with
+20% jitter, up to one hour or the configured interval when longer. Successful
+polls reset the failure count. Canceled cycles do not count as provider failures.
+The upload queue and device-token authentication pause remain independent.
+
+Gemini and Antigravity now report final poll outcomes to health supervision.
+An absent Antigravity process is a skipped poll. Gemini authentication pauses
+retry with jittered exponential delays from one hour to a 24-hour ceiling.
+A new refresh token resumes polling immediately. Access-token rotation alone
+does not bypass a pending retry deadline.
+
+Focused checks:
+
+```sh
+go test ./internal/collector ./internal/ingestserver -count=1
+go test ./internal/agent -run 'TestGemini|TestRemainingProviderPollHealth' -count=1
+go test ./internal/collector -run '^$' -bench BenchmarkSpoolBoundedBatch -benchtime=3x -benchmem
+```
+
+The multi-device test exercises real HTTP ingestion with Windows, macOS, and
+Linux device identities, durable queues, replay deduplication, acknowledgement,
+and revocation. It does not substitute for native operating-system service
+checks or a live two-device rollout. The spool benchmark measures bounded batch
+allocations against a 1,000-event backlog; it does not measure whole-process RSS.
