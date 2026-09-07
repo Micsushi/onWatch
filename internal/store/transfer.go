@@ -1329,6 +1329,25 @@ func importTransferTable(tx *sql.Tx, source *sql.DB, table transferTable, accoun
 			}
 			continue
 		}
+		// Live collectors and portable history can contain the same stable event.
+		// Reuse its fingerprint before adding an import namespace.
+		if table.name == "api_integration_usage_events" {
+			var liveID int64
+			err := tx.QueryRow(`SELECT id FROM api_integration_usage_events WHERE fingerprint=?`, payload["fingerprint"]).Scan(&liveID)
+			if err == nil {
+				if err := recordImportedOrigin(tx, table.name, strconv.FormatInt(liveID, 10), origin); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`UPDATE api_integration_usage_events SET cost_usd=COALESCE(cost_usd,?) WHERE id=?`, payload["cost_usd"], liveID); err != nil {
+					return err
+				}
+				incrementImportSummary(summary, table.name, "skipped")
+				continue
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
 		columns := make([]string, 0, len(table.columns)+1)
 		values := make([]any, 0, len(table.columns)+1)
 		if table.textID {

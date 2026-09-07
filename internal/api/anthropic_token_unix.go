@@ -48,6 +48,9 @@ func getCredentialsFilePath() string {
 
 // detectAnthropicTokenPlatform tries platform-specific credential stores.
 func detectAnthropicTokenPlatform(logger *slog.Logger) string {
+	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
+		return DetectAnthropicTokenInDir(dir)
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -60,7 +63,7 @@ func detectAnthropicTokenPlatform(logger *slog.Logger) string {
 	}
 
 	// macOS: try Keychain (skip in test mode to avoid reading real credentials)
-	if !testMode && runtime.GOOS == "darwin" && username != "" {
+	if strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")) == "" && !testMode && runtime.GOOS == "darwin" && username != "" {
 		out, err := exec.Command("security", "find-generic-password",
 			"-s", "Claude Code-credentials",
 			"-a", username,
@@ -75,7 +78,7 @@ func detectAnthropicTokenPlatform(logger *slog.Logger) string {
 	}
 
 	// Linux: try secret-tool (GNOME Keyring) (skip in test mode)
-	if !testMode && runtime.GOOS == "linux" && username != "" {
+	if strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")) == "" && !testMode && runtime.GOOS == "linux" && username != "" {
 		out, err := exec.Command("secret-tool", "lookup",
 			"service", "Claude Code-credentials",
 			"account", username).Output()
@@ -136,7 +139,7 @@ func detectAnthropicCredentialsPlatform(logger *slog.Logger) *AnthropicCredentia
 	}
 
 	// macOS: try Keychain first (skip in test mode)
-	if !testMode && runtime.GOOS == "darwin" && username != "" {
+	if strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")) == "" && !testMode && runtime.GOOS == "darwin" && username != "" {
 		out, err := exec.Command("security", "find-generic-password",
 			"-s", "Claude Code-credentials",
 			"-a", username,
@@ -154,7 +157,7 @@ func detectAnthropicCredentialsPlatform(logger *slog.Logger) *AnthropicCredentia
 	}
 
 	// Linux: try keyring first (skip in test mode)
-	if !testMode && runtime.GOOS == "linux" && username != "" {
+	if strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")) == "" && !testMode && runtime.GOOS == "linux" && username != "" {
 		out, err := exec.Command("secret-tool", "lookup",
 			"service", "Claude Code-credentials",
 			"account", username).Output()

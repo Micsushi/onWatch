@@ -712,3 +712,21 @@ func TestTransferRejectsRawAndHourlyOverlap(t *testing.T) {
 		t.Fatal("failed import was not atomic")
 	}
 }
+
+func TestTransferReusesLiveCollectorStableEvent(t *testing.T) {
+	source := newTransferTestStore(t)
+	destination := newTransferTestStore(t)
+	line := `{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"cost_usd":0.25,"metadata":{"event_key":"shared-stable-event"}}`
+	insertAPIIntegrationUsageEventForTest(t, source, line, "local")
+	insertAPIIntegrationUsageEventForTest(t, destination, line, "device:windows")
+	archive := exportTransferBytes(t, source)
+	for i := 0; i < 2; i++ {
+		if _, err := destination.ImportData(bytes.NewReader(archive)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err := destination.db.QueryRow(`SELECT COUNT(*) FROM api_integration_usage_events`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("collector/import duplicate count %d: %v", count, err)
+	}
+}
