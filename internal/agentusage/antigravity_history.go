@@ -2,6 +2,7 @@ package agentusage
 
 import (
 	"database/sql"
+	"fmt"
 	"math"
 	"path/filepath"
 	"strconv"
@@ -34,10 +35,10 @@ func ParseAntigravityHistoryDB(path string, pricing *PricingMap) ([]UsageEvent, 
 	db.SetMaxOpenConns(1)
 
 	rows, err := db.Query(`
-		SELECT idx, data, size
+		SELECT idx, CASE WHEN length(data) <= ? THEN data END, size, length(data)
 		FROM gen_metadata
 		ORDER BY idx
-		LIMIT ?`, antigravityHistoryMaxRows)
+		LIMIT ?`, antigravityHistoryMaxBlobBytes, antigravityHistoryMaxRows+1)
 	if err != nil {
 		return nil, err
 	}
@@ -45,14 +46,23 @@ func ParseAntigravityHistoryDB(path string, pricing *PricingMap) ([]UsageEvent, 
 
 	sessionID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	var events []UsageEvent
+	rowCount := 0
 	for rows.Next() {
+		rowCount++
+		if rowCount > antigravityHistoryMaxRows {
+			return nil, fmt.Errorf("Antigravity history exceeds %d rows; import withheld", antigravityHistoryMaxRows)
+		}
 		var (
-			idx  sql.NullInt64
-			data []byte
-			size sql.NullInt64
+			idx        sql.NullInt64
+			data       []byte
+			size       sql.NullInt64
+			blobLength sql.NullInt64
 		)
-		if err := rows.Scan(&idx, &data, &size); err != nil {
+		if err := rows.Scan(&idx, &data, &size, &blobLength); err != nil {
 			return nil, err
+		}
+		if blobLength.Valid && blobLength.Int64 > antigravityHistoryMaxBlobBytes {
+			return nil, fmt.Errorf("Antigravity history row exceeds blob limit; import withheld")
 		}
 		if !idx.Valid || len(data) == 0 || len(data) > antigravityHistoryMaxBlobBytes {
 			continue

@@ -729,13 +729,11 @@ func DefaultSources(home string) []Source {
 		for _, rawPath := range strings.Split(droidSessionsDir, ",") {
 			path := strings.TrimSpace(rawPath)
 			addDir(SourceAntigravity, path, "antigravity", "gemini", false)
-			addDir(SourceAntigravityHistory, path, "antigravity", "gemini", false)
 		}
 	} else {
 		addDir(SourceAntigravity, filepath.Join(home, ".gemini", "antigravity"), "antigravity", "gemini", true)
 		addDir(SourceAntigravityHistory, filepath.Join(home, ".gemini", "antigravity", "conversations"), "antigravity", "gemini", true)
 		addDir(SourceAntigravity, filepath.Join(home, ".factory", "sessions"), "antigravity", "gemini", true)
-		addDir(SourceAntigravityHistory, filepath.Join(home, ".factory", "sessions"), "antigravity", "gemini", true)
 	}
 	if csvPath := strings.TrimSpace(os.Getenv("ONWATCH_CURSOR_USAGE_CSV")); csvPath != "" {
 		if _, err := os.Stat(csvPath); err == nil {

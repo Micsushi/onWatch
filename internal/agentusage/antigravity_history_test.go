@@ -64,6 +64,34 @@ func TestAntigravityHistoryCountsDerivesResponseWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestAntigravityHistoryRejectsIncompleteBoundedImports(t *testing.T) {
+	for _, scenario := range []string{"oversized blob", "too many rows"} {
+		t.Run(scenario, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "conversation.db")
+			writeAntigravityHistoryDB(t, path, historyMetadataFixture(time.Unix(1788739200, 0), 40, 10, 30))
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if scenario == "oversized blob" {
+				// Do not trust the stored size field; bound actual SQLite blob length
+				// before Scan allocates the payload in Go.
+				_, err = db.Exec(`INSERT INTO gen_metadata VALUES(8, zeroblob(?), 1)`, antigravityHistoryMaxBlobBytes+1)
+			} else {
+				_, err = db.Exec(`WITH RECURSIVE indices(x) AS (SELECT 100 UNION ALL SELECT x+1 FROM indices WHERE x < ?) INSERT INTO gen_metadata SELECT x, data, size FROM indices CROSS JOIN gen_metadata WHERE idx=7`, antigravityHistoryMaxRows+99)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			events, err := ParseAntigravityHistoryDB(path, testPricing(t))
+			if err == nil || len(events) != 0 {
+				t.Fatalf("incomplete import returned %d events, err=%v", len(events), err)
+			}
+		})
+	}
+}
+
 func TestAntigravityHistoryCountsSkipsUnsupportedOutputRelation(t *testing.T) {
 	data := historyVarint(3, 40)
 	data = historyAppendVarint(data, 9, 10)

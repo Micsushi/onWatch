@@ -8,8 +8,8 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	golang.org/x/crypto v0.51.0
-	modernc.org/sqlite v1.44.3
 	google.golang.org/protobuf v1.36.8
+	modernc.org/sqlite v1.44.3
 )
 
 require (
