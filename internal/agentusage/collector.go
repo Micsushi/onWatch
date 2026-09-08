@@ -455,6 +455,12 @@ func (c *Collector) collectSource(source Source) ([]UsageEvent, error) {
 					events = append(events, *delta)
 				}
 			}
+		case SourceAntigravityHistory:
+			fileEvents, err := ParseAntigravityHistoryDB(path, c.pricing)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, fileEvents...)
 		default:
 			return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
 		}
@@ -634,6 +640,10 @@ func expandSourcePaths(path, kind string) ([]string, error) {
 			if strings.HasSuffix(strings.ToLower(filepath.Base(candidate)), ".settings.json") {
 				paths = append(paths, candidate)
 			}
+		case SourceAntigravityHistory:
+			if ext == ".db" {
+				paths = append(paths, candidate)
+			}
 		default:
 			if ext == ".jsonl" || ext == ".json" {
 				paths = append(paths, candidate)
@@ -717,11 +727,15 @@ func DefaultSources(home string) []Source {
 	}
 	if droidSessionsDir := strings.TrimSpace(os.Getenv("DROID_SESSIONS_DIR")); droidSessionsDir != "" {
 		for _, rawPath := range strings.Split(droidSessionsDir, ",") {
-			addDir(SourceAntigravity, strings.TrimSpace(rawPath), "antigravity", "gemini", false)
+			path := strings.TrimSpace(rawPath)
+			addDir(SourceAntigravity, path, "antigravity", "gemini", false)
+			addDir(SourceAntigravityHistory, path, "antigravity", "gemini", false)
 		}
 	} else {
 		addDir(SourceAntigravity, filepath.Join(home, ".gemini", "antigravity"), "antigravity", "gemini", true)
+		addDir(SourceAntigravityHistory, filepath.Join(home, ".gemini", "antigravity", "conversations"), "antigravity", "gemini", true)
 		addDir(SourceAntigravity, filepath.Join(home, ".factory", "sessions"), "antigravity", "gemini", true)
+		addDir(SourceAntigravityHistory, filepath.Join(home, ".factory", "sessions"), "antigravity", "gemini", true)
 	}
 	if csvPath := strings.TrimSpace(os.Getenv("ONWATCH_CURSOR_USAGE_CSV")); csvPath != "" {
 		if _, err := os.Stat(csvPath); err == nil {
