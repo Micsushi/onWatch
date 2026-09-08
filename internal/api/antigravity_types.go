@@ -448,6 +448,32 @@ type AntigravityQuotaSummaryBucket struct {
 	ResetTimeRaw      string     `json:"resetTime"`
 }
 
+// Both the older flat payload and the current nested remaining object occur.
+// Missing quota values are unavailable, never an invented exhausted bucket.
+func (b *AntigravityQuotaSummaryBucket) UnmarshalJSON(data []byte) error {
+	type plain AntigravityQuotaSummaryBucket
+	var value struct {
+		plain
+		Fraction  *float64 `json:"remainingFraction"`
+		Remaining *struct {
+			Fraction *float64 `json:"remainingFraction"`
+		} `json:"remaining"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	fraction := value.Fraction
+	if fraction == nil && value.Remaining != nil {
+		fraction = value.Remaining.Fraction
+	}
+	if fraction == nil {
+		return fmt.Errorf("Antigravity quota bucket has no measured remaining fraction")
+	}
+	*b = AntigravityQuotaSummaryBucket(value.plain)
+	b.RemainingFraction = *fraction
+	return nil
+}
+
 // AntigravityModelQuota represents a single normalized model quota for storage.
 type AntigravityModelQuota struct {
 	ModelID           string

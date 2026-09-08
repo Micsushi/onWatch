@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/agentusage"
+	"github.com/onllm-dev/onwatch/v2/internal/api"
 	"github.com/onllm-dev/onwatch/v2/internal/ingest"
 )
 
@@ -40,6 +41,7 @@ type Runtime struct {
 	retryAttempt   int
 	quotaPolls     map[string]quotaPollState
 	geminiToken    *geminiQuotaToken
+	antigravityCLI *api.AntigravityCLIRunner
 	now            func() time.Time
 	random         func() float64
 }
@@ -68,6 +70,11 @@ func NewRuntime(cfg Config, logger *slog.Logger) (*Runtime, error) {
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
+	defer func() {
+		if r.antigravityCLI != nil {
+			r.antigravityCLI.Stop()
+		}
+	}()
 	lock, err := os.OpenFile(filepath.Join(r.cfg.SpoolDir, "collector.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err

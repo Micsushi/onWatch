@@ -296,11 +296,30 @@ func (r *Runtime) pollQuota(ctx context.Context, assignment ingest.ProviderAssig
 			quotaMetric("tokens", float64(snapshot.TokensPercentage), &tokenLimit, "percent", snapshot.TokensNextResetTime, ""),
 		)
 	case "antigravity":
-		response, err := api.NewAntigravityClient(r.logger).FetchQuotas(ctx)
+		var snapshot *api.AntigravitySnapshot
+		var err error
+		source := strings.ToLower(strings.TrimSpace(os.Getenv("ANTIGRAVITY_SOURCE")))
+		if source != "ide" {
+			if r.antigravityCLI == nil {
+				r.antigravityCLI = api.NewAntigravityCLIRunner(r.logger)
+			}
+			pollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			snapshot, err = r.antigravityCLI.Fetch(pollCtx)
+			cancel()
+		}
+		if snapshot == nil && source != "cli" {
+			var response *api.AntigravityUserStatusResponse
+			response, err = api.NewAntigravityClient(r.logger).FetchQuotas(ctx)
+			if err == nil {
+				snapshot = response.ToSnapshot(now)
+			}
+		}
 		if err != nil {
 			return ingest.Event{}, err
 		}
-		snapshot := response.ToSnapshot(now)
+		if snapshot == nil {
+			return ingest.Event{}, fmt.Errorf("Antigravity quota unavailable")
+		}
 		plan = snapshot.PlanName
 		for _, model := range snapshot.Models {
 			metrics = append(metrics, quotaMetric(model.ModelID, 100-model.RemainingPercent, nil, "percent", model.ResetTime, ""))
