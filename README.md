@@ -658,3 +658,7 @@ sudo systemctl stop onwatch && sudo systemctl disable onwatch && sudo rm -f /etc
 $p = [Environment]::GetEnvironmentVariable("Path","User"); [Environment]::SetEnvironmentVariable("Path",($p -split ";" | Where-Object {$_ -notlike "*\.onwatch*"}) -join ";","User")
 Remove-Item -Recurse -Force $env:USERPROFILE\.onwatch
 ```
+## Contributor guidance
+
+See [AGENTS.md](AGENTS.md) for the fork boundary, tracked command entrypoints,
+and safe change guidance.
