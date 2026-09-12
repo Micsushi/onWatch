@@ -1808,7 +1808,7 @@ func runStop(testMode bool) error {
 			pid, _ = strconv.Atoi(content)
 		}
 
-		if pid > 0 && pid != myPID {
+		if pid > 0 && pid != myPID && processRunning(pid) {
 			if proc, err := os.FindProcess(pid); err == nil {
 				defer proc.Release()
 				if err := stopOwnedProcess(proc); err == nil {
@@ -1823,7 +1823,6 @@ func runStop(testMode bool) error {
 				}
 			}
 		}
-		removeStoppedPID(pidFile)
 
 		// If we have a port from PID file, try port-based detection on that specific port first
 		// Skip in test mode to avoid killing production instances
@@ -1841,6 +1840,8 @@ func runStop(testMode bool) error {
 							if err := stopOwnedProcess(proc); err == nil {
 								fmt.Printf("Stopped %s (PID %d) on port %d\n", label, foundPID, port)
 								stopped = true
+							} else {
+								return fmt.Errorf("could not stop PID %d: %w", foundPID, err)
 							}
 						}
 					}
@@ -1869,6 +1870,8 @@ func runStop(testMode bool) error {
 						if err := stopOwnedProcess(proc); err == nil {
 							fmt.Printf("Stopped %s (PID %d) on port %d\n", label, pid, port)
 							stopped = true
+						} else {
+							return fmt.Errorf("could not stop PID %d: %w", pid, err)
 						}
 					}
 				}
@@ -1876,6 +1879,7 @@ func runStop(testMode bool) error {
 		}
 	}
 
+	removeStoppedPID(pidFile)
 	if !stopped {
 		fmt.Printf("No running %s instance found\n", label)
 	}

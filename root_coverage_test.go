@@ -653,7 +653,7 @@ func TestRunStatus_PortFallbackDetectsOnwatchProcess(t *testing.T) {
 	}
 }
 
-func TestRunStop_PortFromPIDFileFallbackStopsOnwatchProcess(t *testing.T) {
+func TestRunStop_PortFallbackRefusesUnownedProcess(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("port process detection uses lsof on unix")
 	}
@@ -679,13 +679,14 @@ func TestRunStop_PortFromPIDFileFallbackStopsOnwatchProcess(t *testing.T) {
 		t.Fatalf("write pid file: %v", err)
 	}
 
-	out := captureStdout(t, func() {
-		if err := runStop(false); err != nil {
-			t.Fatalf("runStop error: %v", err)
-		}
-	})
-	if !strings.Contains(out, "Stopped onwatch (PID") || !strings.Contains(out, fmt.Sprintf("on port %d", port)) {
-		t.Fatalf("expected port-fallback stop output, got: %s", out)
+	if err := runStop(false); err == nil || !strings.Contains(err.Error(), "no matching instance identity") {
+		t.Fatalf("expected ownership refusal, got %v", err)
+	}
+	if !processRunning(cmd.Process.Pid) {
+		t.Fatal("unowned listener was terminated")
+	}
+	if _, err := os.Stat(pidFile); err != nil {
+		t.Fatalf("PID file removed after failed stop: %v", err)
 	}
 }
 

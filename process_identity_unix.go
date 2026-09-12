@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,5 +61,20 @@ func platformProcessRunning(pid int) bool {
 		return false
 	}
 	defer p.Release()
-	return p.Signal(syscall.Signal(0)) == nil
+	err = p.Signal(syscall.Signal(0))
+	if err != nil {
+		return errors.Is(err, syscall.EPERM)
+	}
+	// An exited child can remain a zombie until its parent reaps it.
+	if runtime.GOOS == "linux" {
+		if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+			fields := strings.Fields(string(data)[strings.LastIndexByte(string(data), ')')+1:])
+			if len(fields) > 0 && (fields[0] == "Z" || fields[0] == "X") {
+				return false
+			}
+		}
+	} else if out, err := exec.Command("ps", "-p", fmt.Sprint(pid), "-o", "stat=").Output(); err == nil && strings.HasPrefix(strings.TrimSpace(string(out)), "Z") {
+		return false
+	}
+	return true
 }

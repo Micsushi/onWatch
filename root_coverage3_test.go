@@ -2698,6 +2698,9 @@ func TestRunStop_ShowsPortInOutput(t *testing.T) {
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
 	pid := cmd.Process.Pid
+	if err := writeInstanceIdentity(pidFile, pid); err != nil {
+		t.Fatal(err)
+	}
 	// Write PID:PORT format with a specific port
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d:8765", pid)), 0o644); err != nil {
 		t.Fatalf("write pid file: %v", err)

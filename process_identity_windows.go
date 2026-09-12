@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -46,4 +47,7 @@ func sameExecutable(a, b string) bool {
 	return leftErr == nil && rightErr == nil && os.SameFile(left, right)
 }
 func terminateProcess(p *os.Process) error { return p.Kill() }
-func platformProcessRunning(pid int) bool  { _, err := inspectProcess(pid); return err == nil }
+func platformProcessRunning(pid int) bool {
+	_, err := inspectProcess(pid)
+	return err == nil || errors.Is(err, windows.ERROR_ACCESS_DENIED)
+}
