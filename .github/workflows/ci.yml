@@ -20,6 +20,9 @@ jobs:
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+          # The persistent runner already retains module and build caches.
+          # Avoid uploading them again after an otherwise completed run.
+          cache: false
 
       - name: Style
         run: sh scripts/check-gofmt.sh
