@@ -35,7 +35,9 @@ func ownedProcess(proc *os.Process) error {
 	if err != nil {
 		return err
 	}
-	own, _ = filepath.EvalSymlinks(own)
+	if resolved, err := filepath.EvalSymlinks(own); err == nil {
+		own = resolved
+	}
 	for _, path := range []string{pidFile, menubarPIDPath(false), menubarPIDPath(true)} {
 		data, err := os.ReadFile(path + ".identity")
 		if err != nil {

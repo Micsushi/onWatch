@@ -4,9 +4,10 @@ package main
 
 import (
 	"fmt"
-	"golang.org/x/sys/windows"
 	"os"
 	"strings"
+
+	"golang.org/x/sys/windows"
 )
 
 func inspectProcess(pid int) (instanceIdentity, error) {
@@ -33,6 +34,16 @@ func inspectProcess(pid int) (instanceIdentity, error) {
 	}
 	return instanceIdentity{pid, windows.UTF16ToString(buf[:size]), fmt.Sprintf("%d:%d", created.HighDateTime, created.LowDateTime)}, nil
 }
-func sameExecutable(a, b string) bool      { return strings.EqualFold(a, b) }
+func sameExecutable(a, b string) bool {
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	// Process image names and os.Executable can use different Windows short
+	// names for the same file. Compare file identities without weakening the
+	// separate PID and creation-time checks.
+	left, leftErr := os.Stat(a)
+	right, rightErr := os.Stat(b)
+	return leftErr == nil && rightErr == nil && os.SameFile(left, right)
+}
 func terminateProcess(p *os.Process) error { return p.Kill() }
 func platformProcessRunning(pid int) bool  { _, err := inspectProcess(pid); return err == nil }
