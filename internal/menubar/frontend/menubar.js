@@ -1,4 +1,7 @@
 (function () {
+  const capability = new URLSearchParams(location.hash.slice(1)).get('token') || '';
+  if (capability) history.replaceState(null, '', location.pathname + location.search);
+  const authHeaders = capability ? { 'X-Onwatch-Menubar': capability } : {};
   const bridge = createBridge();
 
   function createBridge() {
@@ -18,15 +21,17 @@
       mode: browserBridge.mode || 'browser',
       requestedView: browserBridge.view || '',
       getSettings: async () => {
-        const settings = Object.assign({}, browserBridge.settings || {});
-        if (browserBridge.view) {
+        const response = await fetch('/api/menubar/preferences', { credentials: 'same-origin', headers: authHeaders });
+        if (!response.ok) throw new Error(`menubar preferences failed: ${response.status}`);
+        const settings = Object.assign({}, await response.json());
+        if (new URLSearchParams(location.search).has("view") && browserBridge.view) {
           settings.default_view = browserBridge.view;
         }
         return settings;
       },
       getSnapshot: async () => {
         const view = encodeURIComponent(browserBridge.view || 'standard');
-        const resp = await fetch(`/api/menubar/summary?view=${view}`, { credentials: 'same-origin' });
+        const resp = await fetch(`/api/menubar/summary?view=${view}`, { credentials: 'same-origin', headers: authHeaders });
         if (!resp.ok) {
           const err = new Error(`menubar summary failed: ${resp.status}`);
           err.status = resp.status;
@@ -324,8 +329,8 @@
   let refreshTimer = null;
 
   async function init() {
-    const settings = await bridge.getSettings();
     try {
+      const settings = await bridge.getSettings();
       const snapshot = await bridge.getSnapshot();
       render(snapshot, settings || {});
       const intervalSeconds = Number(settings && settings.refresh_seconds ? settings.refresh_seconds : 60);

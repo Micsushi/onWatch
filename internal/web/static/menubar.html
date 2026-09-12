@@ -1307,6 +1307,9 @@
         window.__ONWATCH_MENUBAR__ = __ONWATCH_MENUBAR_BOOTSTRAP__;
 
         (() => {
+            const capability = new URLSearchParams(window.location.hash.slice(1)).get("token") || sessionStorage.getItem("onwatch.menubar.capability") || "";
+            if (capability) sessionStorage.setItem("onwatch.menubar.capability", capability);
+            if (window.location.hash) window.history.replaceState(null, "", window.location.pathname + window.location.search);
             const MENUBAR_VERSION = "__ONWATCH_MENUBAR_VERSION__";
             const STATUS_STORAGE_KEY = "menubar_status_display";
             const VIEW_STORAGE_KEY = "menubar_view_mode";
@@ -1444,7 +1447,7 @@
                 try {
                     const response = await fetch("/api/menubar/preferences", {
                         credentials: "same-origin",
-                        headers: { "Accept": "application/json" }
+                        headers: { "X-Onwatch-Menubar": capability, "Accept": "application/json" }
                     });
                     if (!response.ok) {
                         throw new Error(`preferences ${response.status}`);
@@ -1493,7 +1496,7 @@
                 try {
                     const response = await fetch("/api/menubar/summary", {
                         credentials: "same-origin",
-                        headers: { "Accept": "application/json" }
+                        headers: { "X-Onwatch-Menubar": capability, "Accept": "application/json" }
                     });
                     if (!response.ok) {
                         throw new Error(`summary ${response.status}`);
@@ -1559,7 +1562,7 @@
                         method: "PUT",
                         credentials: "same-origin",
                         headers: {
-                            "Accept": "application/json",
+                            "X-Onwatch-Menubar": capability, "Accept": "application/json",
                             "Content-Type": "application/json",
                             "X-Requested-With": "XMLHttpRequest"
                         },
@@ -1614,7 +1617,7 @@
                         method: "PUT",
                         credentials: "same-origin",
                         headers: {
-                            "Accept": "application/json",
+                            "X-Onwatch-Menubar": capability, "Accept": "application/json",
                             "Content-Type": "application/json",
                             "X-Requested-With": "XMLHttpRequest"
                         },

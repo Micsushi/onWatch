@@ -44,3 +44,10 @@ func TestDecodeBatchRejectsTrailingJSON(t *testing.T) {
 		t.Fatal("trailing JSON unexpectedly accepted")
 	}
 }
+
+func TestDuplicateQuotaNamesRejected(t *testing.T) {
+	e := Event{EventID: "evt_duplicate_metrics", Kind: "quota_snapshot", Provider: "openai", CapturedAt: time.Now(), Account: Account{ExternalID: "account"}, Payload: json.RawMessage(`{"version":1,"metrics":[{"name":"weekly","value":1,"unit":"percent"},{"name":"weekly","value":2,"unit":"percent"}]}`)}
+	if err := e.Validate(time.Now()); err == nil {
+		t.Fatal("duplicate metric names accepted")
+	}
+}

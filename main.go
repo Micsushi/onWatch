@@ -146,7 +146,7 @@ func menubarHelpText() string {
 
 // stopPreviousInstance stops any running onwatch instance using PID file + port check.
 // In test mode, only PID file is used (no port scanning) to avoid killing production.
-func stopPreviousInstance(port int, testMode bool) {
+func stopPreviousInstance(port int, testMode bool) error {
 	myPID := os.Getpid()
 	stopped := false
 	var stoppedPIDs []int
@@ -169,14 +169,15 @@ func stopPreviousInstance(port int, testMode bool) {
 
 		if pid > 0 && pid != myPID {
 			if proc, err := os.FindProcess(pid); err == nil {
-				if err := proc.Signal(syscall.SIGTERM); err == nil {
+				defer proc.Release()
+				if err := stopOwnedProcess(proc); err == nil {
 					fmt.Printf("Stopped previous instance (PID %d) via PID file\n", pid)
 					stopped = true
 					stoppedPIDs = append(stoppedPIDs, pid)
 				}
 			}
 		}
-		os.Remove(pidFile)
+		removeStoppedPID(pidFile)
 
 		// If PID file had a port and we didn't stop it, try that specific port
 		if !stopped && filePort > 0 {
@@ -189,7 +190,8 @@ func stopPreviousInstance(port int, testMode bool) {
 							continue
 						}
 						if proc, err := os.FindProcess(foundPID); err == nil {
-							if err := proc.Signal(syscall.SIGTERM); err == nil {
+							defer proc.Release()
+							if err := stopOwnedProcess(proc); err == nil {
 								fmt.Printf("Stopped previous instance (PID %d) on port %d\n", foundPID, filePort)
 								stopped = true
 								stoppedPIDs = append(stoppedPIDs, foundPID)
@@ -214,7 +216,8 @@ func stopPreviousInstance(port int, testMode bool) {
 						continue
 					}
 					if proc, err := os.FindProcess(pid); err == nil {
-						if err := proc.Signal(syscall.SIGTERM); err == nil {
+						defer proc.Release()
+						if err := stopOwnedProcess(proc); err == nil {
 							fmt.Printf("Stopped previous instance (PID %d) on port %d\n", pid, port)
 							stopped = true
 							stoppedPIDs = append(stoppedPIDs, pid)
@@ -228,6 +231,10 @@ func stopPreviousInstance(port int, testMode bool) {
 	if stopped {
 		waitForProcessesExit(stoppedPIDs, 5*time.Second)
 	}
+	if pid := readRuntimePID(pidFile); pid != os.Getpid() && processRunning(pid) {
+		return fmt.Errorf("previous PID %d is still running; retained its PID file", pid)
+	}
+	return nil
 }
 
 func waitForProcessesExit(pids []int, timeout time.Duration) bool {
@@ -408,11 +415,14 @@ func writePIDFile(port int) error {
 	}
 	// Store both PID and port for reliable stopping
 	content := fmt.Sprintf("%d:%d", os.Getpid(), port)
-	return os.WriteFile(pidFile, []byte(content), 0644)
+	if err := os.WriteFile(pidFile, []byte(content), 0600); err != nil {
+		return err
+	}
+	return writeInstanceIdentity(pidFile, os.Getpid())
 }
 
 func removePIDFile() {
-	os.Remove(pidFile)
+	removeStoppedPID(pidFile)
 }
 
 // daemonize re-executes the current binary as a detached background process.
@@ -462,6 +472,10 @@ func daemonize(cfg *config.Config) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not write PID file: %v\n", err)
 	}
 
+	if err := writeInstanceIdentity(pidFile, childPID); err != nil {
+		return err
+	}
+	_ = cmd.Process.Release()
 	logFile.Close()
 
 	fmt.Printf("Daemon started (PID %d), logs: %s\n", childPID, logPath)
@@ -592,6 +606,10 @@ func printAgentUsageHelp() {
 }
 
 func run() error {
+	// Binding arguments are data, even when an opaque ID names another command.
+	if len(os.Args) >= 3 && os.Args[1] == "device" && os.Args[2] == "bind-antigravity" {
+		return runDeviceBindingCommand(os.Args[3:])
+	}
 	// Phase 1: Detect test mode early and configure PID file for isolation
 	testMode := hasFlag("--test")
 	if testMode {
@@ -730,8 +748,12 @@ func run() error {
 
 	// Stop any previous instance (parent does this, daemon child skips it)
 	if !isDaemonChild {
-		stopPreviousInstance(cfg.Port, testMode)
-		_ = stopMenubarProcess(testMode)
+		if err := stopPreviousInstance(cfg.Port, testMode); err != nil {
+			return err
+		}
+		if err := stopMenubarProcess(testMode); err != nil {
+			return err
+		}
 	}
 
 	// Early Gemini auto-detection for banner display
@@ -1788,7 +1810,8 @@ func runStop(testMode bool) error {
 
 		if pid > 0 && pid != myPID {
 			if proc, err := os.FindProcess(pid); err == nil {
-				if err := proc.Signal(syscall.SIGTERM); err == nil {
+				defer proc.Release()
+				if err := stopOwnedProcess(proc); err == nil {
 					if port > 0 {
 						fmt.Printf("Stopped %s (PID %d) on port %d\n", label, pid, port)
 					} else {
@@ -1796,11 +1819,11 @@ func runStop(testMode bool) error {
 					}
 					stopped = true
 				} else {
-					fmt.Printf("Process %d not running (stale PID file)\n", pid)
+					return fmt.Errorf("could not stop PID %d: %w", pid, err)
 				}
 			}
 		}
-		os.Remove(pidFile)
+		removeStoppedPID(pidFile)
 
 		// If we have a port from PID file, try port-based detection on that specific port first
 		// Skip in test mode to avoid killing production instances
@@ -1814,7 +1837,8 @@ func runStop(testMode bool) error {
 							continue
 						}
 						if proc, err := os.FindProcess(foundPID); err == nil {
-							if err := proc.Signal(syscall.SIGTERM); err == nil {
+							defer proc.Release()
+							if err := stopOwnedProcess(proc); err == nil {
 								fmt.Printf("Stopped %s (PID %d) on port %d\n", label, foundPID, port)
 								stopped = true
 							}
@@ -1841,7 +1865,8 @@ func runStop(testMode bool) error {
 						continue
 					}
 					if proc, err := os.FindProcess(pid); err == nil {
-						if err := proc.Signal(syscall.SIGTERM); err == nil {
+						defer proc.Release()
+						if err := stopOwnedProcess(proc); err == nil {
 							fmt.Printf("Stopped %s (PID %d) on port %d\n", label, pid, port)
 							stopped = true
 						}
@@ -1855,7 +1880,9 @@ func runStop(testMode bool) error {
 		fmt.Printf("No running %s instance found\n", label)
 	}
 	if menubarPID := readRuntimePID(menubarPIDPath(testMode)); menubarPID > 0 {
-		_ = stopMenubarProcess(testMode)
+		if err := stopMenubarProcess(testMode); err != nil {
+			return err
+		}
 		fmt.Printf("Stopped %s menubar companion (PID %d)\n", label, menubarPID)
 	}
 	return nil
@@ -1941,8 +1968,9 @@ func runStatus(testMode bool) error {
 
 		if pid > 0 && pid != myPID {
 			if proc, err := os.FindProcess(pid); err == nil {
+				defer proc.Release()
 				// On Unix, signal 0 checks if process exists without killing it
-				if err := proc.Signal(syscall.Signal(0)); err == nil {
+				if err := ownedProcess(proc); err == nil {
 					fmt.Printf("%s is running (PID %d)\n", label, pid)
 
 					// If we have port from PID file, show it directly
@@ -2100,8 +2128,10 @@ func runUpdate() error {
 			fmt.Println("Restarting daemon...")
 			// Stop old daemon
 			if proc, err := os.FindProcess(pid); err == nil {
-				_ = proc.Signal(syscall.SIGTERM)
-				time.Sleep(1 * time.Second)
+				defer proc.Release()
+				if err := stopOwnedProcess(proc); err != nil {
+					return err
+				}
 			}
 			// Start new daemon with the updated binary (no args = daemonize with .env config)
 			exePath, err := os.Executable()

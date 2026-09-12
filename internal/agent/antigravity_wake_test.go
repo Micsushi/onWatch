@@ -33,6 +33,37 @@ func newMemoryWakeStore() *memoryWakeStore {
 	return &memoryWakeStore{data: make(map[string]string)}
 }
 
+func TestWakeRejectsConcurrentTriggersAndRemembersConnectionFailure(t *testing.T) {
+	store := newMemoryWakeStore()
+	runner := newTestWakeRunner(store, AntigravityWakeConfig{Cooldown: time.Hour}, nil)
+	runner.SetPathResolver(func(string) (string, bool, error) { return "fake", true, nil })
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	runner.SetExecutor(func(context.Context, string, []string, ...string) ([]byte, error) {
+		close(started)
+		<-release
+		return []byte("connection refused"), nil
+	})
+	go func() { _, err := runner.Trigger(context.Background(), "manual:first"); done <- err }()
+	<-started
+	second, err := runner.Trigger(context.Background(), "manual:second")
+	close(release)
+	if err != nil || !second.Skipped || second.Success {
+		t.Fatalf("concurrent wake was not skipped: %+v %v", second, err)
+	}
+	if err := <-done; err == nil {
+		t.Fatal("zero exit code cannot override a reported connection failure")
+	}
+	if last := runner.LastResult(); last == nil || last.Success {
+		t.Fatalf("failure status not retained: %+v", last)
+	}
+	restored := newTestWakeRunner(store, AntigravityWakeConfig{Cooldown: time.Hour}, nil)
+	restored.SetPathResolver(func(string) (string, bool, error) { return "", false, errors.New("missing binary") })
+	result, err := restored.Trigger(context.Background(), "reset:test")
+	if err == nil || result == nil || result.Skipped || !strings.Contains(restored.LastResult().Reason, "missing binary") {
+		t.Fatalf("restart hid early failure behind cooldown: %+v %v", result, err)
+	}
+}
+
 func (m *memoryWakeStore) GetSetting(key string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

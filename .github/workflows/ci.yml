@@ -24,6 +24,9 @@ jobs:
       - name: Style
         run: sh scripts/check-gofmt.sh
 
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
       - name: Lint
         run: go vet ./...
 
@@ -58,6 +61,9 @@ jobs:
 
       - name: Style
         run: sh scripts/check-gofmt.sh
+
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
       - name: Lint
         run: go vet ./...
@@ -113,3 +119,15 @@ jobs:
         run: |
           cd tests/e2e
           pytest tests/test_menubar.py -v
+
+  test-windows:
+    runs-on: windows-latest
+    name: Native Windows tests
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+      - run: go test -short ./...
+      - run: go vet ./...
+      - run: go build -o onwatch.exe .

@@ -21,27 +21,30 @@ import (
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/agentusage"
+	"github.com/onllm-dev/onwatch/v2/internal/api"
 	"github.com/onllm-dev/onwatch/v2/internal/ingest"
 )
 
 type Runtime struct {
-	cfg            Config
-	spool          *Spool
-	client         *Client
-	usage          *agentusage.Collector
-	logger         *slog.Logger
-	mu             sync.Mutex
-	sourceOffsets  map[string]int64
-	revision       int64
-	desired        ingest.DesiredConfig
-	authPaused     bool
-	authPauseUntil time.Time
-	retryUntil     time.Time
-	retryAttempt   int
-	quotaPolls     map[string]quotaPollState
-	geminiToken    *geminiQuotaToken
-	now            func() time.Time
-	random         func() float64
+	cfg              Config
+	spool            *Spool
+	client           *Client
+	usage            *agentusage.Collector
+	logger           *slog.Logger
+	mu               sync.Mutex
+	sourceOffsets    map[string]int64
+	revision         int64
+	desired          ingest.DesiredConfig
+	authPaused       bool
+	authPauseUntil   time.Time
+	retryUntil       time.Time
+	retryAttempt     int
+	quotaPolls       map[string]quotaPollState
+	geminiToken      *geminiQuotaToken
+	antigravityCLI   *api.AntigravityCLIRunner
+	antigravityFetch func(context.Context, string) (*api.AntigravitySnapshot, error)
+	now              func() time.Time
+	random           func() float64
 }
 
 func NewRuntime(cfg Config, logger *slog.Logger) (*Runtime, error) {
@@ -68,6 +71,11 @@ func NewRuntime(cfg Config, logger *slog.Logger) (*Runtime, error) {
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
+	defer func() {
+		if r.antigravityCLI != nil {
+			r.antigravityCLI.Stop()
+		}
+	}()
 	lock, err := os.OpenFile(filepath.Join(r.cfg.SpoolDir, "collector.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
@@ -113,7 +121,13 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 }
 
-func (r *Runtime) collectOnce(ctx context.Context) error {
+func (r *Runtime) collectOnce(ctx context.Context) (collectErr error) {
+	// A broken usage source must not stop independent quota polling.
+	defer func() {
+		if !r.authPaused {
+			collectErr = errors.Join(collectErr, r.collectAssignedQuotas(ctx))
+		}
+	}()
 	status, err := r.spool.Status()
 	if err != nil {
 		return err
@@ -137,6 +151,7 @@ func (r *Runtime) collectOnce(ctx context.Context) error {
 		}
 	}
 	sort.Strings(names)
+	processed := 0
 	for _, name := range names {
 		path := filepath.Join(dir, name)
 		file, err := os.Open(path)
@@ -150,6 +165,11 @@ func (r *Runtime) collectOnce(ctx context.Context) error {
 		}
 		reader := bufio.NewReader(file)
 		for {
+			// Yield to uploads and heartbeats while recovering a large archive.
+			if processed >= max(r.cfg.BatchSize, 500) {
+				file.Close()
+				return usageErr
+			}
 			line, err := reader.ReadBytes('\n')
 			if errors.Is(err, io.EOF) {
 				break
@@ -161,19 +181,29 @@ func (r *Runtime) collectOnce(ctx context.Context) error {
 			nextOffset := offset + int64(len(line))
 			event, err := r.usageEnvelope(line)
 			if err != nil {
+				// Retain the exact source bytes before advancing past a poison record.
+				// Old observations need history import, not the live ingest endpoint.
+				err = appendQuarantine(filepath.Join(r.cfg.SpoolDir, "source-quarantine.jsonl"), struct {
+					File   string `json:"file"`
+					Offset int64  `json:"offset"`
+					Reason string `json:"reason"`
+					Raw    []byte `json:"raw"`
+				}{name, offset, err.Error(), line})
+			} else {
+				err = r.spool.Append(event)
+			}
+			if err != nil {
 				file.Close()
 				return err
 			}
-			if err := r.spool.Append(event); err != nil {
+			r.sourceOffsets[name] = nextOffset
+			if err := r.saveLocalState(); err != nil {
+				r.sourceOffsets[name] = offset
 				file.Close()
 				return err
 			}
 			offset = nextOffset
-			r.sourceOffsets[name] = offset
-			if err := r.saveLocalState(); err != nil {
-				file.Close()
-				return err
-			}
+			processed++
 		}
 		_ = file.Close()
 		if name != "agent-usage-"+time.Now().UTC().Format("2006-01-02")+".jsonl" {
@@ -185,14 +215,7 @@ func (r *Runtime) collectOnce(ctx context.Context) error {
 			}
 		}
 	}
-	if r.authPaused {
-		return nil
-	}
-	quotaErr := r.collectAssignedQuotas(ctx)
-	if usageErr != nil {
-		return usageErr
-	}
-	return quotaErr
+	return usageErr
 }
 
 func (r *Runtime) usageEnvelope(line []byte) (ingest.Event, error) {
@@ -391,15 +414,22 @@ func (r *Runtime) saveLocalState() error {
 }
 func (r *Runtime) quarantine(event ingest.Event, result ingest.EventResult) error {
 	path := filepath.Join(r.cfg.SpoolDir, "quarantine.jsonl")
+	return appendQuarantine(path, struct {
+		Event  ingest.Event       `json:"event"`
+		Result ingest.EventResult `json:"result"`
+	}{event, result})
+}
+
+func appendQuarantine(path string, record any) error {
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	encoded, _ := json.Marshal(struct {
-		Event  ingest.Event       `json:"event"`
-		Result ingest.EventResult `json:"result"`
-	}{event, result})
 	encoded = append(encoded, '\n')
 	if _, err := file.Write(encoded); err != nil {
 		return err

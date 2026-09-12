@@ -844,93 +844,24 @@ func TestDetectServiceName_FallbackWhenNoServiceUnit(t *testing.T) {
 	}
 }
 
-func TestReplaceBinary_BackupRenameStrategySuccess(t *testing.T) {
+func TestReplaceBinaryRejectsDirectoryAndPreservesBothFiles(t *testing.T) {
 	dir := t.TempDir()
-	exePath := filepath.Join(dir, "onwatch")
-	tmpPath := filepath.Join(dir, "onwatch.tmp")
-
-	if err := os.Mkdir(exePath, 0755); err != nil {
-		t.Fatalf("Mkdir exePath: %v", err)
+	exe := filepath.Join(dir, "onwatch")
+	replacement := filepath.Join(dir, "new")
+	if err := os.Mkdir(exe, 0700); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(tmpPath, []byte("new-binary"), 0755); err != nil {
-		t.Fatalf("WriteFile tmpPath: %v", err)
+	if err := os.WriteFile(replacement, []byte("new"), 0600); err != nil {
+		t.Fatal(err)
 	}
-
-	if err := replaceBinary(exePath, tmpPath, slog.Default()); err != nil {
-		t.Fatalf("replaceBinary() error = %v", err)
+	if err := replaceBinary(exe, replacement, slog.Default()); err == nil {
+		t.Fatal("directory replaced")
 	}
-
-	content, err := os.ReadFile(exePath)
-	if err != nil {
-		t.Fatalf("ReadFile exePath: %v", err)
+	if info, err := os.Stat(exe); err != nil || !info.IsDir() {
+		t.Fatalf("original altered: %v", err)
 	}
-	if string(content) != "new-binary" {
-		t.Fatalf("replaced content = %q, want %q", string(content), "new-binary")
-	}
-
-	if _, err := os.Stat(exePath + ".old"); !os.IsNotExist(err) {
-		t.Fatalf("expected cleanup of backup file, stat err=%v", err)
-	}
-}
-
-func TestReplaceBinary_BackupRenameFails(t *testing.T) {
-	dir := t.TempDir()
-	exePath := filepath.Join(dir, "onwatch")
-	tmpPath := filepath.Join(dir, "onwatch.tmp")
-	backupPath := exePath + ".old"
-
-	if err := os.Mkdir(exePath, 0755); err != nil {
-		t.Fatalf("Mkdir exePath: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(exePath, "block-remove"), []byte("x"), 0644); err != nil {
-		t.Fatalf("WriteFile block-remove: %v", err)
-	}
-	if err := os.WriteFile(tmpPath, []byte("new-binary"), 0755); err != nil {
-		t.Fatalf("WriteFile tmpPath: %v", err)
-	}
-
-	if err := os.Mkdir(backupPath, 0755); err != nil {
-		t.Fatalf("Mkdir backupPath: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(backupPath, "keep"), []byte("x"), 0644); err != nil {
-		t.Fatalf("WriteFile backup keep file: %v", err)
-	}
-
-	err := replaceBinary(exePath, tmpPath, slog.Default())
-	if err == nil {
-		t.Fatal("expected backup rename error")
-	}
-	if !strings.Contains(err.Error(), "backup rename") {
-		t.Fatalf("expected backup rename error, got: %v", err)
-	}
-}
-
-func TestReplaceBinary_SwapRenameFailsRestoresBackup(t *testing.T) {
-	dir := t.TempDir()
-	exePath := filepath.Join(dir, "onwatch")
-	tmpPath := filepath.Join(dir, "missing.tmp")
-
-	if err := os.Mkdir(exePath, 0755); err != nil {
-		t.Fatalf("Mkdir exePath: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(exePath, "block-remove"), []byte("x"), 0644); err != nil {
-		t.Fatalf("WriteFile block-remove: %v", err)
-	}
-
-	err := replaceBinary(exePath, tmpPath, slog.Default())
-	if err == nil {
-		t.Fatal("expected swap rename error")
-	}
-	if !strings.Contains(err.Error(), "swap rename") {
-		t.Fatalf("expected swap rename error, got: %v", err)
-	}
-
-	st, statErr := os.Stat(exePath)
-	if statErr != nil {
-		t.Fatalf("expected exePath to be restored, stat err=%v", statErr)
-	}
-	if !st.IsDir() {
-		t.Fatalf("expected restored exePath to be directory")
+	if data, err := os.ReadFile(replacement); err != nil || string(data) != "new" {
+		t.Fatalf("replacement lost: %v", err)
 	}
 }
 

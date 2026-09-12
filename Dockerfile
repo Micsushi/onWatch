@@ -1,5 +1,5 @@
 # Build stage: Use Alpine Linux for building
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26.8-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates

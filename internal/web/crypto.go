@@ -3,6 +3,7 @@ package web
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -114,7 +115,10 @@ func reEncryptDiscordWebhook(store interface {
 	SetSetting(key, value string) error
 }, oldKey, newKey string) error {
 	discordJSON, err := store.GetSetting("discord")
-	if err != nil || discordJSON == "" {
+	if err != nil {
+		return err
+	}
+	if discordJSON == "" {
 		return nil
 	}
 
@@ -163,7 +167,10 @@ func reEncryptSMTPPassword(store interface {
 	SetSetting(key, value string) error
 }, oldKey, newKey string) error {
 	smtpJSON, err := store.GetSetting("smtp")
-	if err != nil || smtpJSON == "" {
+	if err != nil {
+		return err
+	}
+	if smtpJSON == "" {
 		return nil // No SMTP settings to re-encrypt
 	}
 
@@ -183,34 +190,24 @@ func reEncryptSMTPPassword(store interface {
 		return nil // No password to re-encrypt
 	}
 
-	// Check if the password is already encrypted
-	if !IsEncryptedValue(encryptedPass) {
-		// It's plaintext, encrypt it with the new key
-		newEncrypted, err := notify.Encrypt(encryptedPass, newKey)
+	ciphertext := strings.TrimPrefix(encryptedPass, "enc:")
+	decoded, decodeErr := base64.StdEncoding.DecodeString(ciphertext)
+	plaintext := encryptedPass
+	if IsEncryptedValue(encryptedPass) || (decodeErr == nil && len(decoded) >= 28) {
+		var err error
+		plaintext, err = notify.Decrypt(ciphertext, oldKey)
 		if err != nil {
-			return fmt.Errorf("failed to encrypt SMTP password: %w", err)
-		}
-		smtpSettings["password"] = newEncrypted
-	} else {
-		// It's encrypted, decrypt with old key and re-encrypt with new key
-		plaintext, err := notify.Decrypt(encryptedPass, oldKey)
-		if err != nil {
-			// If decryption fails with old key, try with new key (might already be re-encrypted)
-			_, tryNewErr := notify.Decrypt(encryptedPass, newKey)
-			if tryNewErr == nil {
-				// Already encrypted with new key, nothing to do
+			if _, newErr := notify.Decrypt(ciphertext, newKey); newErr == nil {
 				return nil
 			}
 			return fmt.Errorf("failed to decrypt SMTP password with old key: %w", err)
 		}
-
-		// Re-encrypt with new key
-		newEncrypted, err := notify.Encrypt(plaintext, newKey)
-		if err != nil {
-			return fmt.Errorf("failed to re-encrypt SMTP password: %w", err)
-		}
-		smtpSettings["password"] = newEncrypted
 	}
+	encrypted, err := notify.Encrypt(plaintext, newKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt SMTP password: %w", err)
+	}
+	smtpSettings["password"] = encrypted
 
 	// Save updated settings
 	newJSON, err := json.Marshal(smtpSettings)
@@ -224,3 +221,8 @@ func reEncryptSMTPPassword(store interface {
 
 	return nil
 }
+
+type encryptedSettings map[string]string
+
+func (s encryptedSettings) GetSetting(key string) (string, error) { return s[key], nil }
+func (s encryptedSettings) SetSetting(key, value string) error    { s[key] = value; return nil }

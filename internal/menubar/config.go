@@ -1,6 +1,8 @@
 package menubar
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"time"
 )
@@ -10,6 +12,7 @@ type SnapshotProvider func() (*Snapshot, error)
 
 // Config holds runtime configuration for the menubar companion.
 type Config struct {
+	AuthToken        string
 	Port             int
 	Enabled          bool
 	DefaultView      ViewType
@@ -303,4 +306,13 @@ func normalizedStringList(values []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+// LocalToken is a domain-separated capability restricted to menubar endpoints.
+func LocalToken(passwordHash string) string {
+	if passwordHash == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte("onwatch-menubar-v1\x00" + passwordHash))
+	return hex.EncodeToString(digest[:])
 }

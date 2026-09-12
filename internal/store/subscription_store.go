@@ -176,8 +176,8 @@ func (s *Store) subscriptionMeters(ctx context.Context, provider, account string
 		args = []any{startRaw, endRaw}
 	}
 	if provider == "codex" {
-		query += ` UNION ALL SELECT captured_at,resets_at,utilization,quota,plan,'rollout' FROM subscription_meter_observations WHERE provider='codex' AND account_name=? AND captured_at COLLATE ONWATCH_RFC3339>=? AND captured_at COLLATE ONWATCH_RFC3339<? AND plan=(SELECT plan_type FROM codex_snapshots WHERE account_id=? ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC LIMIT 1)`
-		args = append(args, account, startRaw, endRaw, accountID)
+		query += ` UNION ALL SELECT captured_at,resets_at,utilization,quota,plan,'rollout' FROM subscription_meter_observations WHERE provider='codex' AND account_name=? AND captured_at COLLATE ONWATCH_RFC3339>=? AND captured_at COLLATE ONWATCH_RFC3339<?`
+		args = append(args, account, startRaw, endRaw)
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

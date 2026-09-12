@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/mail"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -59,10 +61,11 @@ type DesiredConfig struct {
 }
 
 type ProviderAssignment struct {
-	Provider        string `json:"provider"`
-	ExternalID      string `json:"external_id"`
-	CredentialAlias string `json:"credential_alias,omitempty"`
-	PollInterval    string `json:"poll_interval"`
+	Provider                string `json:"provider"`
+	ExternalID              string `json:"external_id"`
+	CredentialAlias         string `json:"credential_alias,omitempty"`
+	AntigravityAccountEmail string `json:"antigravity_account_email,omitempty"`
+	PollInterval            string `json:"poll_interval"`
 }
 
 type BatchResponse struct {
@@ -179,7 +182,12 @@ func (event Event) Validate(now time.Time) error {
 		if err := decoder.Decode(&snapshot); err != nil || snapshot.Version != 1 || len(snapshot.Metrics) == 0 || len(snapshot.Metrics) > 128 || len(snapshot.Plan) > 128 {
 			return fmt.Errorf("invalid_quota_payload")
 		}
+		seen := make(map[string]bool, len(snapshot.Metrics))
 		for _, metric := range snapshot.Metrics {
+			if seen[metric.Name] {
+				return fmt.Errorf("invalid_quota_payload")
+			}
+			seen[metric.Name] = true
 			if strings.TrimSpace(metric.Name) == "" || len(metric.Name) > 128 || strings.TrimSpace(metric.Unit) == "" || len(metric.Unit) > 32 ||
 				math.IsNaN(metric.Value) || math.IsInf(metric.Value, 0) || (metric.Limit != nil && (math.IsNaN(*metric.Limit) || math.IsInf(*metric.Limit, 0))) || len(metric.Status) > 64 || len(metric.Group) > 128 || len(metric.Window) > 32 {
 				return fmt.Errorf("invalid_quota_payload")
@@ -206,6 +214,7 @@ func ValidateDesiredConfig(config DesiredConfig) error {
 		}
 	}
 	seen := make(map[string]struct{}, len(config.Assignments))
+	emails := make(map[string]struct{})
 	for _, assignment := range config.Assignments {
 		provider := strings.ToLower(strings.TrimSpace(assignment.Provider))
 		account := strings.TrimSpace(assignment.ExternalID)
@@ -216,6 +225,16 @@ func ValidateDesiredConfig(config DesiredConfig) error {
 			if strings.ContainsAny(value, "\x00\r\n/\\") {
 				return fmt.Errorf("invalid_assignment")
 			}
+		}
+		if assignment.AntigravityAccountEmail != "" {
+			if provider != "antigravity" || assignment.ValidateAntigravityBinding() != nil {
+				return fmt.Errorf("invalid_antigravity_account_email")
+			}
+			email := strings.TrimSpace(assignment.AntigravityAccountEmail)
+			if _, ok := emails[email]; ok {
+				return fmt.Errorf("duplicate_antigravity_account_email")
+			}
+			emails[email] = struct{}{}
 		}
 		interval, err := time.ParseDuration(assignment.PollInterval)
 		if err != nil || interval < 10*time.Second {
@@ -305,4 +324,21 @@ func containsForbiddenKey(payload []byte) bool {
 		return false
 	}
 	return walk(value)
+}
+
+// ValidateAntigravityBinding does not interpret the opaque external account ID.
+// Legacy assignments remain readable but cannot poll until explicitly bound.
+func (a ProviderAssignment) ValidateAntigravityBinding() error {
+	email := strings.TrimSpace(a.AntigravityAccountEmail)
+	if email == "" {
+		return fmt.Errorf("Antigravity account binding required")
+	}
+	if len(a.AntigravityAccountEmail) > 256 || strings.IndexFunc(a.AntigravityAccountEmail, unicode.IsControl) >= 0 {
+		return fmt.Errorf("invalid Antigravity account binding")
+	}
+	address, err := mail.ParseAddress(email)
+	if err != nil || address.Name != "" || address.Address != email {
+		return fmt.Errorf("invalid Antigravity account binding")
+	}
+	return nil
 }

@@ -2,6 +2,8 @@ package update
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -28,9 +31,10 @@ const (
 )
 
 var (
-	execCommand = exec.Command
-	sleepFn     = time.Sleep
-	exitFn      = os.Exit
+	execCommand      = exec.Command
+	sleepFn          = time.Sleep
+	exitFn           = os.Exit
+	renameUpdateFile = os.Rename
 )
 
 // UpdateInfo holds the result of a version check.
@@ -47,6 +51,7 @@ type Updater struct {
 	logger         *slog.Logger
 	httpClient     *http.Client
 
+	applyMu       sync.Mutex
 	mu            sync.Mutex
 	cachedVersion string
 	cachedAt      time.Time
@@ -171,9 +176,12 @@ func (u *Updater) Check() (UpdateInfo, error) {
 }
 
 // Apply downloads the latest binary and replaces the current one.
-// On Unix, uses remove+rename (safe for running binaries since the kernel
-// keeps the inode alive). Falls back to backup-rename on Windows.
+// Uses atomic rename, with a rollback-preserving Windows fallback.
 func (u *Updater) Apply() error {
+	if !u.applyMu.TryLock() {
+		return fmt.Errorf("update already in progress")
+	}
+	defer u.applyMu.Unlock()
 	if isDevVersion(u.currentVersion) {
 		return fmt.Errorf("update.Apply: cannot update dev build")
 	}
@@ -227,6 +235,10 @@ func (u *Updater) Apply() error {
 		tmpFile.Close()
 		return fmt.Errorf("update.Apply: %w", err)
 	}
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("sync update: %w", err)
+	}
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("update.Apply: close temp file: %w", err)
 	}
@@ -242,16 +254,16 @@ func (u *Updater) Apply() error {
 		return fmt.Errorf("update.Apply: %w", err)
 	}
 
+	if err := u.verifyChecksum(info.DownloadURL, tmpPath); err != nil {
+		return fmt.Errorf("update integrity check: %w", err)
+	}
+
 	// Set executable permission
 	if err := os.Chmod(tmpPath, 0755); err != nil {
 		return fmt.Errorf("update.Apply: chmod: %w", err)
 	}
 
-	// Replace the binary.
-	// Strategy 1 (Unix): remove current binary then rename temp into place.
-	// On Unix, deleting a running binary is safe - the kernel keeps the inode
-	// alive until all file descriptors are closed (i.e., until this process exits).
-	// Strategy 2 (Windows fallback): rename current to .old, rename temp to current.
+	// Publish the synchronized replacement without removing the working binary first.
 	if err := replaceBinary(exePath, tmpPath, u.logger); err != nil {
 		return fmt.Errorf("update.Apply: %w", err)
 	}
@@ -330,9 +342,15 @@ func (u *Updater) downloadOnce(url string, dst io.Writer, timeout time.Duration)
 		return 0, fmt.Errorf("download returned HTTP %d", resp.StatusCode)
 	}
 
-	written, err := io.Copy(dst, resp.Body)
+	written, err := io.Copy(dst, io.LimitReader(resp.Body, (512<<20)+1))
 	if err != nil {
 		return 0, fmt.Errorf("download write failed: %w", err)
+	}
+	if written > 512<<20 {
+		return 0, fmt.Errorf("update exceeds 512 MiB limit")
+	}
+	if resp.ContentLength >= 0 && written != resp.ContentLength {
+		return 0, fmt.Errorf("incomplete update download")
 	}
 	return written, nil
 }
@@ -354,36 +372,57 @@ func isRetryableDownloadError(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "context deadline exceeded")
 }
 
-// replaceBinary replaces the binary at exePath with the one at tmpPath.
-// Tries remove+rename first (works on Unix), falls back to backup-rename (Windows).
+// replaceBinary preserves the installed executable until a replacement is ready.
 func replaceBinary(exePath, tmpPath string, logger *slog.Logger) error {
-	// Clean up any leftover .old file from a previous failed update
-	backupPath := exePath + ".old"
-	os.Remove(backupPath)
-
-	// Strategy 1: Remove current, move new into place (Unix-safe)
-	if err := os.Remove(exePath); err == nil {
-		if err := os.Rename(tmpPath, exePath); err != nil {
-			logger.Error("CRITICAL: removed old binary but failed to place new one",
-				"exePath", exePath, "tmpPath", tmpPath, "error", err)
-			return fmt.Errorf("replace failed after remove: %w (binary may be missing, restore from %s)", err, tmpPath)
-		}
+	if info, err := os.Stat(tmpPath); err != nil {
+		return fmt.Errorf("replacement unavailable: %w", err)
+	} else if !info.Mode().IsRegular() {
+		return fmt.Errorf("replacement must be a regular file")
+	}
+	if info, err := os.Stat(exePath); err != nil {
+		return err
+	} else if !info.Mode().IsRegular() {
+		return fmt.Errorf("installed binary must be a regular file")
+	}
+	if err := renameUpdateFile(tmpPath, exePath); err == nil {
+		syncDirectory(filepath.Dir(exePath))
 		return nil
 	}
-
-	// Strategy 2: Backup rename (required on Windows where running binaries can't be deleted)
-	logger.Info("Remove failed, trying backup-rename strategy", "path", exePath)
-	if err := os.Rename(exePath, backupPath); err != nil {
-		return fmt.Errorf("backup rename %s -> %s: %w", exePath, backupPath, err)
+	// Windows can forbid replacing a running image but permit renaming it.
+	if runtime.GOOS != "windows" {
+		return fmt.Errorf("atomic replacement failed; installed binary preserved")
 	}
-	if err := os.Rename(tmpPath, exePath); err != nil {
-		// Try to restore backup
-		os.Rename(backupPath, exePath)
-		return fmt.Errorf("swap rename %s -> %s: %w", tmpPath, exePath, err)
+	backup, err := os.CreateTemp(filepath.Dir(exePath), filepath.Base(exePath)+".old-*")
+	if err != nil {
+		return err
 	}
-	// Best-effort cleanup
-	os.Remove(backupPath)
+	backupPath := backup.Name()
+	if err := backup.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(backupPath); err != nil {
+		return err
+	}
+	if err := renameUpdateFile(exePath, backupPath); err != nil {
+		return fmt.Errorf("backup rename: %w", err)
+	}
+	if err := renameUpdateFile(tmpPath, exePath); err != nil {
+		if restoreErr := renameUpdateFile(backupPath, exePath); restoreErr != nil {
+			return fmt.Errorf("replacement failed: %v; restore failed: %v; prior binary retained at %s", err, restoreErr, backupPath)
+		}
+		return fmt.Errorf("replacement failed; prior binary restored: %w", err)
+	}
+	syncDirectory(filepath.Dir(exePath))
+	if err := os.Remove(backupPath); err != nil {
+		logger.Info("prior binary retained until process exits", "path", backupPath)
+	}
 	return nil
+}
+func syncDirectory(path string) {
+	if dir, err := os.Open(path); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
 }
 
 // IsSystemd returns true if the process is managed by systemd.
@@ -699,4 +738,53 @@ func validateBinary(path string) error {
 	}
 
 	return fmt.Errorf("downloaded file is not a valid executable (magic: %x)", magic)
+}
+
+// verifyChecksum requires the release checksum manifest before any installed file changes.
+func (u *Updater) verifyChecksum(downloadURL, file string) error {
+	slash := strings.LastIndex(downloadURL, "/")
+	if slash < 0 {
+		return fmt.Errorf("invalid download URL")
+	}
+	resp, err := u.httpClient.Get(downloadURL[:slash+1] + "SHA256SUMS")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("release checksum manifest unavailable (HTTP %d)", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
+	if err != nil {
+		return err
+	}
+	if len(body) > 64<<10 {
+		return fmt.Errorf("checksum manifest too large")
+	}
+	expected := ""
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == path.Base(downloadURL) {
+			if expected != "" {
+				return fmt.Errorf("duplicate checksum")
+			}
+			expected = fields[0]
+		}
+	}
+	if decoded, err := hex.DecodeString(expected); err != nil || len(decoded) != sha256.Size {
+		return fmt.Errorf("missing or invalid release checksum")
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, f); err != nil {
+		return err
+	}
+	if !strings.EqualFold(expected, hex.EncodeToString(digest.Sum(nil))) {
+		return fmt.Errorf("download checksum mismatch")
+	}
+	return nil
 }

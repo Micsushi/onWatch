@@ -296,11 +296,29 @@ func (r *Runtime) pollQuota(ctx context.Context, assignment ingest.ProviderAssig
 			quotaMetric("tokens", float64(snapshot.TokensPercentage), &tokenLimit, "percent", snapshot.TokensNextResetTime, ""),
 		)
 	case "antigravity":
-		response, err := api.NewAntigravityClient(r.logger).FetchQuotas(ctx)
+		if err := assignment.ValidateAntigravityBinding(); err != nil {
+			return ingest.Event{}, err
+		}
+		var snapshot *api.AntigravitySnapshot
+		var err error
+		source := strings.ToLower(strings.TrimSpace(os.Getenv("ANTIGRAVITY_SOURCE")))
+		if source != "ide" {
+			pollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			snapshot, err = r.fetchAntigravity(pollCtx, "cli", now)
+			cancel()
+		}
+		if snapshot == nil && source != "cli" {
+			snapshot, err = r.fetchAntigravity(ctx, "ide", now)
+		}
 		if err != nil {
 			return ingest.Event{}, err
 		}
-		snapshot := response.ToSnapshot(now)
+		if snapshot == nil {
+			return ingest.Event{}, fmt.Errorf("Antigravity quota unavailable")
+		}
+		if strings.TrimSpace(snapshot.Email) == "" || strings.TrimSpace(snapshot.Email) != strings.TrimSpace(assignment.AntigravityAccountEmail) {
+			return ingest.Event{}, fmt.Errorf("Antigravity identity does not match configured account binding")
+		}
 		plan = snapshot.PlanName
 		for _, model := range snapshot.Models {
 			metrics = append(metrics, quotaMetric(model.ModelID, 100-model.RemainingPercent, nil, "percent", model.ResetTime, ""))
@@ -348,4 +366,21 @@ func aliasEnv(alias, fallback string) string {
 		return fallback
 	}
 	return alias
+}
+
+func (r *Runtime) fetchAntigravity(ctx context.Context, source string, capturedAt time.Time) (*api.AntigravitySnapshot, error) {
+	if r.antigravityFetch != nil {
+		return r.antigravityFetch(ctx, source)
+	}
+	if source == "cli" {
+		if r.antigravityCLI == nil {
+			r.antigravityCLI = api.NewAntigravityCLIRunner(r.logger)
+		}
+		return r.antigravityCLI.Fetch(ctx)
+	}
+	response, err := api.NewAntigravityClient(r.logger).FetchQuotas(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return response.ToSnapshot(capturedAt), nil
 }

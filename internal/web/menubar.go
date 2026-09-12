@@ -61,7 +61,7 @@ func (h *Handler) MenubarPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, _ := h.menubarSettings()
+	settings := menubar.DefaultSettings()
 	view := normalizeMenubarView(r.URL.Query().Get("view"), settings.DefaultView)
 	html, err := h.renderMenubarHTML(view, settings)
 	if err != nil {

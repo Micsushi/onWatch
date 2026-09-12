@@ -69,7 +69,7 @@ For manual setup or troubleshooting, see the [Windows Setup Guide](docs/WINDOWS_
 
 **Download binaries** from the [Releases](https://github.com/Micsushi/onWatch/releases) page. Binaries are available for macOS (ARM64, AMD64), Linux (AMD64, ARM64), and Windows (AMD64).
 
-**Or build from source** (requires Go 1.25+):
+**Or build from source** (requires Go 1.26.8+):
 
 ```bash
 git clone https://github.com/Micsushi/onWatch.git && cd onWatch
@@ -576,7 +576,7 @@ The `docker-compose.yml` includes memory limits (64M limit, 32M reservation), lo
 
 - API keys loaded from `.env`, never committed, redacted in all log output
 - Session-based auth with cookie + Basic Auth fallback
-- Passwords stored as SHA-256 hashes with constant-time comparison
+- Passwords stored as bcrypt hashes; legacy SHA-256 hashes remain supported
 - SMTP passwords encrypted at rest with AES-256-GCM (key derived from admin password)
 - VAPID keys auto-generated (ECDSA P-256) and stored in database
 - Web Push payloads encrypted per RFC 8291 (ECDH + HKDF + AES-128-GCM)

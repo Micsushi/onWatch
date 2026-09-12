@@ -94,6 +94,7 @@ type AntigravityWakeRunner struct {
 	lastWakes    map[string]time.Time
 	lastWakeTime time.Time
 	lastResult   *AntigravityWakeResult
+	inFlight     bool
 
 	cmdExecutor  func(ctx context.Context, name string, env []string, args ...string) ([]byte, error)
 	connResolver func(ctx context.Context) (*api.AntigravityConnection, error)
@@ -134,7 +135,9 @@ func NewAntigravityWakeRunner(store WakeSettingStore, cfg AntigravityWakeConfig,
 			var saved AntigravityWakeResult
 			if err := json.Unmarshal([]byte(raw), &saved); err == nil {
 				runner.lastResult = &saved
-				runner.lastWakeTime = saved.ExecutedAt
+				if saved.Success && !saved.Skipped {
+					runner.lastWakeTime = saved.ExecutedAt
+				}
 			}
 		}
 	}
@@ -263,10 +266,14 @@ func (r *AntigravityWakeRunner) OnReset(modelID string) {
 }
 
 // Trigger executes the wake command immediately.
-func (r *AntigravityWakeRunner) Trigger(ctx context.Context, triggerSource string) (*AntigravityWakeResult, error) {
+func (r *AntigravityWakeRunner) Trigger(ctx context.Context, triggerSource string) (result *AntigravityWakeResult, triggerErr error) {
 	r.mu.Lock()
 	cfg := r.cfg
 	now := time.Now()
+	if r.inFlight {
+		r.mu.Unlock()
+		return &AntigravityWakeResult{Skipped: true, Reason: "wake already running", ExecutedAt: now, TriggerSource: triggerSource}, nil
+	}
 
 	// Check global cooldown unless forced/manual trigger
 	if !strings.HasPrefix(triggerSource, "manual") && !r.lastWakeTime.IsZero() && now.Sub(r.lastWakeTime) < cfg.Cooldown {
@@ -284,9 +291,25 @@ func (r *AntigravityWakeRunner) Trigger(ctx context.Context, triggerSource strin
 		)
 		return res, nil
 	}
+	r.inFlight = true
+	pathResolver, executor := r.pathResolver, r.cmdExecutor
 	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		if triggerErr != nil && result == nil {
+			result = &AntigravityWakeResult{ExecutedAt: time.Now(), TriggerSource: triggerSource, Reason: triggerErr.Error()}
+			r.lastResult = result
+		}
+		r.mu.Unlock()
+		if triggerErr != nil && result != nil {
+			r.persistResult(result)
+		}
+		r.mu.Lock()
+		r.inFlight = false
+		r.mu.Unlock()
+	}()
 
-	exePath, isDirectLS, err := r.pathResolver(cfg.BinaryPath)
+	exePath, isDirectLS, err := pathResolver(cfg.BinaryPath)
 	if err != nil {
 		r.logger.Warn("Antigravity binary not found for quota wake", "error", err)
 		return nil, fmt.Errorf("resolve antigravity binary: %w", err)
@@ -337,7 +360,10 @@ func (r *AntigravityWakeRunner) Trigger(ctx context.Context, triggerSource strin
 
 	var output []byte
 	for i, env := range envs {
-		output, err = r.cmdExecutor(ctx, exePath, env, args...)
+		output, err = executor(ctx, exePath, env, args...)
+		if err == nil && isWakeConnectionError(string(output), nil) {
+			err = errors.New("language server connection failed")
+		}
 		if err == nil && !isWakeConnectionError(string(output), nil) {
 			break
 		}
@@ -350,7 +376,7 @@ func (r *AntigravityWakeRunner) Trigger(ctx context.Context, triggerSource strin
 	execTime := time.Now()
 	outputStr := strings.TrimSpace(string(output))
 
-	result := &AntigravityWakeResult{
+	result = &AntigravityWakeResult{
 		ExecutedAt:    execTime,
 		TriggerSource: triggerSource,
 		Output:        outputStr,
@@ -362,7 +388,6 @@ func (r *AntigravityWakeRunner) Trigger(ctx context.Context, triggerSource strin
 		r.mu.Lock()
 		r.lastResult = result
 		r.mu.Unlock()
-		r.persistResult(result)
 		return result, fmt.Errorf("execute antigravity %s: %w (output: %s)", mode, err, outputStr)
 	}
 

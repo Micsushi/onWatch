@@ -451,18 +451,29 @@
             </div>
         </section>
 
+        {{if and (eq .CurrentProvider "both") (or .HasCodex .HasAnthropic .HasAntigravity)}}
+        <section class="sessions-section" id="subscription-navigation" aria-labelledby="subscription-navigation-title">
+            <h2 class="section-title" id="subscription-navigation-title">Subscription value</h2>
+            <p class="subscription-note">Compare recorded API value, subscription fees, and observed allowances for each provider.</p>
+            <nav class="subscription-controls" aria-label="Subscription value by provider">
+                {{if .HasCodex}}<a href="{{.BasePath}}/?provider=codex#subscription-value">Codex comparison</a>{{end}}
+                {{if .HasAnthropic}}<a href="{{.BasePath}}/?provider=anthropic#subscription-value">Anthropic comparison</a>{{end}}
+                {{if .HasAntigravity}}<a href="{{.BasePath}}/?provider=antigravity#subscription-value">Antigravity comparison</a>{{end}}
+            </nav>
+        </section>
+        {{end}}
+
         {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}}
         <section class="sessions-section subscription-value" id="subscription-value" data-provider="{{.CurrentProvider}}">
             <div class="section-header"><h2>Subscription Value</h2><div class="subscription-controls">
                 <label>Period <select id="subscription-days"><option value="30">Last 30 days</option><option value="7">Last 7 days</option><option value="1">Last 24 hours</option></select></label>
                 <button type="button" class="btn" id="subscription-refresh">Refresh</button>
             </div></div>
-            <p class="subscription-note">API-equivalent usage compared with observed quota consumption. A value multiple measures API dollars per subscription dollar, not task quality.</p>
             <details id="subscription-plan-details"><summary>Plan and comparison settings</summary>
                 <form id="subscription-plan-form" class="subscription-controls">
-                    <label>Plan name <input id="subscription-plan-name" maxlength="100" placeholder="Your plan"></label>
-                    <label>Monthly USD <input id="subscription-price" type="number" min="0" max="100000" step="0.01"></label>
-                    <label>Usage multiplier <input id="subscription-multiplier" type="number" min="0" max="10000" step="0.1"></label>
+                    <label>Plan name <input id="subscription-plan-name" maxlength="100" placeholder="Your plan" required></label>
+                    <label>Monthly USD <input id="subscription-price" type="number" min="0" max="100000" step="0.01" required></label>
+                    <label>Usage multiplier <input id="subscription-multiplier" type="number" min="0" max="10000" step="0.1" required></label>
                     <button class="btn" type="submit">Save plan</button><button class="btn" type="button" id="subscription-undo" disabled>Undo plan change</button>
                 </form><p id="subscription-plan-source" class="subscription-note"></p>
             </details>

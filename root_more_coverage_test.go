@@ -73,7 +73,7 @@ func TestStopPreviousInstance_SelfPIDFileIsSafeAndRemoved(t *testing.T) {
 	stopPreviousInstance(0, true)
 
 	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
-		t.Fatalf("expected pid file removed, err=%v", err)
+		t.Fatalf("expected self pid file removed, err=%v", err)
 	}
 }
 

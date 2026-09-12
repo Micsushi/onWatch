@@ -2,6 +2,54 @@
 
 Track your Antigravity AI model quota usage with onWatch.
 
+## Central collector account binding
+
+Central collector assignments must explicitly set `antigravity_account_email` to
+the intended signed-in account. The external account ID remains an opaque
+attribution key; it is not an email address. Missing, malformed, or mismatched
+identity prevents quota submission. Matching trims outer whitespace and otherwise
+requires exact equality.
+
+Use the central database's current device revision to preview a binding change:
+
+```text
+onwatch device bind-antigravity --db PATH --device-id ID --account OPAQUE_ID --expected-revision N --email user@example.com
+```
+
+The default is preview. Add `--apply` only after reviewing the intended database,
+device, account, revision, and backup. A stale revision is rejected. Use `--clear`
+instead of `--email` to preview or apply rollback at the new current revision.
+The collector receives the assignment through its next heartbeat; do not edit
+cached collector state to bypass the server configuration.
+
+For measured CLI quota, set `ANTIGRAVITY_SOURCE=cli`; optionally pin the installed
+executable with `ANTIGRAVITY_CLI_PATH`. Sign in separately with the intended
+account before enabling collection. The collector submits no model prompt and
+does not sign in or switch accounts. Explicit CLI mode does not fall back to IDE
+quota. The IDE setup below remains available for IDE monitoring.
+
+On Windows, quota collection reuses the local saved session. It starts the CLI
+suspended and attaches a one-process job before resuming, preventing automatic
+browser and helper child launches. The quota listener runs inside the CLI parent.
+Optional CLI helpers are deliberately unavailable in this mode. Failure to
+establish containment fails the launch. Child auto-update is disabled; update the
+CLI separately and verify compatibility before returning it to service. Do not
+inject a synthetic `SSH_CONNECTION`: it selects a different authentication
+context. Existing Unix launch behavior is unchanged.
+
+These deterministic checks use synthetic accounts and temporary databases; they
+require neither a vault nor provider credentials and do not activate a service:
+
+```text
+make test GO_PACKAGES="./internal/collector ./internal/ingest ./internal/store . -run Binding"
+make test GO_PACKAGES="./internal/api -run TestLocalContextChildContainment"
+```
+
+The second check applies on Windows. It verifies that an owned child cannot
+launch another process. The binding checks cover identity rejection, server
+heartbeat propagation, measured metric conversion, upload deduplication, and
+rollback before provider access.
+
 ---
 
 ## What is Antigravity?

@@ -166,7 +166,11 @@ func uninstallCollectorService(args []string) error {
 			return err
 		}
 	case "windows":
-		_ = exec.Command("schtasks", "/Delete", "/F", "/TN", "onWatch Collector").Run()
+		// End the scheduled action and verify it stopped before deleting the schedule.
+		script := `$ErrorActionPreference='Stop'; $task=Get-ScheduledTask -TaskName 'onWatch Collector' -ErrorAction SilentlyContinue; if ($task) { Stop-ScheduledTask -InputObject $task; $deadline=(Get-Date).AddSeconds(10); do { $task=Get-ScheduledTask -TaskName 'onWatch Collector'; if ($task.State -ne 'Running') { break }; Start-Sleep -Milliseconds 200 } while ((Get-Date) -lt $deadline); if ($task.State -eq 'Running') { throw 'Collector task did not stop' }; Unregister-ScheduledTask -TaskName 'onWatch Collector' -Confirm:$false }`
+		if output, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput(); err != nil {
+			return fmt.Errorf("stop collector task: %w: %s", err, output)
+		}
 	default:
 		return fmt.Errorf("collector service uninstall is supported on macOS and Windows")
 	}

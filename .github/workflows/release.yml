@@ -247,6 +247,11 @@ jobs:
           cp docker-compose.yml dist/
           cp .env.docker.example dist/
 
+      - name: Generate artifact checksums
+        run: |
+          cd dist
+          sha256sum onwatch-* > SHA256SUMS
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

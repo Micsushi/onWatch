@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -751,21 +752,25 @@ func NewHandler(store *store.Store, tracker *tracker.Tracker, logger *slog.Logge
 	}
 
 	// Parse dashboard template (layout + dashboard)
-	dashboardTmpl, err := template.New("").ParseFS(templatesFS, "templates/layout.html", "templates/dashboard.html")
+	assets := template.FuncMap{"assetHash": func(name string) string {
+		data, _ := staticFS.ReadFile("static/" + name)
+		return fmt.Sprintf("%x", sha256.Sum256(data))
+	}}
+	dashboardTmpl, err := template.New("").Funcs(assets).ParseFS(templatesFS, "templates/layout.html", "templates/dashboard.html")
 	if err != nil {
 		logger.Error("failed to parse dashboard template", "error", err)
 		dashboardTmpl = template.New("empty")
 	}
 
 	// Parse login template (layout + login)
-	loginTmpl, err := template.New("").ParseFS(templatesFS, "templates/layout.html", "templates/login.html")
+	loginTmpl, err := template.New("").Funcs(assets).ParseFS(templatesFS, "templates/layout.html", "templates/login.html")
 	if err != nil {
 		logger.Error("failed to parse login template", "error", err)
 		loginTmpl = template.New("empty")
 	}
 
 	// Parse settings template (layout + settings)
-	settingsTmpl, err := template.New("").ParseFS(templatesFS, "templates/layout.html", "templates/settings.html")
+	settingsTmpl, err := template.New("").Funcs(assets).ParseFS(templatesFS, "templates/layout.html", "templates/settings.html")
 	if err != nil {
 		logger.Error("failed to parse settings template", "error", err)
 		settingsTmpl = template.New("empty")
@@ -896,6 +901,12 @@ func (h *Handler) AntigravityWakeTrigger(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
+	if res.Skipped {
+		respondJSON(w, http.StatusConflict, map[string]interface{}{
+			"success": false, "error": res.Reason, "result": res,
+		})
+		return
+	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -942,6 +953,9 @@ func (h *Handler) GetSessionStore() *SessionStore {
 // SetRateLimiter sets the login rate limiter for brute force protection.
 func (h *Handler) SetRateLimiter(l *LoginRateLimiter) {
 	h.rateLimiter = l
+	if h.sessions != nil && l != nil {
+		h.sessions.limiter = l
+	}
 }
 
 // SetMiniMaxAgentManager sets the MiniMax agent manager for hot-reload on account changes.
@@ -6307,6 +6321,10 @@ var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-
 
 // UpdateSettings updates settings from JSON body (partial updates supported).
 func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
+	if h.sessions != nil {
+		h.sessions.authMu.Lock()
+		defer h.sessions.authMu.Unlock()
+	}
 	if r.Method != http.MethodPut {
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -6448,7 +6466,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 		// Encrypt SMTP password using admin password hash as key
 		if smtp.Password != "" && !IsEncryptedValue(smtp.Password) {
-			encryptionKey := DeriveEncryptionKey(h.sessions.passwordHash, nil)
+			encryptionKey := DeriveEncryptionKey(h.sessions.PasswordHash(), nil)
 			encryptedPass, err := notify.Encrypt(smtp.Password, encryptionKey)
 			if err != nil {
 				h.logger.Error("failed to encrypt SMTP password", "error", err)
@@ -6507,7 +6525,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 				respondError(w, http.StatusInternalServerError, "session store not available")
 				return
 			}
-			encryptionKey := DeriveEncryptionKey(h.sessions.passwordHash, nil)
+			encryptionKey := DeriveEncryptionKey(h.sessions.PasswordHash(), nil)
 			encryptedURL, err := notify.Encrypt(discord.WebhookURL, encryptionKey)
 			if err != nil {
 				h.logger.Error("failed to encrypt Discord webhook URL", "error", err)
@@ -7023,6 +7041,16 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) loginPost(w http.ResponseWriter, r *http.Request) {
+	if h.sessions != nil {
+		if !h.sessions.authMu.TryLock() {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "authentication busy", http.StatusTooManyRequests)
+			return
+		}
+		defer h.sessions.authMu.Unlock()
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+
 	bp := h.getBasePath()
 	loginURL := bp + "/login"
 
@@ -7145,9 +7173,12 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.sessions.authMu.Lock()
+	defer h.sessions.authMu.Unlock()
+
 	// Verify current password and get old hash for re-encryption
-	oldHash := h.sessions.passwordHash
-	_, ok := h.sessions.Authenticate(h.sessions.username, req.CurrentPassword)
+	oldHash := h.sessions.PasswordHash()
+	ok := h.sessions.checkCredentials(h.sessions.username, req.CurrentPassword)
 	if !ok {
 		respondError(w, http.StatusUnauthorized, "current password is incorrect")
 		return
@@ -7160,20 +7191,25 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to process new password")
 		return
 	}
-	if err := h.store.UpsertUser(h.sessions.username, newHash); err != nil {
-		h.logger.Error("failed to update password in database", "error", err)
-		respondError(w, http.StatusInternalServerError, "failed to save new password")
+
+	if err := h.store.ChangePassword(h.sessions.username, oldHash, newHash, func(values map[string]string) error {
+		if failures := ReEncryptAllData(encryptedSettings(values), oldHash, newHash); len(failures) > 0 {
+			return fmt.Errorf("failed to re-encrypt notification settings")
+		}
+		return nil
+	}); err != nil {
+		h.logger.Error("password change failed", "error", err)
+		respondError(w, http.StatusInternalServerError, "password unchanged: failed to update encrypted settings")
 		return
 	}
-
-	// Update in-memory hash
 	h.sessions.UpdatePassword(newHash)
-
-	// Re-encrypt all encrypted data with new password key
-	reEncryptErrors := ReEncryptAllData(h.store, oldHash, newHash)
-	if len(reEncryptErrors) > 0 {
-		h.logger.Warn("some data could not be re-encrypted during password change", "errors", reEncryptErrors)
-		// Continue anyway - data might need manual re-entry or was already encrypted with new key
+	if h.notifier != nil {
+		h.notifier.SetEncryptionKey(DeriveEncryptionKey(newHash, nil))
+		for _, reload := range []func() error{h.notifier.Reload, h.notifier.ConfigureSMTP, h.notifier.ConfigureDiscord} {
+			if err := reload(); err != nil {
+				h.logger.Warn("notification reload after password change failed", "error", err)
+			}
+		}
 	}
 
 	// Invalidate all sessions (force re-login)
@@ -8720,10 +8756,7 @@ func (h *Handler) historyAntigravity(w http.ResponseWriter, r *http.Request) {
 	snapshots, err := h.store.QueryAntigravityRange(window.Start, window.End)
 	if err != nil {
 		h.logger.Error("failed to query antigravity history", "error", err)
-		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"labels":   []string{},
-			"datasets": []interface{}{},
-		})
+		respondError(w, http.StatusInternalServerError, "Could not load Antigravity history")
 		return
 	}
 

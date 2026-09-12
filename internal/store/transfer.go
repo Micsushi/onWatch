@@ -215,10 +215,21 @@ func (s *Store) ExportData(w io.Writer, opts ExportOptions) (TransferManifest, e
 	if err != nil {
 		return TransferManifest{}, err
 	}
-	hasImportedProvenance, err := s.prepareTransferProvenance(installationID)
+	_, err = s.prepareTransferProvenance(installationID)
 	if err != nil {
 		return TransferManifest{}, err
 	}
+
+	sourceTx, err := s.db.Begin()
+	if err != nil {
+		return TransferManifest{}, err
+	}
+	defer sourceTx.Rollback()
+	var importedCount int
+	if err := sourceTx.QueryRow("SELECT COUNT(*) FROM data_transfer_records").Scan(&importedCount); err != nil {
+		return TransferManifest{}, err
+	}
+	hasImportedProvenance := importedCount > 0
 
 	temp, err := os.CreateTemp("", "onwatch-transfer-*.sqlite")
 	if err != nil {
@@ -251,24 +262,24 @@ func (s *Store) ExportData(w io.Writer, opts ExportOptions) (TransferManifest, e
 	}
 
 	counts := make(map[string]int)
-	if err := s.exportTransferAccounts(exportTx, installationID, hasImportedProvenance, counts); err != nil {
+	if err := s.exportTransferAccounts(sourceTx, exportTx, installationID, hasImportedProvenance, counts); err != nil {
 		exportTx.Rollback()
 		transferDB.Close()
 		return TransferManifest{}, err
 	}
 	for _, table := range transferTables {
-		if err := s.exportTransferTable(exportTx, table, installationID, hasImportedProvenance, counts); err != nil {
+		if err := s.exportTransferTable(sourceTx, exportTx, table, installationID, hasImportedProvenance, counts); err != nil {
 			exportTx.Rollback()
 			transferDB.Close()
 			return TransferManifest{}, err
 		}
 	}
-	if err := s.exportTransferSettings(exportTx, counts); err != nil {
+	if err := s.exportTransferSettings(sourceTx, exportTx, counts); err != nil {
 		exportTx.Rollback()
 		transferDB.Close()
 		return TransferManifest{}, err
 	}
-	if err := s.exportCentralTransferMetadata(exportTx, installationID, counts); err != nil {
+	if err := s.exportCentralTransferMetadata(sourceTx, exportTx, installationID, counts); err != nil {
 		exportTx.Rollback()
 		transferDB.Close()
 		return TransferManifest{}, err
@@ -376,7 +387,7 @@ func createTransferDatabase(db *sql.DB) error {
 	return nil
 }
 
-func (s *Store) exportTransferAccounts(dest *sql.Tx, installationID string, hasImportedProvenance bool, counts map[string]int) error {
+func (s *Store) exportTransferAccounts(source *sql.Tx, dest *sql.Tx, installationID string, hasImportedProvenance bool, counts map[string]int) error {
 	query := `
 		SELECT p.id, p.provider, p.name, p.created_at, COALESCE(p.metadata, ''), p.deleted_at,
 		       COALESCE(p.external_id, ''), ?, CAST(p.id AS TEXT)
@@ -391,7 +402,7 @@ func (s *Store) exportTransferAccounts(dest *sql.Tx, installationID string, hasI
 			  ON r.table_name = 'provider_accounts' AND r.local_record_id = CAST(p.id AS TEXT)
 			ORDER BY p.id, r.origin_id, r.origin_record_id`
 	}
-	rows, err := s.db.Query(query, installationID)
+	rows, err := source.Query(query, installationID)
 	if err != nil {
 		return fmt.Errorf("store.ExportData: query accounts: %w", err)
 	}
@@ -425,7 +436,7 @@ func (s *Store) exportTransferAccounts(dest *sql.Tx, installationID string, hasI
 	return nil
 }
 
-func (s *Store) exportTransferTable(dest *sql.Tx, table transferTable, installationID string, hasImportedProvenance bool, counts map[string]int) error {
+func (s *Store) exportTransferTable(source *sql.Tx, dest *sql.Tx, table transferTable, installationID string, hasImportedProvenance bool, counts map[string]int) error {
 	dataColumns := append([]string{table.id}, table.columns...)
 	selectColumns := make([]string, 0, len(dataColumns)+6)
 	for _, column := range dataColumns {
@@ -480,7 +491,7 @@ func (s *Store) exportTransferTable(dest *sql.Tx, table transferTable, installat
 		}
 	}
 	query := fmt.Sprintf("SELECT %s FROM %s AS source %s ORDER BY source.%s", strings.Join(selectColumns, ", "), table.name, joins, table.id)
-	rows, err := s.db.Query(query, args...)
+	rows, err := source.Query(query, args...)
 	if err != nil {
 		return fmt.Errorf("store.ExportData: query %s: %w", table.name, err)
 	}
@@ -560,14 +571,18 @@ func (s *Store) exportTransferTable(dest *sql.Tx, table transferTable, installat
 	return nil
 }
 
-func (s *Store) exportTransferSettings(dest *sql.Tx, counts map[string]int) error {
+func (s *Store) exportTransferSettings(source *sql.Tx, dest *sql.Tx, counts map[string]int) error {
 	insert, err := dest.Prepare(`INSERT INTO transfer_settings (key, value) VALUES (?, ?)`)
 	if err != nil {
 		return fmt.Errorf("store.ExportData: prepare setting insert: %w", err)
 	}
 	defer insert.Close()
 	for _, key := range transferSettingKeys {
-		value, err := s.GetSetting(key)
+		var value string
+		err := source.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+		if err == sql.ErrNoRows {
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("store.ExportData: read setting %s: %w", key, err)
 		}
@@ -586,8 +601,8 @@ func (s *Store) exportTransferSettings(dest *sql.Tx, counts map[string]int) erro
 	return nil
 }
 
-func (s *Store) exportCentralTransferMetadata(dest *sql.Tx, installationID string, counts map[string]int) error {
-	deviceRows, err := s.db.Query(`SELECT device_id, name, platform, created_at, revoked_at FROM devices ORDER BY created_at, device_id`)
+func (s *Store) exportCentralTransferMetadata(source *sql.Tx, dest *sql.Tx, installationID string, counts map[string]int) error {
+	deviceRows, err := source.Query(`SELECT device_id, name, platform, created_at, revoked_at FROM devices ORDER BY created_at, device_id`)
 	if err != nil {
 		return fmt.Errorf("store.ExportData: query devices: %w", err)
 	}
@@ -616,7 +631,7 @@ func (s *Store) exportCentralTransferMetadata(dest *sql.Tx, installationID strin
 		return err
 	}
 
-	provenanceRows, err := s.db.Query(`
+	provenanceRows, err := source.Query(`
 		SELECT p.target_table, COALESCE(r.origin_id, ?), COALESCE(r.origin_record_id, p.target_record_id),
 		       p.device_id, p.event_id, p.observed_at
 		FROM observation_provenance p
@@ -651,7 +666,7 @@ func (s *Store) exportCentralTransferMetadata(dest *sql.Tx, installationID strin
 		return err
 	}
 
-	ownerRows, err := s.db.Query(`SELECT id, provider, external_account_id, owner_kind, device_id, effective_at, ended_at FROM provider_poll_owners ORDER BY id`)
+	ownerRows, err := source.Query(`SELECT id, provider, external_account_id, owner_kind, device_id, effective_at, ended_at FROM provider_poll_owners ORDER BY id`)
 	if err != nil {
 		return fmt.Errorf("store.ExportData: query poll ownership: %w", err)
 	}

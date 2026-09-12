@@ -492,9 +492,9 @@ func TestRunStopAndStatus_WithPIDFileProcess(t *testing.T) {
 	pidFile = filepath.Join(t.TempDir(), "onwatch-test.pid")
 	t.Cleanup(func() { pidFile = oldPIDFile })
 
-	cmd := exec.Command("sleep", "30")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start sleep process: %v", err)
+	cmd := startSleepSubprocess(t)
+	if err := writeInstanceIdentity(pidFile, cmd.Process.Pid); err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		if cmd.Process != nil {

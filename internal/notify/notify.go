@@ -20,6 +20,7 @@ type NotificationEngine struct {
 	pushSender           *PushSender
 	discord              *DiscordSender
 	vapidPublicKey       string
+	credentialsMu        sync.Mutex
 	mu                   sync.RWMutex
 	cfg                  NotificationConfig
 	encryptionKey        string // current hex-encoded key for decrypting SMTP passwords
@@ -170,6 +171,8 @@ func New(s *store.Store, logger *slog.Logger) *NotificationEngine {
 // SetEncryptionKey sets the encryption key for decrypting sensitive data like SMTP passwords.
 // The key should be a hex-encoded 32-byte string suitable for AES-256-GCM.
 func (e *NotificationEngine) SetEncryptionKey(key string) {
+	e.credentialsMu.Lock()
+	defer e.credentialsMu.Unlock()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.encryptionKey = key
@@ -356,6 +359,8 @@ type smtpSettingsJSON struct {
 // ConfigureSMTP initializes or updates the SMTP mailer from DB settings.
 // The handler stores SMTP config as a single JSON blob under key "smtp".
 func (e *NotificationEngine) ConfigureSMTP() error {
+	e.credentialsMu.Lock()
+	defer e.credentialsMu.Unlock()
 	smtpJSON, err := e.store.GetSetting("smtp")
 	if err != nil {
 		return fmt.Errorf("notify.ConfigureSMTP: %w", err)
@@ -461,6 +466,8 @@ type discordSettingsJSON struct {
 
 // ConfigureDiscord initializes or updates the Discord webhook sender from DB settings.
 func (e *NotificationEngine) ConfigureDiscord() error {
+	e.credentialsMu.Lock()
+	defer e.credentialsMu.Unlock()
 	discordJSON, err := e.store.GetSetting("discord")
 	if err != nil {
 		return fmt.Errorf("notify.ConfigureDiscord: %w", err)

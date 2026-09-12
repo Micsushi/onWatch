@@ -175,7 +175,11 @@ func (c *trayController) menubarURL() string {
 	if c != nil && c.cfg != nil && c.cfg.Port > 0 {
 		port = c.cfg.Port
 	}
-	return fmt.Sprintf("http://localhost:%d/menubar", port)
+	url := fmt.Sprintf("http://localhost:%d/menubar", port)
+	if c != nil && c.cfg != nil && c.cfg.AuthToken != "" {
+		url += "#token=" + c.cfg.AuthToken
+	}
+	return url
 }
 
 func (c *trayController) dashboardURL() string {
@@ -200,6 +204,9 @@ func (c *trayController) fetchPreferences() (*Settings, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	if c.cfg != nil {
+		req.Header.Set("X-Onwatch-Menubar", c.cfg.AuthToken)
+	}
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {

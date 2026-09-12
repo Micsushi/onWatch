@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -54,6 +55,8 @@ func NewSpool(dir string, maxBytes int64) (*Spool, error) {
 		if err := json.Unmarshal(data, &spool.state); err != nil {
 			return nil, fmt.Errorf("decode spool state: %w", err)
 		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
 	}
 	if spool.state.Offsets == nil {
 		spool.state.Offsets = map[string]int64{}
@@ -136,14 +139,40 @@ func (s *Spool) Append(event ingest.Event) error {
 		return err
 	}
 	encoded = append(encoded, '\n')
-	status, err := s.statusLocked()
+	if err := s.removeAckedClosedFilesLocked(); err != nil {
+		return err
+	}
+	files, err := s.eventFiles()
 	if err != nil {
 		return err
 	}
-	if status.DiskBytes+int64(len(encoded)) > s.maxBytes {
+	var diskBytes int64
+	var path string
+	prefix := "events-" + time.Now().UTC().Format("2006-01-02")
+	for _, name := range files {
+		info, err := os.Stat(filepath.Join(s.dir, name))
+		if err != nil {
+			return err
+		}
+		diskBytes += info.Size()
+		if strings.HasPrefix(name, prefix) {
+			path = filepath.Join(s.dir, name)
+		}
+	}
+	if diskBytes+int64(len(encoded)) > s.maxBytes {
 		return fmt.Errorf("collector spool full; upload must recover before collection resumes")
 	}
-	path := filepath.Join(s.dir, "events-"+time.Now().UTC().Format("2006-01-02")+".jsonl")
+	if path == "" {
+		// Never reuse a removed segment name: a crash may leave its old cursor on disk.
+		file, err := os.CreateTemp(s.dir, prefix+"-*.jsonl")
+		if err != nil {
+			return err
+		}
+		path = file.Name()
+		if err := file.Close(); err != nil {
+			return err
+		}
+	}
 	// A crash can leave an incomplete record. Refuse to concatenate another
 	// event onto it; the source must retain the new event until repair.
 	if tail, err := os.Open(path); err == nil {
@@ -190,6 +219,7 @@ func (s *Spool) Batch(limit int, maxBytes int64) ([]SpoolRecord, error) {
 		return nil, err
 	}
 	var records []SpoolRecord
+	seen := make(map[string]bool)
 	var total int64
 	for _, name := range files {
 		path := filepath.Join(s.dir, name)
@@ -215,13 +245,20 @@ func (s *Spool) Batch(limit int, maxBytes int64) ([]SpoolRecord, error) {
 			}
 			position += int64(len(line))
 			if total+int64(len(line)) > maxBytes && len(records) > 0 {
-				break
+				file.Close()
+				return records, nil
 			}
 			var event ingest.Event
 			if json.Unmarshal(line, &event) != nil {
 				file.Close()
 				return nil, fmt.Errorf("collector spool contains invalid record in %s", name)
 			}
+			// Replay belongs in the next batch so server receipt deduplication can run.
+			if seen[event.EventID] {
+				file.Close()
+				return records, nil
+			}
+			seen[event.EventID] = true
 			records = append(records, SpoolRecord{Event: event, File: name, EndOffset: position})
 			total += int64(len(line))
 		}
@@ -236,6 +273,8 @@ func (s *Spool) Batch(limit int, maxBytes int64) ([]SpoolRecord, error) {
 func (s *Spool) Ack(records []SpoolRecord, lastUpload time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := s.state
+	previous.Offsets = maps.Clone(s.state.Offsets)
 	for _, record := range records {
 		if record.EndOffset > s.state.Offsets[record.File] {
 			s.state.Offsets[record.File] = record.EndOffset
@@ -244,6 +283,7 @@ func (s *Spool) Ack(records []SpoolRecord, lastUpload time.Time) error {
 	s.state.LastUploadAt = &lastUpload
 	s.state.LastError = ""
 	if err := s.saveStateLocked(); err != nil {
+		s.state = previous
 		return err
 	}
 	return s.removeAckedClosedFilesLocked()
@@ -258,6 +298,9 @@ func (s *Spool) SetError(message string) error {
 func (s *Spool) Status() (SpoolStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.removeAckedClosedFilesLocked(); err != nil {
+		return SpoolStatus{}, err
+	}
 	return s.statusLocked()
 }
 
@@ -353,22 +396,23 @@ func (s *Spool) saveStateLocked() error {
 	return nil
 }
 func (s *Spool) removeAckedClosedFilesLocked() error {
-	today := "events-" + time.Now().UTC().Format("2006-01-02") + ".jsonl"
 	files, err := s.eventFiles()
 	if err != nil {
 		return err
 	}
+	changed := false
 	for _, name := range files {
-		if name == today {
-			continue
-		}
 		info, err := os.Stat(filepath.Join(s.dir, name))
 		if err == nil && s.state.Offsets[name] >= info.Size() {
 			if err := os.Remove(filepath.Join(s.dir, name)); err != nil {
 				return err
 			}
 			delete(s.state.Offsets, name)
+			changed = true
 		}
 	}
-	return s.saveStateLocked()
+	if changed {
+		return s.saveStateLocked()
+	}
+	return nil
 }

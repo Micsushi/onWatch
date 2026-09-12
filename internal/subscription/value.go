@@ -104,10 +104,40 @@ func number(v float64) *float64 {
 }
 func modelKey(e Event) string { return e.Model + "|" + e.Effort + "|" + e.Speed }
 
+func matchesQuota(e Event, quota string) bool {
+	switch quota {
+	case "five_hour", "seven_day", "weekly":
+		return true
+	case "seven_day_sonnet":
+		return strings.HasPrefix(e.Model, "claude-") && strings.Contains(e.Model, "sonnet")
+	case "seven_day_opus":
+		return strings.HasPrefix(e.Model, "claude-") && strings.Contains(e.Model, "opus")
+	}
+	if strings.HasPrefix(quota, "antigravity_claude_gpt:") {
+		return strings.HasPrefix(e.Model, "claude-") || strings.HasPrefix(e.Model, "gpt-")
+	}
+	if strings.HasPrefix(quota, "antigravity_gemini_pro:") {
+		// The persisted summary key retains its legacy Pro name for the shared Gemini pool.
+		return strings.HasPrefix(e.Model, "gemini-")
+	}
+	if strings.HasPrefix(quota, "antigravity_gemini_flash:") {
+		return strings.HasPrefix(e.Model, "gemini-") && strings.Contains(e.Model, "flash")
+	}
+	// Extra-spend and unknown scoped meters are not a shared token allowance.
+	return false
+}
+
 // Analyze does not allocate shared quota to models in proportion to their prices.
 // A model gets calibration only from isolated >=5pp intervals of the weekly meter.
 func Analyze(events []Event, meters []Meter, profile Profile) Report {
 	sort.SliceStable(events, func(i, j int) bool { return events[i].At.Before(events[j].At) })
+	archiveEnds := make([]time.Time, len(events)+1)
+	for i, e := range events {
+		archiveEnds[i+1] = archiveEnds[i]
+		if e.Archived && e.End.After(archiveEnds[i+1]) {
+			archiveEnds[i+1] = e.End
+		}
+	}
 	meters = preferRolloutMeters(meters)
 	sort.SliceStable(meters, func(i, j int) bool {
 		if meters[i].Quota != meters[j].Quota {
@@ -154,7 +184,7 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 		d.Cost += e.Cost
 		d.Requests += e.Requests
 	}
-	if profile.MonthlyUSD > 0 && r.Requests > 0 {
+	if profile.MonthlyUSD > 0 && r.Requests > r.UnknownRequests {
 		r.ValueMultiple = number(r.Cost / profile.MonthlyUSD)
 	}
 	var cycle *Cycle
@@ -194,12 +224,18 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 				mixed := false
 				outputs := 0
 				count := 0
+				// An hourly row can start before this interval and still overlap it.
+				// Its total cannot establish where within the hour quota was spent.
+				if archiveEnds[from].After(anchor.At) {
+					cycle.ArchiveTiming = true
+					mixed = true
+				}
 				for j := from; j < len(events) && !events[j].At.After(m.At); j++ {
 					e := events[j]
-					if strings.HasPrefix(m.Quota, "claude") && !strings.HasPrefix(e.Model, "claude") {
+					if e.Plan != "" && m.Plan != "" && e.Plan != m.Plan {
 						continue
 					}
-					if strings.HasPrefix(m.Quota, "gemini") && !strings.HasPrefix(e.Model, "gemini") {
+					if !matchesQuota(e, m.Quota) {
 						continue
 					}
 					if !e.End.IsZero() && e.End.After(m.At) {

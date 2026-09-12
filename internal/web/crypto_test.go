@@ -248,7 +248,8 @@ func TestReEncryptSMTPPassword_Branches(t *testing.T) {
 		validateResult func(*testing.T, *memorySettingStore)
 	}{
 		{
-			name: "get setting error returns nil",
+			name:          "get setting error fails closed",
+			wantErrSubstr: "db read failed",
 			setupStore: func(s *memorySettingStore) {
 				s.getErr["smtp"] = errors.New("db read failed")
 			},

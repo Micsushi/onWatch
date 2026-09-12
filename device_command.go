@@ -13,6 +13,12 @@ import (
 )
 
 func runDeviceCommand(args []string) error {
+	if len(args) > 0 && args[0] == "device" {
+		args = args[1:]
+	}
+	if len(args) > 0 && args[0] == "bind-antigravity" {
+		return runDeviceBindingCommand(args[1:])
+	}
 	action, options, err := parseDeviceArgs(args)
 	if err != nil {
 		return err
@@ -232,6 +238,7 @@ func deviceState(device store.Device, now time.Time) string {
 }
 
 func printDeviceHelp() {
+	fmt.Println("  device bind-antigravity --db PATH --device-id ID --account OPAQUE_ID --expected-revision N (--email EMAIL | --clear) [--apply]")
 	fmt.Println("onWatch device management")
 	fmt.Println("Usage: onwatch device create --name NAME [--platform OS]")
 	fmt.Println("       onwatch device list [--json]")

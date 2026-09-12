@@ -462,7 +462,7 @@ func TestFakeExecCommandHelperSanity(t *testing.T) {
 	}
 }
 
-func TestReplaceBinary_RemoveThenRenameFailure(t *testing.T) {
+func TestReplaceBinaryMissingReplacementPreservesInstalled(t *testing.T) {
 	dir := t.TempDir()
 	exePath := filepath.Join(dir, "onwatch")
 	if err := os.WriteFile(exePath, []byte("old"), 0o755); err != nil {
@@ -471,11 +471,11 @@ func TestReplaceBinary_RemoveThenRenameFailure(t *testing.T) {
 	tmpPath := filepath.Join(dir, "missing.tmp")
 
 	err := replaceBinary(exePath, tmpPath, slog.Default())
-	if err == nil || !strings.Contains(err.Error(), "replace failed after remove") {
+	if err == nil || !strings.Contains(err.Error(), "replacement unavailable") {
 		t.Fatalf("replaceBinary() error = %v", err)
 	}
-	if _, statErr := os.Stat(exePath); !os.IsNotExist(statErr) {
-		t.Fatalf("expected exePath to be removed, stat err = %v", statErr)
+	if data, statErr := os.ReadFile(exePath); statErr != nil || string(data) != "old" {
+		t.Fatalf("expected installed binary preserved, stat err = %v", statErr)
 	}
 }
 

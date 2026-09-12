@@ -2790,3 +2790,47 @@ func (s *Store) HasActiveAlertOfType(provider, alertType string) (bool, error) {
 	}
 	return count > 0, nil
 }
+
+// ChangePassword commits the login hash, encrypted settings and session revocation together.
+func (s *Store) ChangePassword(username, oldHash, newHash string, transform func(map[string]string) error) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var current string
+	err = tx.QueryRow("SELECT password_hash FROM users WHERE username = ?", username).Scan(&current)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if current != "" && current != oldHash {
+		return fmt.Errorf("password changed concurrently")
+	}
+	settings := map[string]string{}
+	for _, key := range []string{"smtp", "discord"} {
+		var value string
+		err := tx.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		settings[key] = value
+	}
+	if err := transform(settings); err != nil {
+		return err
+	}
+	for key, value := range settings {
+		if value == "" {
+			continue
+		}
+		if _, err := tx.Exec("INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)", key, value); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec("INSERT OR REPLACE INTO users (username,password_hash,updated_at) VALUES (?,?,?)", username, newHash, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM auth_tokens"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

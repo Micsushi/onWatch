@@ -7825,7 +7825,8 @@ func TestHandler_LoginPost_RateLimited(t *testing.T) {
 	// Login attempt from blocked IP
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=admin&password=wrong"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("X-Forwarded-For", "192.168.1.1")
+	req.RemoteAddr = "192.168.1.1:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
 	rr := httptest.NewRecorder()
 	h.Login(rr, req)
 

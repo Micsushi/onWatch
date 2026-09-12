@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -62,12 +63,12 @@ func (h *Handler) SubscriptionValue(w http.ResponseWriter, r *http.Request) {
 			respondError(w, 400, "Invalid plan profile")
 			return
 		}
-		profile.Source = "configured monthly USD, before tax"
-		b, _ := json.Marshal(profile)
-		if e := h.store.SetSetting(key, string(b)); e != nil {
-			respondError(w, 500, "Could not save plan")
+		profile.Name = strings.TrimSpace(profile.Name)
+		if profile.Name == "" && (profile.MonthlyUSD != 0 || profile.Multiplier != 0) {
+			respondError(w, 400, "Enter a plan name")
 			return
 		}
+		profile.Source = "configured monthly USD, before tax"
 	} else if r.Method != http.MethodGet {
 		respondError(w, 405, "Use GET or PUT")
 		return
@@ -105,7 +106,7 @@ func (h *Handler) SubscriptionValue(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 500, "Could not load subscription observations; try a shorter range")
 		return
 	}
-	// Explicit rollout plan metadata can exclude a different subscription. Older records remain unverified.
+	// The current plan controls normalization, not which historical activity exists.
 	plan := ""
 	for _, m := range meters {
 		if m.Source == "poll" && m.At.After(start) {
@@ -117,17 +118,29 @@ func (h *Handler) SubscriptionValue(w http.ResponseWriter, r *http.Request) {
 		if e == nil && latest != nil {
 			plan = latest.PlanType
 		}
-		filtered := events[:0]
-		for _, event := range events {
-			if event.Plan == "" || event.Plan == plan {
-				filtered = append(filtered, event)
-			}
-		}
-		events = filtered
 	}
 	profile.PlanType = plan
+	if r.Method == http.MethodPut {
+		b, err := json.Marshal(profile)
+		if err != nil {
+			respondError(w, 400, "Invalid plan profile")
+			return
+		}
+		if err := h.store.SetSetting(key, string(b)); err != nil {
+			respondError(w, 500, "Could not save plan")
+			return
+		}
+	}
 	result := subscription.Analyze(events, meters, profile)
+	var latestMeter *time.Time
+	for _, meter := range meters {
+		if latestMeter == nil || meter.At.After(*latestMeter) {
+			at := meter.At
+			latestMeter = &at
+		}
+	}
+	meterStale := latestMeter != nil && end.Sub(*latestMeter) > 30*time.Minute
 	result.Warnings = append(result.Warnings, "Period value uses the configured current monthly fee and can span historical plan or model changes. Historical allowances with a different plan are not normalized by the current multiplier.")
 	result.Warnings = append(result.Warnings, "Token account '"+account+"' is paired with the selected meter. Legacy records lack a verified account binding; device labels describe source paths, not proof of machine-specific limits.")
-	respondJSON(w, 200, map[string]any{"provider": provider, "start": start, "end": end, "basis": "Current API Standard short-context text rates, checked 2026-09-07. Excludes tools and API speed/context premiums; Codex credits shown separately.", "report": result})
+	respondJSON(w, 200, map[string]any{"provider": provider, "start": start, "end": end, "latest_meter_at": latestMeter, "meter_stale": meterStale, "basis": "Current API Standard short-context text rates, checked 2026-09-07. Excludes tools and API speed/context premiums; Codex credits shown separately.", "report": result})
 }

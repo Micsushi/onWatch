@@ -2478,6 +2478,7 @@ function openAnthropicModal(quotaName, providerOverride) {
     </div>
   `;
 
+  if (modal.hidden) State.modalReturnFocus = document.activeElement;
   modal.hidden = false;
   document.getElementById('modal-close').focus();
 
@@ -2486,10 +2487,27 @@ function openAnthropicModal(quotaName, providerOverride) {
   loadAnthropicModalCycles(quotaName);
 }
 
+function setModalChartStatus(canvas, message) {
+  if (!canvas?.isConnected || document.getElementById('detail-modal')?.hidden) return false;
+  let status = canvas.parentElement.querySelector('.modal-chart-status');
+  if (!status) {
+    status = document.createElement('p');
+    status.className = 'modal-chart-status empty-state';
+    status.setAttribute('role', 'status');
+    canvas.parentElement.appendChild(status);
+  }
+  status.textContent = message;
+  status.hidden = !message;
+  canvas.hidden = Boolean(message);
+  return true;
+}
+
 async function loadAnthropicModalChart(quotaName) {
   const ctx = document.getElementById('modal-chart');
   if (!ctx || typeof Chart === 'undefined') return;
   if (State.modalChart) { State.modalChart.destroy(); State.modalChart = null; }
+
+  setModalChartStatus(ctx, 'Loading quota history...');
 
   const range = State.currentRange || DEFAULT_CHART_RANGE;
   const rangeKey = range.toLowerCase();
@@ -2497,9 +2515,10 @@ async function loadAnthropicModalChart(quotaName) {
 
   try {
     const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=anthropic`);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error('Quota history unavailable');
     const data = await res.json();
-    if (!Array.isArray(data) || data.length === 0) return;
+    if (document.getElementById('modal-chart') !== ctx || !setModalChartStatus(ctx, '')) return;
+    if (!Array.isArray(data) || data.length === 0) {setModalChartStatus(ctx, 'No quota history in this range.');return;}
 
     const colors = getThemeColors();
     const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] ?? null }));
@@ -2515,7 +2534,7 @@ async function loadAnthropicModalChart(quotaName) {
           data: processed.data,
           borderColor: c.border,
           backgroundColor: c.bg,
-          fill: true,
+          fill: processed.gapSegments.size === 0,
           tension: 0.3,
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
@@ -2531,12 +2550,12 @@ async function loadAnthropicModalChart(quotaName) {
           tooltip: { backgroundColor: colors.surfaceContainer, titleColor: colors.onSurface, bodyColor: colors.text, borderColor: colors.outline, borderWidth: 1, callbacks: { label: c => `${c.parsed.y.toFixed(1)}%` } }
         },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' } },
+          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' } },
           y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
         }
       }
     });
-  } catch (err) { /* modal chart error - non-critical */ }
+  } catch (err) {setModalChartStatus(ctx, 'Could not load quota history. Close and reopen details to retry.');}
 }
 
 async function loadAnthropicModalCycles(quotaName) {
@@ -2880,8 +2899,8 @@ function openCopilotModal(quotaName, providerOverride) {
     </table>
   `;
 
-  modal.classList.add('open');
-  document.body.classList.add('modal-open');
+  if (modal.hidden) State.modalReturnFocus = document.activeElement;
+  modal.hidden = false;
   modal.querySelector('.modal-close')?.focus();
 
   loadCopilotModalChart(quotaName);
@@ -2889,14 +2908,18 @@ function openCopilotModal(quotaName, providerOverride) {
 }
 
 async function loadCopilotModalChart(quotaName) {
+  const canvas = document.getElementById('modal-chart');
+  if (!canvas || typeof Chart === 'undefined') return;
+  setModalChartStatus(canvas, 'Loading quota history...');
   const range = State.currentRange || DEFAULT_CHART_RANGE;
   const rangeKey = range.toLowerCase();
   const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
   try {
     const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=copilot`);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error('Quota history unavailable');
     const history = await res.json();
-    if (!history || history.length === 0) return;
+    if (document.getElementById('modal-chart') !== canvas || !setModalChartStatus(canvas, '')) return;
+    if (!history || history.length === 0) {setModalChartStatus(canvas, 'No quota history in this range.');return;}
 
     // Extract data points for this quota
     const data = history.filter(h => {
@@ -2907,10 +2930,7 @@ async function loadCopilotModalChart(quotaName) {
       return { capturedAt: h.capturedAt, usagePercent: q ? q.usagePercent : 0 };
     });
 
-    if (data.length === 0) return;
-
-    const canvas = document.getElementById('modal-chart');
-    if (!canvas) return;
+    if (data.length === 0) {setModalChartStatus(canvas, 'No quota history in this range.');return;}
     const ctx = canvas.getContext('2d');
 
     // Clean up existing chart if any
@@ -2933,7 +2953,7 @@ async function loadCopilotModalChart(quotaName) {
           data: processed.data,
           borderColor: c.border,
           backgroundColor: c.bg,
-          fill: true,
+          fill: processed.gapSegments.size === 0,
           tension: 0.3,
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
@@ -2949,12 +2969,12 @@ async function loadCopilotModalChart(quotaName) {
           tooltip: { backgroundColor: colors.surfaceContainer, titleColor: colors.onSurface, bodyColor: colors.text, borderColor: colors.outline, borderWidth: 1, callbacks: { label: c => `${c.parsed.y.toFixed(1)}%` } }
         },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' } },
+          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' } },
           y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
         }
       }
     });
-  } catch (err) { /* modal chart error - non-critical */ }
+  } catch (err) {setModalChartStatus(canvas, 'Could not load quota history. Close and reopen details to retry.');}
 }
 
 async function loadCopilotModalCycles(quotaName) {
@@ -3522,8 +3542,8 @@ function openAntigravityModal(groupKey, providerOverride) {
     </table>
   `;
 
-  modal.classList.add('open');
-  document.body.classList.add('modal-open');
+  if (modal.hidden) State.modalReturnFocus = document.activeElement;
+  modal.hidden = false;
   modal.querySelector('.modal-close')?.focus();
 
   loadAntigravityModalChart(groupKey);
@@ -3531,28 +3551,32 @@ function openAntigravityModal(groupKey, providerOverride) {
 }
 
 async function loadAntigravityModalChart(groupKey) {
+  const canvas = document.getElementById('modal-chart');
+  if (!canvas || typeof Chart === 'undefined') return;
+  setModalChartStatus(canvas, 'Loading quota history...');
   const range = State.currentRange || DEFAULT_CHART_RANGE;
   const rangeKey = range.toLowerCase();
   const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
   const colors = getThemeColors();
   try {
     const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=antigravity`);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error('Quota history unavailable');
     const data = await res.json();
-
-    const ctx = document.getElementById('modal-chart')?.getContext('2d');
-    if (!ctx || !data.datasets) return;
+    if (document.getElementById('modal-chart') !== canvas || !setModalChartStatus(canvas, '')) return;
+    const ctx = canvas.getContext('2d');
 
     // Filter to the selected logical quota group dataset
-    const modelDataset = data.datasets.find(ds => ds.modelId === groupKey);
-    if (!modelDataset) return;
+    const windowKind = State.currentQuotas[`antigravity-${groupKey}`]?.windowKind || State.antigravityQuotaWindow;
+    const candidates = (data.datasets || []).filter(ds => ds.modelId === groupKey || ds.modelId.startsWith(groupKey+':'));
+    const modelDataset = candidates.find(ds => ds.windowKind === windowKind) || candidates[0];
+    if (!modelDataset) {setModalChartStatus(canvas, 'No quota history in this range.');return;}
 
     if (State.modalChart) State.modalChart.destroy();
 
     const labels = data.labels || [];
     const rawData = (modelDataset.data || []).map((y, i) => ({ x: new Date(labels[i]), y }));
     const processed = processCappedDataWithGaps(rawData, range);
-    const borderColor = '#6e40c9';
+    const borderColor = modelDataset.borderColor || '#6e40c9';
 
     State.modalChart = new Chart(ctx, {
       type: 'line',
@@ -3566,7 +3590,7 @@ async function loadAntigravityModalChart(groupKey) {
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
-          fill: true,
+          fill: false,
           spanGaps: false,
           segment: getSegmentStyle(processed.gapSegments, borderColor)
         }]
@@ -3576,12 +3600,12 @@ async function loadAntigravityModalChart(groupKey) {
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' }, title: { display: true, text: 'Time' } },
+          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' }, title: { display: true, text: 'Time' } },
           y: { beginAtZero: true, max: 100, title: { display: true, text: 'Usage %' } }
         }
       }
     });
-  } catch (err) { /* modal chart error - non-critical */ }
+  } catch (err) {setModalChartStatus(canvas, 'Could not load quota history. Close and reopen details to retry.');}
 }
 
 async function loadAntigravityModalCycles(groupKey) {
@@ -3885,6 +3909,7 @@ function openCodexModal(quotaName, providerOverride) {
     </div>
   `;
 
+  if (modal.hidden) State.modalReturnFocus = document.activeElement;
   modal.hidden = false;
   document.getElementById('modal-close').focus();
 
@@ -3897,15 +3922,18 @@ async function loadCodexModalChart(quotaName) {
   if (!ctx || typeof Chart === 'undefined') return;
   if (State.modalChart) { State.modalChart.destroy(); State.modalChart = null; }
 
+  setModalChartStatus(ctx, 'Loading quota history...');
+
   const range = State.currentRange || DEFAULT_CHART_RANGE;
   const rangeKey = range.toLowerCase();
   const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
 
   try {
     const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=codex${codexAccountParam()}`);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error('Quota history unavailable');
     const data = await res.json();
-    if (!Array.isArray(data) || data.length === 0) return;
+    if (document.getElementById('modal-chart') !== ctx || !setModalChartStatus(ctx, '')) return;
+    if (!Array.isArray(data) || data.length === 0) {setModalChartStatus(ctx, 'No quota history in this range.');return;}
 
     const colors = getThemeColors();
     const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] ?? null }));
@@ -3921,7 +3949,7 @@ async function loadCodexModalChart(quotaName) {
           data: processed.data,
           borderColor: c.border,
           backgroundColor: c.bg,
-          fill: true,
+          fill: processed.gapSegments.size === 0,
           tension: 0.3,
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
@@ -3937,12 +3965,12 @@ async function loadCodexModalChart(quotaName) {
           tooltip: { backgroundColor: colors.surfaceContainer, titleColor: colors.onSurface, bodyColor: colors.text, borderColor: colors.outline, borderWidth: 1, callbacks: { label: c => `${c.parsed.y.toFixed(1)}%` } }
         },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' } },
+          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' } },
           y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
         }
       }
     });
-  } catch (err) { /* modal chart error - non-critical */ }
+  } catch (err) {setModalChartStatus(ctx, 'Could not load quota history. Close and reopen details to retry.');}
 }
 
 async function loadCodexModalCycles(quotaName) {
@@ -4557,7 +4585,7 @@ function applyProviderCurrentPayload(provider, data, apiIntegrationsCurrentData 
     if (data.quotas) {
       const container = document.getElementById('quota-grid-anthropic');
       const renderedCount = container ? container.querySelectorAll('.quota-card.anthropic-card').length : 0;
-      if (container && (container.children.length === 0 || renderedCount !== data.quotas.length)) {
+      if (container && (container.children.length === 0 || container.querySelector('.loading-spinner') || renderedCount !== data.quotas.length)) {
         renderAnthropicQuotaCards(data.quotas, 'quota-grid-anthropic');
       }
       data.quotas.forEach(q => updateAnthropicCard(q));
@@ -4814,7 +4842,7 @@ async function fetchCodexUsage(options = {}) {
     if (!container) return;
 
     const renderedCount = container.querySelectorAll('.quota-card.codex-card').length;
-    if (container.children.length === 0 || renderedCount !== visibleQuotas.length || planChanged) {
+    if (container.children.length === 0 || container.querySelector('.loading-spinner') || renderedCount !== visibleQuotas.length || planChanged) {
       renderCodexQuotaCards(visibleQuotas, 'quota-grid-codex', State.codexPlanType);
     }
 
@@ -5749,7 +5777,7 @@ function aggregateDatasetForBuckets(
   const preserveMissingCoverage = dataset._barStrategy == null;
   const points = (dataset.data || [])
     .filter(point => point && point.x != null && point.y != null && Number.isFinite(Number(point.y)))
-    .map(point => ({ x: point.x instanceof Date ? point.x : new Date(point.x), y: Number(point.y) }))
+    .map(point => ({ x: point.x instanceof Date ? point.x : new Date(point.x), y: Number(point.y), weight: point.weight ?? 1 }))
     .filter(point => !Number.isNaN(point.x.getTime()))
     .sort((a, b) => a.x.getTime() - b.x.getTime());
   const intervalMs = graphBucketIntervalMs(range, mode, points, windowStart, windowEnd);
@@ -5782,8 +5810,9 @@ function aggregateDatasetForBuckets(
       periodStart: bucketStart,
       periodEnd: new Date(bucketStart.getTime() + intervalMs),
     };
-    existing.y += value;
-    existing.count += 1;
+    const weight = strategy === 'average' ? Math.max(0, Number(point.weight)) : 1;
+    existing.y += value * weight;
+    existing.count += weight;
     existing.knownCount = Number(existing.knownCount || 0) + (valueIsKnown ? 1 : 0);
     existing.resetObserved = Boolean(existing.resetObserved || resetObserved);
     buckets.set(key, existing);
@@ -6332,7 +6361,7 @@ function initChart() {
           offset: false,
           time: { unit: 'hour', displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' } },
           grid: { color: colors.grid, drawBorder: false },
-          ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' }
+          ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' }
         },
         y: {
           grid: { color: colors.grid, drawBorder: false },
@@ -8171,9 +8200,6 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const hasLoadedSelectedRange = State.platformCostHistoryRange === range;
   let rows = hasLoadedSelectedRange ? getPlatformCostHistoryRows(integration) : [];
   const rangeTotals = getPlatformCostRangeTotals(provider, range, rows);
-  if (rows.length === 0 && rangeTotals && hasPlatformCostUsage(rangeTotals)) {
-    rows = buildPlatformCostRowsFromTotals(rangeTotals);
-  }
   if (!State.platformCostHistoryLoading && !hasLoadedSelectedRange) {
     fetchPlatformCostHistory(range, provider);
   }
@@ -8214,9 +8240,10 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     : platformCostTimeScale(range);
   const hasUsageInRange = rows.some(row => Number(row.totalCostUsd || 0) > 0
     || Number(row.totalTokens || 0) > 0
-    || Number(row.requestCount || 0) > 0)
-    || hasPlatformCostUsage(rangeTotals);
-  const emptyCostMessage = provider === 'antigravity'
+    || Number(row.requestCount || 0) > 0);
+  const emptyCostMessage = rows.length === 0 && hasPlatformCostUsage(rangeTotals)
+    ? 'Period totals are available, but timed cost samples are missing.'
+    : provider === 'antigravity'
     ? 'No Antigravity token usage recorded for this range. Quota percentages cannot be converted into cost.'
     : noUsageMessage(range);
   const hasPeriodCostPoints = periodMode
@@ -8225,7 +8252,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     subtitle.textContent = hasUsageInRange || hasPeriodCostPoints
       ? (periodMode
         ? `${formatNumber(bucketed.cost.length)} periods`
-        : `${formatNumber(cumulative.cost.length)} chats`)
+        : `${formatNumber(cumulative.cost.length)} recorded samples`)
       : (provider === 'antigravity' ? 'No token records' : emptyCostMessage);
   }
   setPlatformCostChartLoading(false);
@@ -8288,6 +8315,8 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           hoverBackgroundColor: costFill,
           hoverBorderColor: costColor,
           ...graphLineStyle(periodMode),
+          showLine: periodMode,
+          fill: false,
           hoverBorderWidth: 2,
         },
         {
@@ -8300,6 +8329,8 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           hoverBackgroundColor: tokensFill,
           hoverBorderColor: tokensColor,
           ...graphLineStyle(periodMode),
+          showLine: periodMode,
+          fill: false,
           hoverBorderWidth: 2,
         },
       ],
@@ -8353,7 +8384,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           max: costTimeBounds?.max ?? costPeriodBounds?.max,
           time: timeScale,
           grid: { color: colors.grid, drawBorder: false },
-          ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' },
+          ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' },
         },
         y: {
           min: 0,
@@ -8405,18 +8436,13 @@ function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || 
   let tokens = 0;
   const costPoints = [];
   const tokenPoints = [];
-  const startTime = range === 'custom' ? null : platformCostRangeStartTime(range);
-  if (startTime) {
-    costPoints.push({ x: startTime, y: 0 });
-    tokenPoints.push({ x: startTime, y: 0 });
-  }
   [...rows]
     .filter(row => row && row.capturedAt)
     .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
     .forEach((row) => {
       if (row.cumulativeCostUsd !== undefined || row.cumulativeTotalTokens !== undefined) {
-        cost = Number(row.cumulativeCostUsd || cost);
-        tokens = Number(row.cumulativeTotalTokens || tokens);
+        cost = Number(row.cumulativeCostUsd ?? cost);
+        tokens = Number(row.cumulativeTotalTokens ?? tokens);
       } else {
         cost += Number(row.totalCostUsd || 0);
         tokens += Number(row.totalTokens || 0);
@@ -8471,26 +8497,21 @@ function downsamplePointSeriesForCumulative(
 
   const sampled = [];
   let pointIndex = 0;
-  let latestPoint = null;
   buckets.forEach((bucket) => {
-    while (pointIndex < cleanPoints.length && cleanPoints[pointIndex].x.getTime() <= bucket.periodEnd.getTime()) {
-      latestPoint = cleanPoints[pointIndex];
+    let latestPoint = null;
+    while (pointIndex < cleanPoints.length && cleanPoints[pointIndex].x.getTime() < bucket.periodEnd.getTime()) {
+      const point = cleanPoints[pointIndex];
+      if (point.x.getTime() >= bucket.periodStart.getTime()) latestPoint = point;
       pointIndex += 1;
     }
     if (!latestPoint) return;
-    const sampledTime = clampToSelectedWindow
-      ? Math.max(selectedStart, Math.min(selectedEnd - 1, bucket.x.getTime()))
-      : bucket.x.getTime();
-    sampled.push({
-      ...latestPoint,
-      x: new Date(sampledTime),
-      y: latestPoint.y,
-      periodStart: bucket.periodStart,
-      periodEnd: bucket.periodEnd,
-    });
+    sampled.push(latestPoint);
   });
-
-  return sampled.length > 0 ? sampled : cleanPoints;
+  const visible = clampToSelectedWindow
+    ? cleanPoints.filter(point => point.x.getTime() >= selectedStart && point.x.getTime() < selectedEnd)
+    : cleanPoints;
+  if (visible.length && sampled[0] !== visible[0]) sampled.unshift(visible[0]);
+  return sampled;
 }
 
 function processCappedDataWithGaps(dataPoints, range = '6h') {
@@ -8709,17 +8730,6 @@ function getPlatformCostRangeTotals(provider, range, rows) {
   }, { cost: 0, tokens: 0, requests: 0, lastSeen: null });
 }
 
-function buildPlatformCostRowsFromTotals(totals) {
-  const capturedAt = totals.lastSeen || new Date().toISOString();
-  return [{
-    capturedAt,
-    lastCapturedAt: capturedAt,
-    requestCount: Number(totals.requests || 0),
-    totalTokens: Number(totals.tokens || 0),
-    totalCostUsd: Number(totals.cost || 0),
-  }];
-}
-
 function platformCostRefreshSelectionKey(range, scope) {
   return normalizePlatformCostRange(range) === 'custom'
     ? historySelectionKey('custom', scope)
@@ -8912,16 +8922,14 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
     if (metric === 'totalCostUsd' && !rows.some((row) => row.totalCostUsd != null)) {
       return datasets;
     }
-    const integrationTotalTokens = Number(State.apiIntegrationsCurrent?.[integrationName]?.totalTokens || 0);
-    const visibleTotalTokens = rows.reduce((sum, row) => sum + Number(row.totalTokens || 0), 0);
-    const accumulatedBaseline = Math.max(0, integrationTotalTokens - visibleTotalTokens);
-    const integrationTotalCost = Number(State.apiIntegrationsCurrent?.[integrationName]?.totalCostUsd || 0);
-    const visibleTotalCost = rows.reduce((sum, row) => sum + Number(row.totalCostUsd || 0), 0);
-    const costBaseline = Math.max(0, integrationTotalCost - visibleTotalCost);
+    // Current lifetime totals include activity after a historical window.
+    // Accumulate only the selected period instead of moving future usage into it.
+    const accumulatedBaseline = 0;
+    const costBaseline = 0;
     const color = apiIntegrationsChartColorFallback[colorIndex++ % apiIntegrationsChartColorFallback.length];
     let runningTotal = accumulatedBaseline;
     let runningCost = costBaseline;
-    const rawData = rows.map((row) => {
+    const rawData = [...rows].sort((a,b)=>Date.parse(a.capturedAt)-Date.parse(b.capturedAt)).map((row) => {
       let value = 0;
       if (metric === 'tokenPerCall') {
         const requestCount = Number(row.requestCount || 0);
@@ -8938,6 +8946,7 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
       return {
         x: new Date(row.capturedAt),
         y: value,
+        weight: metric === 'tokenPerCall' ? Number(row.requestCount || 0) : 1,
       };
     });
     const processed = {
@@ -9520,7 +9529,7 @@ function buildChartOptions(colors, yMax, range) {
         type: 'time',
         time: { unit: timeUnit, displayFormats },
         grid: { color: colors.grid, drawBorder: false },
-        ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' }
+        ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' }
       },
       y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax || 100 }
     }
@@ -10723,6 +10732,7 @@ function openModal(quotaType, providerOverride) {
     </div>
   `;
 
+  if (modal.hidden) State.modalReturnFocus = document.activeElement;
   modal.hidden = false;
   // Trap focus: focus the close button
   document.getElementById('modal-close').focus();
@@ -10735,6 +10745,8 @@ function openModal(quotaType, providerOverride) {
 async function loadModalChart(quotaType, effectiveProvider) {
   const ctx = document.getElementById('modal-chart');
   if (!ctx || typeof Chart === 'undefined') return;
+
+  setModalChartStatus(ctx, 'Loading quota history...');
 
   // Destroy previous modal chart
   if (State.modalChart) {
@@ -10749,9 +10761,10 @@ async function loadModalChart(quotaType, effectiveProvider) {
   const provider = effectiveProvider || getCurrentProvider();
   try {
     const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=${provider}`);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error('Quota history unavailable');
     const data = await res.json();
-    if (!Array.isArray(data) || data.length === 0) return;
+    if (document.getElementById('modal-chart') !== ctx || !setModalChartStatus(ctx, '')) return;
+    if (!Array.isArray(data) || data.length === 0) {setModalChartStatus(ctx, 'No quota history in this range.');return;}
     const historyRows = data;
     let datasetKey;
     if (provider === 'zai') {
@@ -10766,7 +10779,7 @@ async function loadModalChart(quotaType, effectiveProvider) {
     const colors = getThemeColors();
     const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[datasetKey] }));
     const processed = processCappedDataWithGaps(rawData, range);
-    const maxVal = Math.max(...historyRows.map(d => d[datasetKey]), 0);
+    const maxVal = Math.max(...historyRows.map(d => d[datasetKey] ?? 0), 0);
 
     // Dynamic Y-axis: if max is 0 or very low, show up to 10%
     // Otherwise add 20% padding, rounded to nearest 5
@@ -10787,7 +10800,7 @@ async function loadModalChart(quotaType, effectiveProvider) {
           data: processed.data,
           borderColor: colorMap[quotaType] || '#3B82F6',
           backgroundColor: bgMap[quotaType] || 'rgba(59,130,246,0.08)',
-          fill: true,
+          fill: processed.gapSegments.size === 0,
           tension: 0.3,
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
@@ -10811,13 +10824,13 @@ async function loadModalChart(quotaType, effectiveProvider) {
           }
         },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, source: 'auto' } },
+          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' } },
           y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
         }
       }
     });
   } catch (err) {
-    // modal chart error - non-critical
+    setModalChartStatus(ctx, 'Could not load quota history. Close and reopen details to retry.');
   }
 }
 
@@ -10868,6 +10881,9 @@ function closeModal() {
     State.modalChart.destroy();
     State.modalChart = null;
   }
+  const target = State.modalReturnFocus;
+  if (target?.isConnected && target.getClientRects().length) target.focus();
+  else document.querySelector('.provider-tab[aria-selected="true"]')?.focus();
 }
 
 // Event Setup

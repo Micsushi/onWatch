@@ -163,6 +163,11 @@ func NewServer(port int, handler *Handler, logger *slog.Logger, username, passwo
 	if username != "" && passwordHash != "" {
 		sessions := NewSessionStore(username, passwordHash, handler.store)
 		handler.sessions = sessions
+		if handler.rateLimiter == nil {
+			handler.rateLimiter = sessions.limiter
+		} else {
+			sessions.limiter = handler.rateLimiter
+		}
 		trustProxyAuth := handler.config != nil && handler.config.TrustProxyAuth
 		if trustProxyAuth {
 			if logger != nil {
@@ -230,7 +235,7 @@ func contentTypeHandler(next http.Handler) http.Handler {
 				w.Header().Set("Content-Type", "image/svg+xml")
 			}
 		}
-		if strings.HasSuffix(r.URL.Path, "app.js") || strings.HasSuffix(r.URL.Path, "style.css") {
+		if strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, "style.css") {
 			// Core frontend assets must revalidate so UI updates are visible immediately.
 			w.Header().Set("Cache-Control", "no-cache")
 		} else {

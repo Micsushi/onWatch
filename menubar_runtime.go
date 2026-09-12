@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -44,7 +45,10 @@ func writeRuntimePID(path string) error {
 	if err := ensurePIDDir(); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("%d", os.Getpid())), 0600); err != nil {
+		return err
+	}
+	return writeInstanceIdentity(path, os.Getpid())
 }
 
 func processRunning(pid int) bool {
@@ -54,15 +58,11 @@ func processRunning(pid int) bool {
 	if processZombie(pid) {
 		return false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	return platformProcessRunning(pid)
 }
 
 func processZombie(pid int) bool {
-	if pid <= 0 {
+	if pid <= 0 || runtime.GOOS == "windows" {
 		return false
 	}
 	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "stat=").Output()
@@ -97,9 +97,11 @@ func stopMenubarProcess(testMode bool) error {
 	}
 	proc, err := os.FindProcess(pid)
 	if err == nil {
-		_ = proc.Signal(syscall.SIGTERM)
+		if err := stopOwnedProcess(proc); err != nil {
+			return err
+		}
 	}
-	_ = os.Remove(path)
+	removeStoppedPID(path)
 	return nil
 }
 
@@ -133,7 +135,7 @@ func startMenubarCompanion(cfg *config.Config, logger *slog.Logger) error {
 		if processRunning(pid) {
 			return nil
 		}
-		_ = os.Remove(path)
+		removeStoppedPID(path)
 	}
 
 	exe, err := os.Executable()
@@ -172,8 +174,9 @@ func startMenubarCompanion(cfg *config.Config, logger *slog.Logger) error {
 		_ = logFile.Close()
 		return err
 	}
-	if err := writeRuntimePID(path); err != nil {
+	if err := writeInstanceIdentity(path, cmd.Process.Pid); err != nil {
 		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		_ = logFile.Close()
 		return fmt.Errorf("failed to write menubar pid file: %w", err)
 	}
@@ -207,7 +210,7 @@ func startMenubarCompanion(cfg *config.Config, logger *slog.Logger) error {
 		err := cmd.Wait()
 		<-stdoutDone
 		<-stderrDone
-		_ = os.Remove(path)
+		removeStoppedPID(path)
 		_ = logFile.Close()
 
 		if err != nil {
@@ -246,9 +249,18 @@ func runMenubarCommand() error {
 		db.Close()
 		return err
 	}
+	passwordHash, err := db.GetUser(cfg.AdminUser)
+	if err != nil {
+		db.Close()
+		return err
+	}
+	if passwordHash == "" {
+		passwordHash = cfg.AdminPassHash
+	}
+	token := menubar.LocalToken(passwordHash)
 	db.Close()
-
-	mbCfg := settings.ToConfig(cfg.Port, httpSnapshotProvider(cfg.Port))
+	mbCfg := settings.ToConfig(cfg.Port, httpSnapshotProvider(cfg.Port, token))
+	mbCfg.AuthToken = token
 	mbCfg.TestMode = cfg.TestMode
 
 	pidPath := menubarPIDPath(cfg.TestMode)
@@ -274,11 +286,18 @@ func runMenubarCommand() error {
 	return nil
 }
 
-func httpSnapshotProvider(port int) menubar.SnapshotProvider {
+func httpSnapshotProvider(port int, tokens ...string) menubar.SnapshotProvider {
 	url := fmt.Sprintf("http://localhost:%d/api/menubar/summary", port)
 	client := &http.Client{Timeout: 5 * time.Second}
 	return func() (*menubar.Snapshot, error) {
-		resp, err := client.Get(url)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		if len(tokens) > 0 {
+			req.Header.Set("X-Onwatch-Menubar", tokens[0])
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("menubar snapshot fetch failed: %w", err)
 		}

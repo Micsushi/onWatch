@@ -2223,6 +2223,9 @@ func TestRunStop_WithLivePIDAndPort(t *testing.T) {
 
 	// Start a subprocess that sleeps
 	cmd := startSleepSubprocess(t)
+	if err := writeInstanceIdentity(pidFile, cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
 	pid := cmd.Process.Pid
@@ -2254,6 +2257,9 @@ func TestRunStop_WithLivePIDLegacyFormat(t *testing.T) {
 
 	// Start a subprocess that sleeps
 	cmd := startSleepSubprocess(t)
+	if err := writeInstanceIdentity(pidFile, cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
 	pid := cmd.Process.Pid
@@ -2288,6 +2294,9 @@ func TestRunStatus_WithLivePIDAndPort(t *testing.T) {
 
 	// Start a subprocess that sleeps
 	cmd := startSleepSubprocess(t)
+	if err := writeInstanceIdentity(pidFile, cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
 	pid := cmd.Process.Pid
@@ -2319,6 +2328,9 @@ func TestRunStatus_WithLivePIDLegacyFormat(t *testing.T) {
 
 	// Start a subprocess that sleeps
 	cmd := startSleepSubprocess(t)
+	if err := writeInstanceIdentity(pidFile, cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
 	pid := cmd.Process.Pid
@@ -2353,6 +2365,9 @@ func TestStopPreviousInstance_WithLivePID(t *testing.T) {
 
 	// Start a subprocess that sleeps
 	cmd := startSleepSubprocess(t)
+	if err := writeInstanceIdentity(pidFile, cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
 	pid := cmd.Process.Pid
@@ -2384,6 +2399,9 @@ func TestStopPreviousInstance_WithLivePIDLegacyFormat(t *testing.T) {
 
 	// Start a subprocess that sleeps
 	cmd := startSleepSubprocess(t)
+	if err := writeInstanceIdentity(pidFile, cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
 	pid := cmd.Process.Pid
@@ -2435,7 +2453,12 @@ func TestStopPreviousInstance_WaitsForGracefulExit(t *testing.T) {
 		t.Fatalf("write pid file: %v", err)
 	}
 
-	stopPreviousInstance(0, true)
+	if err := writeInstanceIdentity(pidFile, cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+	if err := stopPreviousInstance(0, true); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(exitPath); err != nil {
 		t.Fatalf("stopPreviousInstance returned before graceful shutdown completed: %v", err)
 	}

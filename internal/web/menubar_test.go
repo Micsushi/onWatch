@@ -440,8 +440,8 @@ func TestMenubarPageUsesPersistedDefaultViewWithoutQuery(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), `"default_view":"detailed"`) {
-		t.Fatalf("expected persisted detailed default view in bootstrap, got body: %s", rr.Body.String())
+	if !strings.Contains(rr.Body.String(), `"default_view":"standard"`) {
+		t.Fatalf("expected private preferences excluded from public shell, got body: %s", rr.Body.String())
 	}
 }
 
@@ -480,6 +480,7 @@ func TestSessionAuthMiddleware_AllowsLoopbackMenubarPaths(t *testing.T) {
 	}
 
 	apiReq := httptest.NewRequest(http.MethodGet, "/api/menubar/summary", nil)
+	apiReq.Header.Set("X-Onwatch-Menubar", menubar.LocalToken(sessions.PasswordHash()))
 	apiReq.RemoteAddr = "[::1]:12345"
 	apiRR := httptest.NewRecorder()
 	handler.ServeHTTP(apiRR, apiReq)
@@ -489,6 +490,7 @@ func TestSessionAuthMiddleware_AllowsLoopbackMenubarPaths(t *testing.T) {
 	}
 
 	prefsReq := httptest.NewRequest(http.MethodGet, "/api/menubar/preferences", nil)
+	prefsReq.Header.Set("X-Onwatch-Menubar", menubar.LocalToken(sessions.PasswordHash()))
 	prefsReq.RemoteAddr = "127.0.0.1:12345"
 	prefsRR := httptest.NewRecorder()
 	handler.ServeHTTP(prefsRR, prefsReq)
@@ -498,6 +500,7 @@ func TestSessionAuthMiddleware_AllowsLoopbackMenubarPaths(t *testing.T) {
 	}
 
 	refreshReq := httptest.NewRequest(http.MethodPost, "/api/menubar/refresh", nil)
+	refreshReq.Header.Set("X-Onwatch-Menubar", menubar.LocalToken(sessions.PasswordHash()))
 	refreshReq.RemoteAddr = "127.0.0.1:12345"
 	refreshReq.Header.Set("X-Requested-With", "XMLHttpRequest")
 	refreshRR := httptest.NewRecorder()

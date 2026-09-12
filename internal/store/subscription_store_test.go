@@ -66,3 +66,24 @@ func TestSubscriptionMetersTransferAndReplay(t *testing.T) {
 		t.Fatalf("count=%d err=%v", n, err)
 	}
 }
+
+func TestSubscriptionRetainsHistoricalPlansWithoutPollSnapshot(t *testing.T) {
+	s := newTransferTestStore(t)
+	at := time.Now().UTC()
+	for i, plan := range []string{"plus", "pro"} {
+		if err := s.InsertSubscriptionMeter("codex", "default", subscription.Meter{At: at.Add(time.Duration(i) * time.Minute), Quota: "seven_day", Plan: plan, Used: 20}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, withPoll := range []bool{false, true} {
+		if withPoll {
+			if _, err := s.InsertCodexSnapshot(&api.CodexSnapshot{AccountID: 1, CapturedAt: at.Add(2 * time.Minute), PlanType: "pro"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, meters, err := s.SubscriptionInputs(context.Background(), "codex", "default", 1, at.Add(-time.Minute), at.Add(time.Hour))
+		if err != nil || len(meters) != 2 {
+			t.Fatalf("withPoll=%v meters=%+v err=%v", withPoll, meters, err)
+		}
+	}
+}

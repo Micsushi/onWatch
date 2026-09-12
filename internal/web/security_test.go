@@ -441,8 +441,8 @@ func TestGetClientIP_XForwardedFor(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:12345"
 
 	ip := getClientIP(req)
-	if ip != "203.0.113.50" {
-		t.Errorf("expected first IP from X-Forwarded-For, got %q", ip)
+	if ip != "127.0.0.1" {
+		t.Errorf("expected direct peer, got %q", ip)
 	}
 }
 
@@ -453,8 +453,8 @@ func TestGetClientIP_XForwardedFor_SingleIP(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:12345"
 
 	ip := getClientIP(req)
-	if ip != "203.0.113.50" {
-		t.Errorf("expected IP from X-Forwarded-For, got %q", ip)
+	if ip != "127.0.0.1" {
+		t.Errorf("expected direct peer, got %q", ip)
 	}
 }
 
@@ -465,8 +465,8 @@ func TestGetClientIP_XRealIP(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:12345"
 
 	ip := getClientIP(req)
-	if ip != "198.51.100.25" {
-		t.Errorf("expected X-Real-Ip value, got %q", ip)
+	if ip != "127.0.0.1" {
+		t.Errorf("expected direct peer, got %q", ip)
 	}
 }
 
@@ -501,8 +501,8 @@ func TestGetClientIP_XForwardedFor_Precedence(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:12345"
 
 	ip := getClientIP(req)
-	if ip != "203.0.113.50" {
-		t.Errorf("X-Forwarded-For should take precedence, got %q", ip)
+	if ip != "127.0.0.1" {
+		t.Errorf("untrusted forwarded headers must not override peer, got %q", ip)
 	}
 }
 

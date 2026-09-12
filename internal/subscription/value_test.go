@@ -5,6 +5,45 @@ import (
 	"time"
 )
 
+func TestScopedAllowanceExcludesOtherModels(t *testing.T) {
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	events := []Event{{At: at.Add(time.Minute), Model: "claude-sonnet-4-6", Requests: 1, Cost: 10, Priced: true}, {At: at.Add(time.Minute), Model: "claude-opus-4-6", Requests: 1, Cost: 90, Priced: true}, {At: at.Add(time.Minute), Model: "gemini-3-pro", Requests: 1, Cost: 20, Priced: true}}
+	for _, tc := range []struct {
+		quota string
+		cost  float64
+	}{{"seven_day_sonnet", 10}, {"seven_day_opus", 90}, {"extra_usage", 0}, {"unknown_scope", 0}, {"antigravity_claude_gpt:weekly", 100}, {"antigravity_gemini_pro:weekly", 20}} {
+		r := Analyze(events, []Meter{{At: at, Quota: tc.quota}, {At: at.Add(time.Hour), Quota: tc.quota, Used: 100}}, Profile{})
+		if r.Cost != 120 || r.Cycles[0].Cost != tc.cost {
+			t.Fatalf("%s: period=%v allowance=%v", tc.quota, r.Cost, r.Cycles[0].Cost)
+		}
+		if tc.cost == 0 && r.Cycles[0].Per100 != nil {
+			t.Fatalf("%s fabricated calibration", tc.quota)
+		}
+	}
+}
+
+func TestEntirelyUnpricedUsageHasNoValueMultiple(t *testing.T) {
+	r := Analyze([]Event{{Requests: 1}}, nil, Profile{MonthlyUSD: 200})
+	if r.ValueMultiple != nil {
+		t.Fatal("unknown value must not be reported as zero subscription value")
+	}
+}
+
+func TestCalibrationMatchesHistoricalPlanAndRejectsOverlappingArchive(t *testing.T) {
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	meters := []Meter{{At: at, Quota: "seven_day", Plan: "plus"}, {At: at.Add(time.Hour), Quota: "seven_day", Plan: "plus", Used: 100}}
+	events := []Event{{At: at.Add(time.Minute), Requests: 1, Cost: 20, Priced: true, Plan: "plus"}, {At: at.Add(time.Minute), Requests: 1, Cost: 200, Priced: true, Plan: "pro"}}
+	r := Analyze(events, meters, Profile{PlanType: "pro", MonthlyUSD: 200, Multiplier: 20})
+	if r.Cost != 220 || r.Cycles[0].Cost != 20 || r.Cycles[0].X1 != nil {
+		t.Fatalf("period and historical allowance must retain their own scope: %+v", r)
+	}
+	events = append(events, Event{At: at.Add(-time.Minute), End: at.Add(time.Minute), Archived: true, Requests: 2, Cost: 5, Priced: true})
+	r = Analyze(events, meters, Profile{})
+	if !r.Cycles[0].ArchiveTiming || r.Cycles[0].Per100 != nil || len(r.Cycles[0].Models) != 0 {
+		t.Fatal("archive overlapping the first observation cannot certify exact calibration")
+	}
+}
+
 func TestMeasuredValueAndResetIsolation(t *testing.T) {
 	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	meters := []Meter{{At: at, Used: 0, Quota: "seven_day", Reset: at.Add(7 * 24 * time.Hour)}, {At: at.Add(time.Hour), Used: 50, Quota: "seven_day", Reset: at.Add(7 * 24 * time.Hour)}, {At: at.Add(2 * time.Hour), Used: 100, Quota: "seven_day", Reset: at.Add(7 * 24 * time.Hour)}, {At: at.Add(3 * time.Hour), Used: 0, Quota: "seven_day", Reset: at.Add(8 * 24 * time.Hour)}}

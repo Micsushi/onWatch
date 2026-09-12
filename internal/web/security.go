@@ -2,8 +2,10 @@ package web
 
 import (
 	"encoding/json"
+	"math"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -105,22 +107,7 @@ func RateLimitMiddleware(limiter *RateLimiter, logger interface{ Warn(msg string
 
 // getClientIP extracts the client IP from the request
 func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header (for proxies)
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		// Take the first IP in the chain
-		ips := strings.Split(xff, ",")
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
-		}
-	}
-
-	// Check X-Real-Ip header
-	xri := r.Header.Get("X-Real-Ip")
-	if xri != "" {
-		return xri
-	}
-
+	// Forwarded headers are caller-controlled without an explicit trusted proxy policy.
 	// Fall back to RemoteAddr
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -131,7 +118,7 @@ func getClientIP(r *http.Request) string {
 
 // formatDurationSeconds formats a duration as seconds for Retry-After header
 func formatDurationSeconds(d time.Duration) string {
-	return string(rune(int(d.Seconds())))
+	return strconv.Itoa(int(math.Ceil(d.Seconds())))
 }
 
 // IPWhitelistMiddleware creates a middleware that restricts access by IP

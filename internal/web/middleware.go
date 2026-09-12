@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/onllm-dev/onwatch/v2/internal/menubar"
 	"github.com/onllm-dev/onwatch/v2/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -71,19 +72,22 @@ const sessionMaxAge = 7 * 24 * 3600 // 7 days
 
 // SessionStore manages session tokens with SQLite persistence and in-memory cache.
 type SessionStore struct {
+	authMu       sync.Mutex
+	limiter      *LoginRateLimiter
 	mu           sync.RWMutex
 	tokens       map[string]time.Time // in-memory cache: token -> expiry
 	username     string
-	passwordHash string       // SHA-256 hex hash of password
+	passwordHash string       // bcrypt hash (legacy SHA-256 supported)
 	store        *store.Store // optional: if set, tokens are persisted across restarts
 }
 
 // NewSessionStore creates a session store with the given credentials.
-// passwordHash should be a SHA-256 hex hash of the password.
+// passwordHash should be a bcrypt hash; legacy SHA-256 hashes remain supported.
 // If a store is provided, tokens are persisted in SQLite.
 func NewSessionStore(username, passwordHash string, db *store.Store) *SessionStore {
 	ss := &SessionStore{
 		tokens:       make(map[string]time.Time),
+		limiter:      NewLoginRateLimiter(1000),
 		username:     username,
 		passwordHash: passwordHash,
 		store:        db,
@@ -98,27 +102,7 @@ func NewSessionStore(username, passwordHash string, db *store.Store) *SessionSto
 // Authenticate validates credentials and returns a session token if valid.
 // Supports both bcrypt (new) and SHA-256 (legacy) password hashes.
 func (s *SessionStore) Authenticate(username, password string) (string, bool) {
-	userMatch := subtle.ConstantTimeCompare([]byte(username), []byte(s.username)) == 1
-	if !userMatch {
-		return "", false
-	}
-
-	s.mu.RLock()
-	storedHash := s.passwordHash
-	s.mu.RUnlock()
-
-	// Check password using bcrypt or legacy SHA-256
-	var passMatch bool
-	if IsLegacyHash(storedHash) {
-		// Legacy SHA-256 hash - use constant time comparison
-		incomingHash := legacyHashPassword(password)
-		passMatch = subtle.ConstantTimeCompare([]byte(incomingHash), []byte(storedHash)) == 1
-	} else {
-		// Modern bcrypt hash
-		passMatch = CheckPasswordHash(password, storedHash)
-	}
-
-	if !passMatch {
+	if !s.checkCredentials(username, password) {
 		return "", false
 	}
 
@@ -250,12 +234,18 @@ func sessionAuthMiddlewareWithBasePath(sessions *SessionStore, basePath string, 
 				return
 			}
 
-			// Local tray surface is intentionally public for localhost requests.
-			if isLocalMenubarPublicPath(path) && isLoopbackRequest(r) {
+			// The page is an empty shell; only a scoped local capability can bypass API auth.
+			if path == basePath+"/menubar" && isLoopbackRequest(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
-
+			if isLocalMenubarPublicPath(strings.TrimPrefix(path, basePath)) && isLoopbackRequest(r) {
+				token := r.Header.Get("X-Onwatch-Menubar")
+				if token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(menubar.LocalToken(sessions.PasswordHash()))) == 1 {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
 			// Check session cookie first
 			if cookie, err := r.Cookie(sessionCookieName); err == nil {
 				if sessions.ValidateToken(cookie.Value) {
@@ -268,29 +258,28 @@ func sessionAuthMiddlewareWithBasePath(sessions *SessionStore, basePath string, 
 			if strings.HasPrefix(path, basePath+"/api/") {
 				u, p, ok := extractCredentials(r)
 				if ok {
-					userMatch := subtle.ConstantTimeCompare([]byte(u), []byte(sessions.username)) == 1
-					if !userMatch {
-						// Continue to auth failed response
+					if !sessions.authMu.TryLock() {
+						w.Header().Set("Retry-After", "1")
+						http.Error(w, "authentication busy", http.StatusTooManyRequests)
+						return
+					}
+					ip := getClientIP(r)
+					if sessions.limiter.IsBlocked(ip) {
+						sessions.authMu.Unlock()
+						w.Header().Set("Retry-After", "300")
+						http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+						return
+					}
+					passMatch := sessions.checkCredentials(u, p)
+					if passMatch {
+						sessions.limiter.Clear(ip)
 					} else {
-						sessions.mu.RLock()
-						storedHash := sessions.passwordHash
-						sessions.mu.RUnlock()
-
-						// Check password using bcrypt or legacy SHA-256
-						var passMatch bool
-						if IsLegacyHash(storedHash) {
-							// Legacy SHA-256 hash
-							incomingHash := legacyHashPassword(p)
-							passMatch = subtle.ConstantTimeCompare([]byte(incomingHash), []byte(storedHash)) == 1
-						} else {
-							// Modern bcrypt hash
-							passMatch = CheckPasswordHash(p, storedHash)
-						}
-
-						if passMatch {
-							next.ServeHTTP(w, r)
-							return
-						}
+						sessions.limiter.RecordFailure(ip)
+					}
+					sessions.authMu.Unlock()
+					if passMatch {
+						next.ServeHTTP(w, r)
+						return
 					}
 				}
 				if log != nil {
@@ -553,4 +542,37 @@ func (l *LoginRateLimiter) EntryCountForTest() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return len(l.attempts)
+}
+
+func (s *SessionStore) checkCredentials(username, password string) bool {
+	userMatch := subtle.ConstantTimeCompare([]byte(username), []byte(s.username)) == 1
+	if !userMatch {
+		return false
+	}
+
+	s.mu.RLock()
+	storedHash := s.passwordHash
+	s.mu.RUnlock()
+
+	// Check password using bcrypt or legacy SHA-256
+	var passMatch bool
+	if IsLegacyHash(storedHash) {
+		// Legacy SHA-256 hash - use constant time comparison
+		incomingHash := legacyHashPassword(password)
+		passMatch = subtle.ConstantTimeCompare([]byte(incomingHash), []byte(storedHash)) == 1
+	} else {
+		// Modern bcrypt hash
+		passMatch = CheckPasswordHash(password, storedHash)
+	}
+
+	if !passMatch {
+		return false
+	}
+
+	return true
+}
+func (s *SessionStore) PasswordHash() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.passwordHash
 }

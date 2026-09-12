@@ -31,6 +31,69 @@ func runDashboardNodeTest(t *testing.T, script string) {
 	}
 }
 
+func TestCostSamplesKeepObservedTimesAndWeightedRequestCounts(t *testing.T) {
+	source := dashboardAppSource(t)
+	buckets := dashboardJavaScriptBetween(t, source, "const graphBucketTargets =", "function formatPeriodTooltipTitle(")
+	cumulative := dashboardJavaScriptBetween(t, source, "function buildPlatformCumulativeSeries(", "function processCappedDataWithGaps(")
+	aggregate := dashboardJavaScriptBetween(t, source, "function aggregateDatasetForBuckets(", "function graphLineStyle(")
+	build := dashboardJavaScriptBetween(t, source, "function buildAPIIntegrationsChartDatasets(", "function renderAPIIntegrationsChart(")
+	runDashboardNodeTest(t, fmt.Sprintf(`
+const assert=require('assert');
+const State={graphMode:'bucket',historyWindowStart:'2026-09-01T00:00:00Z',historyWindowEnd:'2026-09-01T01:00:00Z',platformCostWindowStart:'2026-09-01T00:00:00Z',platformCostWindowEnd:'2026-09-01T01:00:00Z',apiIntegrationsCurrent:{Tool:{totalTokens:999999,totalCostUsd:9999}}};
+function normalizeGraphMode(v){return v||'bucket'}
+function getPollIntervalMs(){return 60000}
+function getSegmentStyle(){return {}}
+const apiIntegrationsChartColorFallback=[{border:'#fff',bg:'#000'}];
+%s
+%s
+%s
+%s
+const rows=[{capturedAt:'2026-09-01T00:03:00Z',totalCostUsd:1,totalTokens:100,requestCount:1},{capturedAt:'2026-09-01T00:47:00Z',totalCostUsd:2,totalTokens:900,requestCount:9}];
+const points=buildPlatformCumulativeSeries(rows,'custom').cost;
+assert.deepEqual(points.map(p=>p.x.toISOString()),rows.map(r=>new Date(r.capturedAt).toISOString()));
+assert.deepEqual(points.map(p=>p.y),[1,3]);
+const costs=buildAPIIntegrationsChartDatasets({Tool:rows},'custom','totalCostUsd')[0];
+assert.deepEqual(costs.data.map(p=>p.y),[1,3],'future lifetime totals leaked into historical window');
+const averaged=aggregateDatasetForBuckets({_barStrategy:'average',data:[{x:new Date('2026-09-01T00:03:00Z'),y:100,weight:1},{x:new Date('2026-09-01T00:03:01Z'),y:1000,weight:9}]},'custom','bucket');
+assert.equal(averaged.filter(p=>p.y>0)[0].y,910,'averages must be weighted by requests');
+`, buckets, cumulative, aggregate, build))
+}
+
+func TestQuotaDetailChartsExposeFailuresAndIgnoreClosedPopups(t *testing.T) {
+	source := dashboardAppSource(t)
+	status := dashboardJavaScriptBetween(t, source, "function setModalChartStatus(", "async function loadAnthropicModalChart(")
+	agy := dashboardJavaScriptBetween(t, source, "async function loadAntigravityModalChart(", "async function loadAntigravityModalCycles(")
+	codex := dashboardJavaScriptBetween(t, source, "async function loadCodexModalChart(", "async function loadCodexModalCycles(")
+	anth := dashboardJavaScriptBetween(t, source, "async function loadAnthropicModalChart(", "async function loadAnthropicModalCycles(")
+	copilot := dashboardJavaScriptBetween(t, source, "async function loadCopilotModalChart(", "async function loadCopilotModalCycles(")
+	generic := dashboardJavaScriptBetween(t, source, "async function loadModalChart(", "async function loadModalCycles(")
+	runDashboardNodeTest(t, fmt.Sprintf(`
+const assert=require('assert');const State={currentRange:'7d',currentQuotas:{},antigravityQuotaWindow:'weekly'},API_BASE='';
+const modal={hidden:false},status={setAttribute(){}};
+const canvas={isConnected:true,parentElement:{querySelector(){return status}},getContext(){return this}};
+const document={getElementById(id){return id==='detail-modal'?modal:canvas}};
+function getThemeColors(){return {}}
+function historyRequestQuery(){return 'range=7d'}
+function codexAccountParam(){return ''}
+function processCappedDataWithGaps(data){return {data,pointRadii:[],gapSegments:new Set()}}
+function getSegmentStyle(){return {}}
+let created=0;class Chart{constructor(ctx,config){created++;assert.equal(config.data.datasets[0].label,'Weekly Gemini')}destroy(){}}
+let authFetch=async()=>({ok:false});
+%s
+%s
+%s
+%s
+%s
+%s
+(async()=>{
+ for(const load of [()=>loadCodexModalChart('seven_day'),()=>loadAnthropicModalChart('seven_day'),()=>loadAntigravityModalChart('gemini'),()=>loadCopilotModalChart('premium'),()=>loadModalChart('subscription','synthetic')]){await load();assert(status.textContent.includes('Could not load'));}
+ const payload={labels:['2026-09-01'],datasets:[{modelId:'gemini:weekly',windowKind:'weekly',label:'Weekly Gemini',data:[12]}]};
+ authFetch=async()=>({ok:true,json:async()=>payload});await loadAntigravityModalChart('gemini');assert.equal(created,1);
+ authFetch=async()=>({ok:true,json:async()=>{modal.hidden=true;return payload}});await loadAntigravityModalChart('gemini');assert.equal(created,1,'closed popup must not create a chart');
+})().catch(e=>{console.error(e);process.exitCode=1});
+`, status, agy, codex, anth, copilot, generic))
+}
+
 func TestHistoryRequestQueryUsesTargetPresetWindow(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)

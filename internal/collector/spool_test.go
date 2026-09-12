@@ -2,6 +2,7 @@ package collector
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,7 +39,7 @@ func TestCentralS2F1T2(t *testing.T) {
 	if err != nil || len(records) != 1 || records[0].Event.EventID != "evt_two00" {
 		t.Fatalf("recovery: %#v %v", records, err)
 	}
-	path := filepath.Join(dir, "events-"+time.Now().UTC().Format("2006-01-02")+".jsonl")
+	path := filepath.Join(dir, records[0].File)
 	file, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
 	_, _ = file.WriteString(`{"event_id":"partial"`)
 	_ = file.Close()
@@ -72,7 +73,8 @@ func BenchmarkSpoolBoundedBatch(b *testing.B) {
 		b.Fatal(err)
 	}
 	event := ingest.Event{EventID: "evt_resource", Kind: "quota_snapshot", CapturedAt: time.Now().UTC(), Provider: "openai", Account: ingest.Account{ExternalID: "test"}, Payload: json.RawMessage(`{"version":1,"metrics":[{"name":"weekly","value":1,"unit":"percent"}]}`)}
-	for range 1000 {
+	for i := range 1000 {
+		event.EventID = fmt.Sprintf("evt_%08d", i)
 		if err := spool.Append(event); err != nil {
 			b.Fatal(err)
 		}
@@ -84,5 +86,39 @@ func BenchmarkSpoolBoundedBatch(b *testing.B) {
 		if err != nil || len(records) != 100 {
 			b.Fatalf("bounded batch: %d %v", len(records), err)
 		}
+	}
+}
+
+func TestSpoolReplayAndReclaim(t *testing.T) {
+	e := auditEvent()
+	encoded, _ := json.Marshal(e)
+	s, err := NewSpool(t.TempDir(), int64(2*(len(encoded)+1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		r, err := s.Batch(100, 1<<20)
+		if err != nil || len(r) != 1 {
+			t.Fatalf("replay batch: %d %v", len(r), err)
+		}
+		if err := s.Ack(r, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reopened, err := NewSpool(s.dir, s.maxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Append(e); err != nil {
+		t.Fatal(err)
+	}
+	r, err := reopened.Batch(100, 1<<20)
+	if err != nil || len(r) != 1 {
+		t.Fatalf("reclaimed cursor skipped event: %d %v", len(r), err)
 	}
 }

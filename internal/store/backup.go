@@ -1,9 +1,7 @@
 package store
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -70,11 +68,10 @@ func (s *Store) Backup(destination string) (BackupMetadata, error) {
 	if closeErr != nil {
 		return metadata, closeErr
 	}
-	data, err := os.ReadFile(tempPath)
+	digest, err := hashFile(tempPath)
 	if err != nil {
 		return metadata, err
 	}
-	digest := sha256.Sum256(data)
 	info, err := os.Stat(tempPath)
 	if err != nil {
 		return metadata, err
@@ -94,7 +91,7 @@ func (s *Store) Backup(destination string) (BackupMetadata, error) {
 	if err := backupFile.Close(); err != nil {
 		return metadata, err
 	}
-	metadata = BackupMetadata{CreatedAt: time.Now().UTC(), SHA256: hex.EncodeToString(digest[:]), Size: info.Size(), Database: filepath.Base(destination)}
+	metadata = BackupMetadata{CreatedAt: time.Now().UTC(), SHA256: digest, Size: info.Size(), Database: filepath.Base(destination)}
 	encoded, _ := json.MarshalIndent(metadata, "", "  ")
 	metadataPath := destination + ".json"
 	metadataTemp, err := os.CreateTemp(filepath.Dir(destination), ".onwatch-backup-metadata-*.json")
