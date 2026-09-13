@@ -61,12 +61,16 @@ func (c *Client) post(ctx context.Context, path string, payload, output any) (in
 }
 
 func retryDelay(attempt int) time.Duration {
-	delay := time.Second << min(attempt, 8)
+	delay := time.Second << min(attempt, 9)
 	if delay > 5*time.Minute {
 		delay = 5 * time.Minute
 	}
 	jitter := 0.8 + rand.Float64()*0.4
-	return time.Duration(float64(delay) * jitter)
+	delay = time.Duration(float64(delay) * jitter)
+	if delay > 5*time.Minute {
+		return 5 * time.Minute
+	}
+	return delay
 }
 func min(a, b int) int {
 	if a < b {
