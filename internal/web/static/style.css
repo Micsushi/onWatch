@@ -3054,7 +3054,10 @@ body.all-density-comfortable .provider-kpi-card {
   .app-header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
   .brand-text { font-size: 18px; }
   .main-content { padding: 16px; }
-  .quota-grid { grid-template-columns: 1fr; gap: 14px; }
+  .quota-grid,
+  #quota-grid-gemini,
+  #quota-grid-minimax,
+  #quota-grid-openrouter { grid-template-columns: 1fr; gap: 14px; }
   .all-providers-view { grid-template-columns: 1fr; gap: 12px; }
   .provider-card-header { padding: 12px 14px; }
   .provider-card-body { padding: 12px; }
