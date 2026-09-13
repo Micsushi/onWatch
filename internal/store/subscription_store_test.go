@@ -67,6 +67,39 @@ func TestSubscriptionMetersTransferAndReplay(t *testing.T) {
 	}
 }
 
+func TestSubscriptionMeterImportOverlapsLiveTelemetry(t *testing.T) {
+	src := newTransferTestStore(t)
+	dst := newTransferTestStore(t)
+	at := time.Now().UTC()
+	meter := subscription.Meter{At: at, Reset: at.Add(7 * 24 * time.Hour), Used: 10, Quota: "seven_day", Plan: "pro"}
+	if err := dst.InsertSubscriptionMeter("codex", "default", meter); err != nil {
+		t.Fatal(err)
+	}
+	meter.Used = 20
+	for _, account := range []string{"default", "work"} {
+		if err := src.InsertSubscriptionMeter("codex", account, meter); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var archive bytes.Buffer
+	if _, err := src.ExportData(&archive, ExportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := dst.ImportData(bytes.NewReader(archive.Bytes())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	var used float64
+	if err := dst.db.QueryRow("SELECT COUNT(*) FROM subscription_meter_observations").Scan(&count); err != nil || count != 2 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	if err := dst.db.QueryRow("SELECT utilization FROM subscription_meter_observations WHERE account_name='default'").Scan(&used); err != nil || used != 10 {
+		t.Fatalf("central reading=%v err=%v", used, err)
+	}
+}
+
 func TestSubscriptionRetainsHistoricalPlansWithoutPollSnapshot(t *testing.T) {
 	s := newTransferTestStore(t)
 	at := time.Now().UTC()

@@ -636,8 +636,12 @@ func (s *Store) exportCentralTransferMetadata(source *sql.Tx, dest *sql.Tx, inst
 		       p.device_id, p.event_id, p.observed_at
 		FROM observation_provenance p
 		LEFT JOIN data_transfer_records r
-		  ON r.table_name = p.target_table AND r.local_record_id = p.target_record_id
+		  ON r.rowid = (SELECT candidate.rowid FROM data_transfer_records candidate
+		    WHERE candidate.table_name=p.target_table AND candidate.local_record_id=p.target_record_id
+		    ORDER BY candidate.origin_id, candidate.origin_record_id LIMIT 1)
 		WHERE p.target_table IN ('api_integration_usage_events', 'central_quota_snapshots')
+		  AND ((p.target_table='api_integration_usage_events' AND EXISTS(SELECT 1 FROM api_integration_usage_events e WHERE e.id=CAST(p.target_record_id AS INTEGER)))
+		    OR (p.target_table='central_quota_snapshots' AND EXISTS(SELECT 1 FROM central_quota_snapshots q WHERE q.id=CAST(p.target_record_id AS INTEGER))))
 		ORDER BY p.id`, installationID)
 	if err != nil {
 		return fmt.Errorf("store.ExportData: query observation provenance: %w", err)
@@ -910,7 +914,7 @@ func (s *Store) ImportData(r io.Reader) (ImportSummary, error) {
 	if err := tx.Commit(); err != nil {
 		return summary, fmt.Errorf("store.ImportData: commit destination transaction: %w", err)
 	}
-	if summary.Tables["api_integration_usage_events"].Inserted > 0 ||
+	if summary.Tables["api_integration_usage_events"].Inserted+summary.Tables["api_integration_usage_events"].Updated > 0 ||
 		summary.Tables["api_integration_usage_hourly"].Inserted > 0 {
 		s.apiIntegrationUsageVersion.Add(1)
 	}
@@ -1326,9 +1330,28 @@ func importTransferTable(tx *sql.Tx, source *sql.DB, table transferTable, accoun
 		if err != nil {
 			return fmt.Errorf("store.ImportData: decode %s %s: %w", table.name, originRecordID, err)
 		}
+		if table.name == "api_integration_usage_events" {
+			fingerprint, ok := payload["fingerprint"].(string)
+			decoded, err := hex.DecodeString(fingerprint)
+			if !ok || err != nil || len(decoded) != sha256.Size || fingerprint != strings.ToLower(fingerprint) {
+				return fmt.Errorf("store.ImportData: invalid usage fingerprint")
+			}
+		}
 		if localID, ok, err := findImportedLocalID(tx, table.name, origin, localInstallationID); err != nil {
 			return err
 		} else if ok {
+			if table.name == "api_integration_usage_events" {
+				updated, err := canonicalizeImportedUsageEvent(tx, localID, origin, localInstallationID, payload)
+				if err != nil {
+					return err
+				}
+				if updated {
+					incrementImportSummary(summary, table.name, "updated")
+				} else {
+					incrementImportSummary(summary, table.name, "skipped")
+				}
+				continue
+			}
 			if table.mutable {
 				updated, err := mergeMutableTransferRow(tx, table, localID, payload)
 				if err != nil {
@@ -1344,19 +1367,43 @@ func importTransferTable(tx *sql.Tx, source *sql.DB, table transferTable, accoun
 			}
 			continue
 		}
+		// Meter observations also arrive through live usage telemetry. Match their
+		// natural key and preserve the first observation, just like live insertion.
+		if table.name == "subscription_meter_observations" {
+			var liveID int64
+			err := tx.QueryRow(`SELECT id FROM subscription_meter_observations WHERE provider=? AND account_name=? AND plan=? AND quota=? AND captured_at=?`, payload["provider"], payload["account_name"], payload["plan"], payload["quota"], payload["captured_at"]).Scan(&liveID)
+			if err == nil {
+				if err := recordImportedOrigin(tx, table.name, strconv.FormatInt(liveID, 10), origin); err != nil {
+					return err
+				}
+				incrementImportSummary(summary, table.name, "skipped")
+				continue
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
 		// Live collectors and portable history can contain the same stable event.
 		// Reuse its fingerprint before adding an import namespace.
 		if table.name == "api_integration_usage_events" {
 			var liveID int64
 			err := tx.QueryRow(`SELECT id FROM api_integration_usage_events WHERE fingerprint=?`, payload["fingerprint"]).Scan(&liveID)
 			if err == nil {
+				if err := validateImportedUsageIdentity(tx, strconv.FormatInt(liveID, 10), payload); err != nil {
+					return err
+				}
 				if err := recordImportedOrigin(tx, table.name, strconv.FormatInt(liveID, 10), origin); err != nil {
 					return err
 				}
-				if _, err := tx.Exec(`UPDATE api_integration_usage_events SET cost_usd=COALESCE(cost_usd,?) WHERE id=?`, payload["cost_usd"], liveID); err != nil {
+				updated, err := fillImportedUsageCost(tx, strconv.FormatInt(liveID, 10), payload)
+				if err != nil {
 					return err
 				}
-				incrementImportSummary(summary, table.name, "skipped")
+				if updated {
+					incrementImportSummary(summary, table.name, "updated")
+				} else {
+					incrementImportSummary(summary, table.name, "skipped")
+				}
 				continue
 			}
 			if !errors.Is(err, sql.ErrNoRows) {
@@ -1405,8 +1452,13 @@ func importTransferTable(tx *sql.Tx, source *sql.DB, table transferTable, accoun
 		}
 		if table.name == "api_integration_usage_events" {
 			namespaceAPIIntegrationPayload(payload, origin)
+			fingerprint, ok := payload["fingerprint"].(string)
+			if !ok || fingerprint == "" {
+				return fmt.Errorf("store.ImportData: invalid usage fingerprint")
+			}
+			legacyFingerprint := sha256.Sum256([]byte(origin.OriginID + ":" + fingerprint))
 			var compacted int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM api_integration_usage_compacted_fingerprints WHERE fingerprint=?`, payload["fingerprint"]).Scan(&compacted); err != nil {
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM api_integration_usage_compacted_fingerprints WHERE fingerprint IN (?,?)`, payload["fingerprint"], hex.EncodeToString(legacyFingerprint[:])).Scan(&compacted); err != nil {
 				return err
 			}
 			if compacted > 0 {
@@ -1753,15 +1805,135 @@ func decodeTransferPayload(value string) (map[string]any, error) {
 }
 
 func namespaceAPIIntegrationPayload(payload map[string]any, origin transferOrigin) {
-	fingerprint, _ := payload["fingerprint"].(string)
-	hash := sha256.Sum256([]byte(origin.OriginID + ":" + fingerprint))
-	payload["fingerprint"] = hex.EncodeToString(hash[:])
+	// The source fingerprint already identifies the event. Changing it here
+	// prevents a later live collector replay from recognizing imported history.
 	sourcePath, _ := payload["source_path"].(string)
 	shortOrigin := origin.OriginID
 	if len(shortOrigin) > 8 {
 		shortOrigin = shortOrigin[:8]
 	}
 	payload["source_path"] = "import:" + shortOrigin + "/" + filepath.Base(sourcePath)
+}
+
+// Source paths, pricing and optional descriptive metadata can change in transit.
+// Account, request and token identity must agree before two stored rows merge.
+func validateImportedUsageIdentity(tx *sql.Tx, localID string, payload map[string]any) error {
+	columns := []string{"captured_at", "integration_name", "provider", "account_name", "model", "request_id", "prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "cached_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens", "metadata_json"}
+	metadataJSON, _ := payload["metadata_json"].(string)
+	metadata, _ := normalizedAPIIntegrationMetadata(&apiintegrations.UsageEvent{MetadataJSON: metadataJSON})
+	expected := make(map[string]any, len(columns))
+	for _, column := range columns {
+		expected[column] = payload[column]
+	}
+	expected["input_tokens"] = int64(normalizedTokenValue(metadata.InputTokens, transferInteger(payload["prompt_tokens"])))
+	expected["cached_input_tokens"] = int64(normalizedTokenValue(metadata.CachedInputTokens, 0))
+	expected["cache_creation_input_tokens"] = int64(normalizedTokenValue(metadata.CacheCreationInputTokens, 0))
+	expected["output_tokens"] = int64(normalizedTokenValue(metadata.OutputTokens, transferInteger(payload["completion_tokens"])))
+	expected["reasoning_output_tokens"] = int64(normalizedTokenValue(metadata.ReasoningOutputTokens, 0))
+	values := make([]any, len(columns))
+	dest := make([]any, len(columns))
+	for i := range values {
+		dest[i] = &values[i]
+	}
+	if err := tx.QueryRow(`SELECT `+strings.Join(columns, ",")+` FROM api_integration_usage_events WHERE id=?`, localID).Scan(dest...); err != nil {
+		return err
+	}
+	for i, column := range columns {
+		if column == "metadata_json" {
+			// The one-hour cache token count has no normalized column. Other
+			// metadata remains enrichable and must not define event identity.
+			var actual, wanted struct {
+				CacheCreation1h int64 `json:"cache_creation_1h_input_tokens"`
+			}
+			actualJSON, wantedJSON := sqlValueString(values[i]), sqlValueString(expected[column])
+			if actualJSON == "" {
+				actualJSON = "{}"
+			}
+			if wantedJSON == "" {
+				wantedJSON = "{}"
+			}
+			if json.Unmarshal([]byte(actualJSON), &actual) == nil && json.Unmarshal([]byte(wantedJSON), &wanted) == nil && actual == wanted {
+				continue
+			}
+		} else if column == "captured_at" {
+			actualTime, actualErr := time.Parse(time.RFC3339Nano, sqlValueString(values[i]))
+			expectedTime, expectedErr := time.Parse(time.RFC3339Nano, sqlValueString(expected[column]))
+			if actualErr == nil && expectedErr == nil && actualTime.Equal(expectedTime) {
+				continue
+			}
+		} else if reflect.DeepEqual(values[i], expected[column]) {
+			continue
+		}
+		return fmt.Errorf("store.ImportData: usage fingerprint identity conflict in %s", column)
+	}
+	return nil
+}
+
+func fillImportedUsageCost(tx *sql.Tx, localID string, payload map[string]any) (bool, error) {
+	result, err := tx.Exec(`UPDATE api_integration_usage_events SET cost_usd=? WHERE id=? AND cost_usd IS NULL AND ? IS NOT NULL`, payload["cost_usd"], localID, payload["cost_usd"])
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count > 0, err
+}
+
+func canonicalizeImportedUsageEvent(tx *sql.Tx, localID string, origin transferOrigin, localInstallationID string, payload map[string]any) (bool, error) {
+	fingerprint, _ := payload["fingerprint"].(string)
+	legacy := sha256.Sum256([]byte(origin.OriginID + ":" + fingerprint))
+	var current string
+	if err := tx.QueryRow(`SELECT fingerprint FROM api_integration_usage_events WHERE id=?`, localID).Scan(&current); err != nil {
+		return false, err
+	}
+	if err := validateImportedUsageIdentity(tx, localID, payload); err != nil {
+		return false, err
+	}
+	// Only rewrite the exact legacy alias proven by this source archive.
+	if current != hex.EncodeToString(legacy[:]) {
+		return fillImportedUsageCost(tx, localID, payload)
+	}
+	if _, err := fillImportedUsageCost(tx, localID, payload); err != nil {
+		return false, err
+	}
+	var canonicalID string
+	err := tx.QueryRow(`SELECT CAST(id AS TEXT) FROM api_integration_usage_events WHERE fingerprint=?`, fingerprint).Scan(&canonicalID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = tx.Exec(`UPDATE api_integration_usage_events SET fingerprint=? WHERE id=?`, fingerprint, localID)
+		return err == nil, err
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := validateImportedUsageIdentity(tx, canonicalID, payload); err != nil {
+		return false, err
+	}
+	// Export also gives every otherwise-local row an implicit installation/ID
+	// identity. Retain that identity before deleting the duplicate row.
+	var implicitTarget string
+	err = tx.QueryRow(`SELECT local_record_id FROM data_transfer_records WHERE table_name='api_integration_usage_events' AND origin_id=? AND origin_record_id=?`, localInstallationID, localID).Scan(&implicitTarget)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = recordImportedOrigin(tx, "api_integration_usage_events", localID, transferOrigin{OriginID: localInstallationID, OriginRecordID: localID})
+	} else if err == nil && implicitTarget != localID {
+		err = fmt.Errorf("store.ImportData: conflicting local usage origin")
+	}
+	if err != nil {
+		return false, err
+	}
+	// Preserve every receipt and origin while collapsing the proven duplicate.
+	for _, query := range []string{
+		`UPDATE data_transfer_records SET local_record_id=? WHERE table_name='api_integration_usage_events' AND local_record_id=?`,
+		`UPDATE observation_provenance SET target_record_id=? WHERE target_table='api_integration_usage_events' AND target_record_id=?`,
+		`UPDATE ingest_receipts SET target_record_id=? WHERE target_table='api_integration_usage_events' AND target_record_id=?`,
+	} {
+		if _, err := tx.Exec(query, canonicalID, localID); err != nil {
+			return false, err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE api_integration_usage_events SET cost_usd=COALESCE(cost_usd,(SELECT cost_usd FROM api_integration_usage_events WHERE id=?)) WHERE id=?`, localID, canonicalID); err != nil {
+		return false, err
+	}
+	_, err = tx.Exec(`DELETE FROM api_integration_usage_events WHERE id=?`, localID)
+	return err == nil, err
 }
 
 func transferInteger(value any) int {

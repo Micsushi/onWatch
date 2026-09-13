@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +16,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	apiintegrations "github.com/onllm-dev/onwatch/v2/internal/api_integrations"
+	"github.com/onllm-dev/onwatch/v2/internal/ingest"
 )
 
 func newTransferTestStore(t *testing.T) *Store {
@@ -728,5 +732,252 @@ func TestTransferReusesLiveCollectorStableEvent(t *testing.T) {
 	var count int
 	if err := destination.db.QueryRow(`SELECT COUNT(*) FROM api_integration_usage_events`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("collector/import duplicate count %d: %v", count, err)
+	}
+}
+
+func TestTransferPreservesFingerprintForLaterCollectorReplay(t *testing.T) {
+	source := newTransferTestStore(t)
+	destination := newTransferTestStore(t)
+	line := `{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"metadata":{"event_key":"import-before-live"}}`
+	insertAPIIntegrationUsageEventForTest(t, source, line, "local")
+	archive := exportTransferBytes(t, source)
+	if _, err := destination.ImportData(bytes.NewReader(archive)); err != nil {
+		t.Fatal(err)
+	}
+	event, err := apiintegrations.ParseUsageEventLine([]byte(line), "device:windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := destination.InsertAPIIntegrationUsageEvent(event); !errors.Is(err, ErrDuplicateAPIIntegrationUsageEvent) {
+		t.Fatalf("live replay must be duplicate: %v", err)
+	}
+	var count int
+	if err := destination.db.QueryRow(`SELECT COUNT(*) FROM api_integration_usage_events`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+}
+
+func TestTransferReconcilesProvenLegacyFingerprintAlias(t *testing.T) {
+	source := newTransferTestStore(t)
+	destination := newTransferTestStore(t)
+	line := `{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"metadata":{"event_key":"legacy-import"}}`
+	insertAPIIntegrationUsageEventForTest(t, source, line, "local")
+	archive := exportTransferBytes(t, source)
+	if _, err := destination.ImportData(bytes.NewReader(archive)); err != nil {
+		t.Fatal(err)
+	}
+	origin, err := source.TransferInstallationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original string
+	if err := source.db.QueryRow(`SELECT fingerprint FROM api_integration_usage_events`).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	legacy := sha256.Sum256([]byte(origin + ":" + original))
+	if _, err := destination.db.Exec(`UPDATE api_integration_usage_events SET fingerprint=?`, hex.EncodeToString(legacy[:])); err != nil {
+		t.Fatal(err)
+	}
+	var loserID string
+	if err := destination.db.QueryRow(`SELECT CAST(id AS TEXT) FROM api_integration_usage_events`).Scan(&loserID); err != nil {
+		t.Fatal(err)
+	}
+	destinationOrigin, err := destination.TransferInstallationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertAPIIntegrationUsageEventForTest(t, destination, line, "device:windows")
+	for i := 0; i < 2; i++ {
+		version := destination.APIIntegrationUsageVersion()
+		summary, err := destination.ImportData(bytes.NewReader(archive))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 && (summary.Tables["api_integration_usage_events"].Updated != 1 || destination.APIIntegrationUsageVersion() <= version) {
+			t.Fatalf("canonicalization not reported/invalidated: %+v", summary)
+		}
+		if i == 1 && (summary.Tables["api_integration_usage_events"].Skipped != 1 || destination.APIIntegrationUsageVersion() != version) {
+			t.Fatalf("repeat changed usage: %+v", summary)
+		}
+	}
+	var count int
+	if err := destination.db.QueryRow(`SELECT COUNT(*) FROM api_integration_usage_events`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	if _, err := newTransferTestStore(t).ImportData(bytes.NewReader(exportTransferBytes(t, destination))); err != nil {
+		t.Fatal(err)
+	}
+	var implicitTarget, survivorID string
+	if err := destination.db.QueryRow(`SELECT CAST(id AS TEXT) FROM api_integration_usage_events`).Scan(&survivorID); err != nil {
+		t.Fatal(err)
+	}
+	if err := destination.db.QueryRow(`SELECT local_record_id FROM data_transfer_records WHERE table_name='api_integration_usage_events' AND origin_id=? AND origin_record_id=?`, destinationOrigin, loserID).Scan(&implicitTarget); err != nil || implicitTarget != survivorID {
+		t.Fatalf("lost implicit identity: target=%s survivor=%s err=%v", implicitTarget, survivorID, err)
+	}
+}
+
+func TestTransferRejectsUsageIdentityConflictsAtomically(t *testing.T) {
+	for _, field := range []string{"provider", "account_name", "model", "request_id", "captured_at", "prompt_tokens", "completion_tokens", "total_tokens", "metadata_json", "metadata_json_1h"} {
+		t.Run(field, func(t *testing.T) {
+			source := newTransferTestStore(t)
+			line := `{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"metadata":{"event_key":"conflict-test"}}`
+			insertAPIIntegrationUsageEventForTest(t, source, line, "local")
+			archive := rewriteTransferArchive(t, exportTransferBytes(t, source), func(db *sql.DB) {
+				value := any("different")
+				switch field {
+				case "captured_at":
+					value = "2026-01-15T12:06:00Z"
+				case "prompt_tokens", "completion_tokens", "total_tokens":
+					value = 999
+				case "metadata_json":
+					value = `{"cached_input_tokens":50}`
+				case "metadata_json_1h":
+					value = `{"cache_creation_1h_input_tokens":50}`
+				}
+				if _, err := db.Exec(`UPDATE transfer_rows SET payload_json=json_set(payload_json,?,?) WHERE table_name='api_integration_usage_events'`, "$."+strings.TrimSuffix(field, "_1h"), value); err != nil {
+					t.Fatal(err)
+				}
+			}, nil)
+			for _, mapped := range []bool{false, true} {
+				destination := newTransferTestStore(t)
+				if mapped {
+					if _, err := destination.ImportData(bytes.NewReader(exportTransferBytes(t, source))); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					insertAPIIntegrationUsageEventForTest(t, destination, line, "device")
+				}
+				version := destination.APIIntegrationUsageVersion()
+				if _, err := destination.ImportData(bytes.NewReader(archive)); err == nil || !strings.Contains(err.Error(), "identity conflict") {
+					t.Fatalf("mapped=%v accepted conflicting %s: %v", mapped, field, err)
+				}
+				var count, tokens int
+				if err := destination.db.QueryRow(`SELECT COUNT(*), SUM(total_tokens) FROM api_integration_usage_events`).Scan(&count, &tokens); err != nil || count != 1 || tokens != 120 || destination.APIIntegrationUsageVersion() != version {
+					t.Fatalf("failed import changed data/cache: count=%d tokens=%d err=%v", count, tokens, err)
+				}
+			}
+		})
+	}
+}
+
+func TestTransferRejectsMalformedUsageFingerprints(t *testing.T) {
+	source := newTransferTestStore(t)
+	insertAPIIntegrationUsageEventForTest(t, source, `{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":1,"completion_tokens":2}`, "local")
+	original := exportTransferBytes(t, source)
+	for _, value := range []any{nil, 12, "", "short", strings.Repeat("g", 64)} {
+		archive := rewriteTransferArchive(t, original, func(db *sql.DB) {
+			if _, err := db.Exec(`UPDATE transfer_rows SET payload_json=json_set(payload_json,'$.fingerprint',?) WHERE table_name='api_integration_usage_events'`, value); err != nil {
+				t.Fatal(err)
+			}
+		}, nil)
+		if _, err := newTransferTestStore(t).ImportData(bytes.NewReader(archive)); err == nil || !strings.Contains(err.Error(), "invalid usage fingerprint") {
+			t.Fatalf("fingerprint=%v err=%v", value, err)
+		}
+	}
+}
+
+func TestTransferUsageIdentitySurvivesIntermediateExport(t *testing.T) {
+	source := newTransferTestStore(t)
+	intermediate := newTransferTestStore(t)
+	destination := newTransferTestStore(t)
+	line := `{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"metadata":{"event_key":"intermediate-test"}}`
+	insertAPIIntegrationUsageEventForTest(t, source, line, "local")
+	original := exportTransferBytes(t, source)
+	if _, err := intermediate.ImportData(bytes.NewReader(original)); err != nil {
+		t.Fatal(err)
+	}
+	for _, archive := range [][]byte{exportTransferBytes(t, intermediate), original, original} {
+		if _, err := destination.ImportData(bytes.NewReader(archive)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event, err := apiintegrations.ParseUsageEventLine([]byte(line), "device:second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := destination.InsertAPIIntegrationUsageEvent(event); !errors.Is(err, ErrDuplicateAPIIntegrationUsageEvent) {
+		t.Fatalf("intermediate export lost live identity: %v", err)
+	}
+}
+
+func TestTransferExportsCompactedCentralHistoryWithoutDanglingProvenance(t *testing.T) {
+	source := newTransferTestStore(t)
+	device, _, err := source.CreateDevice("compact", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	payload := json.RawMessage(`{"ts":"` + observed.Format(time.RFC3339Nano) + `","integration":"codex","provider":"openai","account":"default","model":"gpt-5","prompt_tokens":1,"completion_tokens":2,"metadata":{"event_key":"compacted-export"}}`)
+	event := ingest.Event{EventID: "evt_compacted_export", Kind: "usage_event", CapturedAt: observed, Provider: "openai", Account: ingest.Account{ExternalID: "default"}, Payload: payload}
+	if _, err := source.StoreIngestBatch(device, []ingest.Event{event}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.CompactAPIIntegrationUsageEvents(observed.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newTransferTestStore(t).ImportData(bytes.NewReader(exportTransferBytes(t, source))); err != nil {
+		t.Fatalf("compacted receipt/provenance prevented export: %v", err)
+	}
+}
+
+func TestTransferLegacyAliasCannotMergeConflictingCanonicalRow(t *testing.T) {
+	source := newTransferTestStore(t)
+	destination := newTransferTestStore(t)
+	line := `{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"metadata":{"event_key":"alias-conflict"}}`
+	insertAPIIntegrationUsageEventForTest(t, source, line, "local")
+	archive := exportTransferBytes(t, source)
+	if _, err := destination.ImportData(bytes.NewReader(archive)); err != nil {
+		t.Fatal(err)
+	}
+	origin, err := source.TransferInstallationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fingerprint string
+	if err := source.db.QueryRow(`SELECT fingerprint FROM api_integration_usage_events`).Scan(&fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	alias := sha256.Sum256([]byte(origin + ":" + fingerprint))
+	if _, err := destination.db.Exec(`UPDATE api_integration_usage_events SET fingerprint=?`, hex.EncodeToString(alias[:])); err != nil {
+		t.Fatal(err)
+	}
+	insertAPIIntegrationUsageEventForTest(t, destination, strings.Replace(line, `"prompt_tokens":100`, `"prompt_tokens":999`, 1), "device")
+	version := destination.APIIntegrationUsageVersion()
+	if _, err := destination.ImportData(bytes.NewReader(archive)); err == nil || !strings.Contains(err.Error(), "identity conflict") {
+		t.Fatalf("merged conflicting canonical survivor: %v", err)
+	}
+	var count int
+	if err := destination.db.QueryRow(`SELECT COUNT(*) FROM api_integration_usage_events`).Scan(&count); err != nil || count != 2 || destination.APIIntegrationUsageVersion() != version {
+		t.Fatalf("conflict changed rows/cache: count=%d err=%v", count, err)
+	}
+}
+
+func TestTransferCostFillReportsUpdatesOnce(t *testing.T) {
+	source := newTransferTestStore(t)
+	destination := newTransferTestStore(t)
+	line := `{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-5.6-sol","prompt_tokens":100,"completion_tokens":20,"metadata":{"event_key":"cost-fill"}}`
+	insertAPIIntegrationUsageEventForTest(t, source, line, "local")
+	original := exportTransferBytes(t, source)
+	insertAPIIntegrationUsageEventForTest(t, destination, line, "device")
+	if _, err := source.db.Exec(`UPDATE api_integration_usage_events SET cost_usd=0.25`); err != nil {
+		t.Fatal(err)
+	}
+	priced := exportTransferBytes(t, source)
+	for i, archive := range [][]byte{priced, original, priced} {
+		version := destination.APIIntegrationUsageVersion()
+		summary, err := destination.ImportData(bytes.NewReader(archive))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 && (summary.Tables["api_integration_usage_events"].Updated != 1 || destination.APIIntegrationUsageVersion() <= version) {
+			t.Fatalf("cost fill not reported/invalidated: %+v", summary)
+		}
+		if i > 0 && (summary.Tables["api_integration_usage_events"].Updated != 0 || destination.APIIntegrationUsageVersion() != version) {
+			t.Fatalf("old/repeated import changed known cost: %+v", summary)
+		}
+	}
+	var cost float64
+	if err := destination.db.QueryRow(`SELECT cost_usd FROM api_integration_usage_events`).Scan(&cost); err != nil || cost != 0.25 {
+		t.Fatalf("known cost=%v err=%v", cost, err)
 	}
 }

@@ -115,6 +115,12 @@ docker exec onwatch /app/onwatch data import /tmp/device-history.onwatch.zip
 
 The second apply must report only skipped records or safe metadata updates. Central settings win. Archives exclude enrollment and provider credentials.
 
+History imports preserve event fingerprints so subsequent collector replay does not count the same usage twice. Imports also recognize proven legacy fingerprint aliases, preserve their receipts and origin mappings, and reject conflicting account, token, or observation identities. Repeated subscription meter readings keep the existing central observation.
+
+An empty collector queue does not prove complete historical coverage: normal initial scans skip unchanged agent logs older than six hours. For migration, run `ONWATCH_AGENT_USAGE_INITIAL_BACKFILL=1 onwatch agent-usage --once --out PRIVATE_STAGING_DIRECTORY` on each device and reconcile that output with its existing database exports. Keep staging separate from the live spool. Events older than the live ingest age limit belong in historical transfer, not live replay.
+
+Raw records and hourly summaries are alternate representations of the same usage. If an import reports overlap, retain both source backups and compare origin mappings, exact fingerprints, request counts, and every token total before selecting a representation. Do not bypass the overlap check or sum both representations. Keep a recoverable preimage and rehearse any reconciliation on an isolated central backup first.
+
 ## Backup, retention, and restore
 
 Create an online SQLite snapshot. Never copy the live database, WAL, and SHM files separately.

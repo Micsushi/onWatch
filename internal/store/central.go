@@ -126,6 +126,8 @@ func (s *Store) ensureCentralSchema() error {
 			enriched_at TEXT,
 			PRIMARY KEY (device_id, event_id)
 		);
+		CREATE INDEX IF NOT EXISTS idx_ingest_receipts_target
+			ON ingest_receipts(target_table, target_record_id);
 
 		CREATE TABLE IF NOT EXISTS observation_provenance (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -568,6 +570,12 @@ func storeIngestEvent(tx *sql.Tx, deviceID string, event ingest.Event, now time.
 			return result, nil
 		}
 		if event.Kind == "usage_event" && jsonIsEnrichment([]byte(priorPayloadJSON), event.Payload) {
+			if targetTable == "api_integration_usage_compacted_fingerprints" {
+				// The aggregate already includes this request. Detailed metadata was
+				// deliberately discarded, so acknowledge replay without recreating it.
+				result.Status = "duplicate"
+				return result, nil
+			}
 			if err := enrichUsageEvent(tx, targetID, deviceID, event); err != nil {
 				result.Status, result.Code = "rejected", "event_payload_conflict"
 				return result, nil
@@ -620,12 +628,26 @@ func storeIngestEvent(tx *sql.Tx, deviceID string, event ingest.Event, now time.
 			id, _ = insert.LastInsertId()
 			result.Status = "accepted"
 		} else {
-			if err := tx.QueryRow(`SELECT id FROM api_integration_usage_events WHERE fingerprint = ?`, eventRecord.Fingerprint).Scan(&id); err != nil {
+			err := tx.QueryRow(`SELECT id FROM api_integration_usage_events WHERE fingerprint = ?`, eventRecord.Fingerprint).Scan(&id)
+			if errors.Is(err, sql.ErrNoRows) {
+				var compacted bool
+				if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM api_integration_usage_compacted_fingerprints WHERE fingerprint = ?)`, eventRecord.Fingerprint).Scan(&compacted); err != nil {
+					return result, err
+				}
+				if !compacted {
+					return result, err
+				}
+				// The compaction trigger ignored this replay. Retain a receipt that
+				// names its real tombstone, not a nonexistent raw row or ID zero.
+				targetTable, targetID = "api_integration_usage_compacted_fingerprints", eventRecord.Fingerprint
+			} else if err != nil {
 				return result, err
 			}
 			result.Status = "duplicate"
 		}
-		targetTable, targetID = "api_integration_usage_events", fmt.Sprintf("%d", id)
+		if targetTable == "" {
+			targetTable, targetID = "api_integration_usage_events", fmt.Sprintf("%d", id)
+		}
 	} else {
 		var ownerKind string
 		var ownerDevice sql.NullString
