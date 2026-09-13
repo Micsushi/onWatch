@@ -1008,6 +1008,11 @@ async function loadCodexProfiles() {
 }
 
 function populateCodexProfileTabs() {
+  // Resolve the account even when a single profile needs no selector.
+  if (State.codexProfiles.length > 0 && !State.codexProfiles.find(p => p.id === State.codexAccount)) {
+    State.codexAccount = State.codexProfiles[0].id;
+    saveCodexAccount(State.codexAccount);
+  }
   const dropdown = document.getElementById('codex-profile-dropdown');
   const menu = document.getElementById('codex-profile-menu');
   if (!dropdown || !menu) return;
@@ -1032,13 +1037,6 @@ function populateCodexProfileTabs() {
       closeCodexProfileDropdown();
     });
     menu.appendChild(li);
-  }
-
-  // If current account not in list, reset to first profile
-  if (!State.codexProfiles.find(p => p.id === State.codexAccount)) {
-    State.codexAccount = State.codexProfiles[0].id;
-    saveCodexAccount(State.codexAccount);
-    updateProfileTabsActive();
   }
 
   updateProfileTabsActive();
@@ -3169,7 +3167,7 @@ function renderAntigravityQuotaCards(quotas, containerId) {
     const windows = antigravityWindowsForQuota(q);
     const windowsHTML = antigravityWindowsHTML(`antigravity-${q.modelId}`, windows);
 
-    return `<article class="quota-card antigravity-card multi-window" data-quota="${q.modelId}" data-provider="antigravity" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
+    return `<article class="quota-card antigravity-card multi-window${q.isStale ? ' stale-card' : ''}" id="card-antigravity-${escapeHTML(q.modelId)}" data-quota="${q.modelId}" data-provider="antigravity" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
       <header class="card-header">
         <h2 class="quota-title">
           <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icon}</svg>
@@ -3178,6 +3176,7 @@ function renderAntigravityQuotaCards(quotas, containerId) {
         </h2>
       </header>
       <div class="antigravity-windows">${windowsHTML}</div>
+      <div class="card-freshness${q.isStale ? ' stale' : ''}" id="freshness-antigravity-${escapeHTML(q.modelId)}">${q.ageSeconds != null ? escapeHTML(cardFreshnessLabel(q)) : ''}</div>
     </article>`;
   }).join('');
 
@@ -3222,6 +3221,7 @@ function updateAntigravityCard(quota) {
   // skip the in-place patch; the next full render rebuilds the card.
   if (!document.getElementById(`progress-antigravity-${quota.modelId}-${firstKind}`)) return;
   antigravityUpdateWindows(`antigravity-${quota.modelId}`, windows);
+  updateQuotaFreshness(`card-antigravity-${quota.modelId}`, `freshness-antigravity-${quota.modelId}`, quota);
 }
 
 // Gemini Quota Cards
@@ -7176,7 +7176,7 @@ function renderProviderKPIHTML(quotas, cardKey) {
       const kpiName = quota.name || quota.modelId || quota.quotaGroup || '';
       const safeName = sanitizeProviderCardKey(kpiName);
       const keyPrefix = cardKey ? `kpiv-${cardKey}-${safeName}` : `kpiq-${safeName}`;
-      return `<article class="quota-card provider-kpi-card multi-window" data-quota="${escapeHTML(kpiName)}">
+      return `<article class="quota-card provider-kpi-card multi-window${quota.isStale ? ' stale-card' : ''}" id="card-${keyPrefix}" data-quota="${escapeHTML(kpiName)}">
         <header class="card-header">
           <div class="quota-title-block">
             <h2 class="quota-title">
@@ -7187,6 +7187,7 @@ function renderProviderKPIHTML(quotas, cardKey) {
           </div>
         </header>
         <div class="antigravity-windows">${antigravityWindowsHTML(keyPrefix, windows)}</div>
+        <div class="card-freshness${quota.isStale ? ' stale' : ''}" id="freshness-${keyPrefix}">${quota.ageSeconds != null ? escapeHTML(cardFreshnessLabel(quota)) : ''}</div>
       </article>`;
     }
 
@@ -7256,6 +7257,7 @@ function updateProviderKPICard(quota, cardKey) {
     const firstKind = (windows[0] && (windows[0].kind || 'w0')) || 'w0';
     if (!document.getElementById(`progress-${keyPrefix}-${firstKind}`)) return;
     antigravityUpdateWindows(keyPrefix, windows);
+    updateQuotaFreshness(`card-${keyPrefix}`, `freshness-${keyPrefix}`, quota);
     return;
   }
   const safeQuotaName = sanitizeProviderCardKey(quota.name || '');

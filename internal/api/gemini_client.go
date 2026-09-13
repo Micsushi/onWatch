@@ -15,11 +15,12 @@ import (
 )
 
 var (
-	ErrGeminiUnauthorized    = errors.New("gemini: unauthorized")
-	ErrGeminiForbidden       = errors.New("gemini: forbidden")
-	ErrGeminiServerError     = errors.New("gemini: server error")
-	ErrGeminiNetworkError    = errors.New("gemini: network error")
-	ErrGeminiInvalidResponse = errors.New("gemini: invalid response")
+	ErrGeminiUnauthorized      = errors.New("gemini: unauthorized")
+	ErrGeminiForbidden         = errors.New("gemini: forbidden")
+	ErrGeminiServerError       = errors.New("gemini: server error")
+	ErrGeminiNetworkError      = errors.New("gemini: network error")
+	ErrGeminiInvalidResponse   = errors.New("gemini: invalid response")
+	ErrGeminiUnsupportedClient = errors.New("gemini: client no longer supported")
 )
 
 const (
@@ -268,6 +269,13 @@ func (c *GeminiClient) FetchTier(ctx context.Context) (*GeminiTierResponse, erro
 	var tierResp GeminiTierResponse
 	if err := json.Unmarshal(respBody, &tierResp); err != nil {
 		return nil, fmt.Errorf("%w: tier: %v", ErrGeminiInvalidResponse, err)
+	}
+	if tierResp.CloudAICompanionProject == "" {
+		for _, tier := range tierResp.IneligibleTiers {
+			if tier.ReasonCode == "UNSUPPORTED_CLIENT" {
+				return nil, fmt.Errorf("%w: %s", ErrGeminiUnsupportedClient, tier.ReasonMessage)
+			}
+		}
 	}
 
 	return &tierResp, nil

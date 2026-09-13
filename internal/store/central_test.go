@@ -37,6 +37,53 @@ func TestCentralCodexExternalAccountsStaySeparate(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT account_id) FROM codex_snapshots`).Scan(&distinct); err != nil || distinct != 2 {
 		t.Fatalf("distinct accounts=%d err=%v", distinct, err)
 	}
+	accounts, err := s.QueryProviderAccounts("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range accounts {
+		if strings.HasPrefix(account.Name, "central:") {
+			t.Fatalf("internal identity exposed in display name: %q", account.Name)
+		}
+	}
+}
+
+func TestCentralCodexGeneratedNameUpgrade(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "central.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	account, err := s.GetOrCreateProviderAccountByExternalID("codex", "central:personal", "personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, custom := range []bool{false, true} {
+		if custom {
+			if err := s.RenameProviderAccount(account.ID, "Personal"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tx, err := s.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := centralCodexAccountID(tx, "personal", time.Now().UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.GetProviderAccountByID(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id != account.ID || got.ExternalID != "personal" || strings.HasPrefix(got.Name, "central:") || (custom && got.Name != "Personal") {
+			t.Fatalf("identity or label changed incorrectly: %+v", got)
+		}
+	}
 }
 
 func TestCentralExportProvenanceUsesLocalRecordLookup(t *testing.T) {

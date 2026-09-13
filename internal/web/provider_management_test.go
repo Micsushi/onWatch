@@ -66,6 +66,27 @@ func insertCodexWebSnapshot(t *testing.T, s *store.Store, accountID int64, plan 
 	}
 }
 
+func TestCodexCurrentExposesSnapshotFreshness(t *testing.T) {
+	s, err := store.New(filepath.Join(t.TempDir(), "freshness.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	h := NewHandler(s, nil, nil, nil, &config.Config{})
+	for _, age := range []time.Duration{18 * time.Hour, time.Minute} {
+		captured := time.Now().UTC().Add(-age).Truncate(time.Second)
+		_, err := s.InsertCodexSnapshot(&api.CodexSnapshot{AccountID: 1, CapturedAt: captured, PlanType: "pro", Quotas: []api.CodexQuota{{Name: "seven_day", Utilization: 8}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		current := h.buildCodexCurrent(1)
+		q := current["quotas"].([]map[string]interface{})[0]
+		if q["isStale"] != (age > 30*time.Minute) || q["lastUpdatedAt"] != captured.Format(time.RFC3339) || q["ageSeconds"].(int64) < int64(age.Seconds()) || q["utilization"] != float64(8) {
+			t.Fatalf("unexpected freshness: %+v", q)
+		}
+	}
+}
+
 func TestProviderUtilityFunctions(t *testing.T) {
 	if providerKeyBase("codex:5") != "codex" || providerKeyBase("synthetic") != "synthetic" {
 		t.Fatal("unexpected providerKeyBase mapping")

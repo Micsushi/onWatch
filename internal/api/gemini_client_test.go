@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -81,6 +82,23 @@ func TestGeminiClient_FetchTier(t *testing.T) {
 	}
 	if resp.CloudAICompanionProject != "gen-lang-client-12345" {
 		t.Errorf("unexpected project: %q", resp.CloudAICompanionProject)
+	}
+}
+
+func TestGeminiClient_UnsupportedClientReason(t *testing.T) {
+	for _, project := range []string{"", "licensed-project"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]any{"cloudaicompanionProject": project, "ineligibleTiers": []map[string]string{{"reasonCode": "UNSUPPORTED_CLIENT", "reasonMessage": "Use Antigravity."}}})
+		}))
+		client := NewGeminiClient("test-token", nil, WithGeminiBaseURL(srv.URL))
+		_, err := client.FetchTier(context.Background())
+		srv.Close()
+		if project == "" && !errors.Is(err, ErrGeminiUnsupportedClient) {
+			t.Fatalf("lost unsupported-client reason: %v", err)
+		}
+		if project != "" && err != nil {
+			t.Fatalf("rejected an eligible project: %v", err)
+		}
 	}
 }
 

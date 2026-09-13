@@ -65,6 +65,27 @@ func TestAntigravityHistoryUsesSeparateSummaryWindows(t *testing.T) {
 	}
 }
 
+func TestAntigravityCurrentExposesSnapshotFreshness(t *testing.T) {
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	h := NewHandler(s, nil, nil, nil, createTestConfigWithAntigravity())
+	for _, age := range []time.Duration{24 * time.Hour, time.Minute} {
+		at := time.Now().UTC().Add(-age).Truncate(time.Second)
+		_, err := s.InsertAntigravitySnapshot(&api.AntigravitySnapshot{CapturedAt: at, SummaryGroups: []api.AntigravityQuotaSummaryGroup{{GroupKey: api.AntigravityQuotaGroupGeminiPro, DisplayName: "Gemini models", Buckets: []api.AntigravityQuotaSummaryBucket{{BucketID: "short", Window: api.AntigravityWindowFiveHour, RemainingFraction: 0.8}}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := h.buildAntigravityCurrent()
+		q := result["quotas"].([]map[string]interface{})[0]
+		if q["isStale"] != (age > 30*time.Minute) || q["lastUpdatedAt"] != at.Format(time.RFC3339) {
+			t.Fatalf("incorrect snapshot freshness: %+v", q)
+		}
+	}
+}
+
 func TestAntigravityDashboardIncludesCostAndWindowControls(t *testing.T) {
 	s, err := store.New(":memory:")
 	if err != nil {

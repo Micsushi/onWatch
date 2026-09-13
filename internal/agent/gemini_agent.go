@@ -294,6 +294,10 @@ func (a *GeminiAgent) poll(ctx context.Context) {
 				return
 			}
 			a.logger.Warn("Failed to fetch Gemini tier", "error", err)
+			if errors.Is(err, api.ErrGeminiUnsupportedClient) {
+				a.recordPollFailure("provider_request", err.Error())
+				return
+			}
 		} else {
 			if tierResp.CloudAICompanionProject != "" {
 				a.client.SetProjectID(tierResp.CloudAICompanionProject)

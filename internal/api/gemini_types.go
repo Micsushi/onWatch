@@ -24,6 +24,10 @@ type GeminiTierResponse struct {
 	Tier                    string `json:"tier"`
 	CloudAICompanionProject string `json:"cloudaicompanionProject"`
 	PlanName                string `json:"planName,omitempty"`
+	IneligibleTiers         []struct {
+		ReasonCode    string `json:"reasonCode"`
+		ReasonMessage string `json:"reasonMessage"`
+	} `json:"ineligibleTiers,omitempty"`
 }
 
 // GeminiQuota is a normalized per-model quota for storage.

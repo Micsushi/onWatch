@@ -8203,12 +8203,16 @@ func (h *Handler) buildCodexCurrent(accountID int64) map[string]interface{} {
 			headroom = 0
 		}
 		status := codexUtilStatus(q.Utilization)
+		age := now.Sub(latest.CapturedAt)
 		qMap := map[string]interface{}{
-			"name":        normalizedName,
-			"displayName": api.CodexDisplayName(normalizedName),
-			"utilization": q.Utilization,
-			"headroom":    headroom,
-			"status":      status,
+			"name":          normalizedName,
+			"displayName":   api.CodexDisplayName(normalizedName),
+			"utilization":   q.Utilization,
+			"headroom":      headroom,
+			"status":        status,
+			"lastUpdatedAt": latest.CapturedAt.Format(time.RFC3339),
+			"ageSeconds":    int64(age.Seconds()),
+			"isStale":       age > 30*time.Minute,
 		}
 		// code_review always shows remaining; five_hour/seven_day show remaining when display_mode="available"
 		if normalizedName == "code_review" || (showAvailable && (normalizedName == "five_hour" || normalizedName == "seven_day")) {
@@ -8343,6 +8347,12 @@ func (h *Handler) buildAntigravityCurrent() map[string]interface{} {
 	}
 	response["quotas"] = quotas
 	response["pools"] = quotas
+	for _, quota := range quotas {
+		age := now.Sub(latest.CapturedAt)
+		quota["lastUpdatedAt"] = latest.CapturedAt.Format(time.RFC3339)
+		quota["ageSeconds"] = int64(age.Seconds())
+		quota["isStale"] = age > 30*time.Minute
+	}
 
 	var lowestPool map[string]interface{}
 	lowestRemaining := 101.0

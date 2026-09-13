@@ -870,9 +870,15 @@ func mirrorCentralQuotaSnapshot(tx *sql.Tx, provider, externalID string, capture
 // IDs are not local SQLite row IDs; falling back to row 1 merges unrelated users.
 func centralCodexAccountID(tx *sql.Tx, externalID, captured string) (int64, error) {
 	var id int64
+	// Upgrade only generated names; keep user labels and account history intact.
+	shortenName := func(id int64) (int64, error) {
+		name := fmt.Sprintf("Account %d", id)
+		_, err := tx.Exec(`UPDATE provider_accounts SET name = ? WHERE id = ? AND name = ? AND NOT EXISTS (SELECT 1 FROM provider_accounts WHERE provider = 'codex' AND name = ? AND id != ?)`, name, id, "central:"+externalID, name, id)
+		return id, err
+	}
 	err := tx.QueryRow(`SELECT id FROM provider_accounts WHERE provider = 'codex' AND external_id = ? ORDER BY id LIMIT 1`, externalID).Scan(&id)
 	if err == nil {
-		return id, nil
+		return shortenName(id)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
@@ -889,7 +895,11 @@ func centralCodexAccountID(tx *sql.Tx, externalID, captured string) (int64, erro
 	if err != nil {
 		return 0, err
 	}
-	return result.LastInsertId()
+	id, err = result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return shortenName(id)
 }
 
 func quotaMetricMap(metrics []ingest.QuotaMetric) map[string]*ingest.QuotaMetric {

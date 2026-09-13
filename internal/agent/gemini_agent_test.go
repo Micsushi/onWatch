@@ -23,6 +23,26 @@ func newTestGeminiStore(t *testing.T) *store.Store {
 	return st
 }
 
+func TestGeminiAgent_UnsupportedClientDoesNotFetchQuotas(t *testing.T) {
+	quotaCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1internal:retrieveUserQuota" {
+			quotaCalls++
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ineligibleTiers": []map[string]string{{"reasonCode": "UNSUPPORTED_CLIENT", "reasonMessage": "Use Antigravity."}}})
+	}))
+	defer srv.Close()
+	st := newTestGeminiStore(t)
+	client := api.NewGeminiClient("test-token", nil, api.WithGeminiBaseURL(srv.URL))
+	a := NewGeminiAgent(client, st, tracker.NewGeminiTracker(st, nil), time.Minute, nil, nil)
+	a.poll(context.Background())
+	if quotaCalls != 0 || a.authFailCount != 0 {
+		t.Fatalf("unsupported client retried quota or authentication: calls=%d authFailures=%d", quotaCalls, a.authFailCount)
+	}
+}
+
 func TestGeminiAgent_Poll(t *testing.T) {
 	t.Parallel()
 	quotaResp := api.GeminiQuotaResponse{

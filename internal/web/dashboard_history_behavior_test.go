@@ -31,6 +31,30 @@ func runDashboardNodeTest(t *testing.T, script string) {
 	}
 }
 
+func TestSingleCodexProfileSelectsItsOwnHistory(t *testing.T) {
+	source := dashboardAppSource(t)
+	populate := dashboardJavaScriptBetween(t, source, "function populateCodexProfileTabs()", "function switchCodexProfile(")
+	runDashboardNodeTest(t, fmt.Sprintf(`
+const assert=require('assert');
+const State={codexProfiles:[{id:69,name:'Personal'}],codexAccount:1};
+const dropdown={style:{}};
+const document={getElementById:id=>id==='codex-profile-dropdown'?dropdown:{}};
+let saved;
+function saveCodexAccount(id){saved=id;}
+%s
+populateCodexProfileTabs();
+assert.equal(State.codexAccount,69,'single named profile must not show default account history');
+assert.equal(saved,69);
+assert.equal(dropdown.style.display,'none');
+saved=undefined;
+populateCodexProfileTabs();
+assert.equal(saved,undefined,'valid selection must be preserved');
+State.codexProfiles=[];
+populateCodexProfileTabs();
+assert.equal(State.codexAccount,69,'empty profiles must not invent an account');
+`, populate))
+}
+
 func TestCostSamplesKeepObservedTimesAndWeightedRequestCounts(t *testing.T) {
 	source := dashboardAppSource(t)
 	buckets := dashboardJavaScriptBetween(t, source, "const graphBucketTargets =", "function formatPeriodTooltipTitle(")
@@ -1162,6 +1186,8 @@ function formatDuration() { return '2h'; }
 function formatNumber(value) { return String(value); }
 function escapeHTML(value) { return String(value); }
 function sanitizeProviderCardKey(value) { return String(value).replace(/[^a-z0-9_-]+/gi, '-'); }
+function antigravityWindowsHTML() { return ''; }
+function antigravityUpdateWindows() {}
 function animateValue(element, _from, to, _duration, formatter) {
   element.textContent = formatter(to);
 }
@@ -1245,6 +1271,17 @@ const html = renderProviderKPIHTML([staleQuota], 'anthropic');
 assert(html.includes('stale-card'), 'All dashboard card must render stale-card');
 assert(html.includes('card-freshness stale'), 'All dashboard card must render stale freshness');
 assert(html.includes('Stale data'), 'All dashboard card must label stale data explicitly');
+
+const antiQuota = { ...staleQuota, name: 'claude', windows: [{kind: 'five_hour'}] };
+const antiHTML = renderProviderKPIHTML([antiQuota], 'antigravity');
+assert(antiHTML.includes('stale-card') && antiHTML.includes('Stale data'), 'Stacked Antigravity windows must show stale data');
+const antiCard = addElement('card-kpiv-antigravity-claude');
+const antiFreshness = addElement('freshness-kpiv-antigravity-claude');
+addElement('progress-kpiv-antigravity-claude-five_hour');
+updateProviderKPICard(antiQuota, 'antigravity');
+assert(antiCard.classList.contains('stale-card') && antiFreshness.textContent.includes('Stale data'), 'Stacked Antigravity refresh must preserve stale state');
+updateProviderKPICard({ ...antiQuota, isStale: false, ageSeconds: 0 }, 'antigravity');
+assert(!antiCard.classList.contains('stale-card') && !antiFreshness.textContent.includes('Stale data'), 'Fresh Antigravity data must clear the stale warning');
 
 updateAnthropicCard(staleQuota);
 assert(anthropicCard.classList.contains('stale-card'), 'Anthropic card must become stale in place');

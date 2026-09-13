@@ -146,6 +146,13 @@ Verify history, settings, devices, receipts, revocations, ownership, export, and
 
 All graph timestamps use observation `captured_at` in UTC. Missing observations render as gaps after the larger of three expected intervals or one chart bucket. Resets remain visible as drops. The graph does not smooth, bridge, or invent zero usage. Delayed and stale collectors are shown next to the graph.
 
+Codex and Antigravity cards show the age of their last successful quota snapshot
+and mark it stale after 30 minutes. The last measured percentage remains visible;
+it is not reset to zero or presented as a newly measured value. Central Codex
+ingestion replaces legacy generated `central:` display names with short account
+labels on the next accepted snapshot, preserving external IDs, history, and
+custom names.
+
 Check cumulative and per-period modes at 1h, 6h, 24h, 7d, 30d, all, and custom ranges for both quota usage and cost. Cost events may arrive from multiple devices. Quota series accept only the configured owner.
 
 ## Production cutover
@@ -178,7 +185,24 @@ Rollback triggers are loss of authenticated access, database integrity failure, 
 - Ingest readiness: `GET /healthz` through local 9212 and Tailscale 9443.
 - Ingest metrics require `ONWATCH_INGEST_METRICS_TOKEN`; dashboard metrics use a different token.
 - `current` means heartbeat age at most 3 minutes, `delayed` at most 15 minutes, and `stale` over 15 minutes.
+- A current heartbeat and empty queue do not prove quota polling works. Compare
+  each account's latest snapshot time with the provider's current reading. The
+  collector's saved `quota_polls` reports failures and the next retry time.
+- For Codex HTTP 401 responses, check the assigned credential home against the
+  account's active login. A copied login can be revoked before its token's stated
+  expiry. Point collection at the credential owner's current home; do not rotate
+  a refresh token shared with another application.
+- On Windows, verify CLI availability from the Scheduled Task context. A packaged
+  application's private AppData files can appear at a normal path inside that
+  application while being absent for the collector. Install the verified CLI in
+  a shared user location such as `%USERPROFILE%\.local\bin`, or configure
+  `ANTIGRAVITY_CLI_PATH` to a path the task can actually read. Also configure the
+  explicit Antigravity account binding described in [its setup guide](ANTIGRAVITY_SETUP.md).
 - HTTP 401 or 403 pauses uploads for 15 minutes. Rotate or correct the token file. Do not delete the spool.
+- Gemini can return `UNSUPPORTED_CLIENT` from `loadCodeAssist` without a project.
+  Preserve that provider reason and skip the subsequent quota request, which can
+  otherwise report a misleading subscription error. A refreshed login does not
+  fix an unsupported client; use the provider's supported collection path.
 - A full spool stops new collection and preserves every unacknowledged event. Restore ingest before resuming.
 - Import/export does not repair live sync. Use the collector for ongoing data.
 
