@@ -661,6 +661,29 @@ func TestUsageRefreshUsesItsExactRequestWindow(t *testing.T) {
 	}
 }
 
+func TestAllHistoryDoesNotUseRequestSentinelAsAxisBounds(t *testing.T) {
+	source := dashboardAppSource(t)
+	apply := dashboardJavaScriptBetween(t, source, "function applyUsageGraphJob(", "async function runUsageGraphRefreshJob(")
+	runDashboardNodeTest(t, fmt.Sprintf(`
+const assert=require('assert');
+const State={chart:{}};
+function usageGraphJobIsSelected(){return true;}
+function supportsPlatformCost(){return false;}
+function setGraphHistoryRangeError(){}
+function setUsageChartRefreshMessage(){}
+function setDashboardFreshness(){}
+let options;
+function setMainChartDatasets(_data,_range,value){options=value;}
+%s
+const job={provider:'codex',range:'all',windowStart:'1926-09-13T00:00:00Z',windowEnd:'2026-09-13T00:00:00Z'};
+applyUsageGraphJob(job,{});
+assert.equal(options.xBounds,null,'all history must autoscale to observations');
+job.range='custom';
+applyUsageGraphJob(job,{});
+assert.equal(options.xBounds.min,Date.parse(job.windowStart),'explicit ranges retain exact bounds');
+`, apply))
+}
+
 func TestPerPeriodEventTotalsKeepVisibleBaseline(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)

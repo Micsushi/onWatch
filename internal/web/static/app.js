@@ -6614,7 +6614,7 @@ function applyUsageGraphJob(job, payload, options = {}) {
     const max = Date.parse(windowEnd || '');
     setMainChartDatasets(payload.chartDatasets || [], job.range, {
       preserveExistingOnEmpty: true,
-      xBounds: Number.isFinite(min) && Number.isFinite(max) && min < max ? { min, max } : null,
+      xBounds: Number.isFinite(min) && Number.isFinite(max) && min < max && job.range !== 'all' ? { min, max } : null,
       windowStart,
       windowEnd,
     });
