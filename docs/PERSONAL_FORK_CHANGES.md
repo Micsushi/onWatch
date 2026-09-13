@@ -1,6 +1,7 @@
 # Personal Fork Changes
 
-This fork keeps upstream onWatch as the base, but it is tuned for my local Windows workflow and server1 homelab deployment.
+This fork keeps upstream onWatch as the base, with local Windows and central
+collector deployments.
 
 ## Local Windows Workflow
 
@@ -43,13 +44,12 @@ This fork keeps upstream onWatch as the base, but it is tuned for my local Windo
 
 ## Hosted Deployment
 
-- The app can run from Docker Compose.
-- The homelab deployment lives in `C:\Users\sushi\Documents\Github\ansible_homelab`.
-- Server1 deployment is wired as a Stage 3 monitoring/security service.
-- The intended server1 hostname is `onwatch.mshi.ca`.
-- Hosted mode can use Authelia in front of onWatch.
-- `ONWATCH_TRUST_PROXY_AUTH=true` allows hosted mode to skip built-in onWatch login when the trusted reverse proxy handles authentication.
-- Local Windows mode keeps the existing onWatch login behavior by default.
+The [central hosting runbook](central-hosting-operations.md) owns deployment,
+collector enrollment, storage and recovery. Its current topology uses one
+canonical Server2 service and a Server1 Authelia gateway. Both Authelia and
+onWatch login remain enabled; `ONWATCH_TRUST_PROXY_AUTH` stays false because
+other containers share the Docker network. Local Windows mode also keeps
+built-in authentication by default.
 
 ## Implemented Config
 
