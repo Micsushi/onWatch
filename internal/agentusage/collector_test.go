@@ -1,12 +1,74 @@
 package agentusage
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestCollectorGeminiBadFileDoesNotBlockValidSessions(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "gemini")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	valid := `{"sessionId":"g1","timestamp":"2026-05-25T13:00:00Z","model":"gemini-2.5-pro","stats":{"tokens":{"input":10,"output":2,"total":12}}}`
+	bad := filepath.Join(source, "incomplete.json")
+	for name, data := range map[string]string{"session.json": valid, "index.json": `["unrelated"]`, "incomplete.json": `{"sessionId":`} {
+		if err := os.WriteFile(filepath.Join(source, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logs bytes.Buffer
+	c := NewCollector(filepath.Join(dir, "out"), testPricing(t), []Source{{Kind: SourceGemini, Path: source, InitialBackfill: true}}, slog.New(slog.NewTextHandler(&logs, nil)))
+	for i := 0; i < 2; i++ {
+		if err := c.CollectOnce(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.Count(logs.String(), "skipped Gemini file") != 1 || !strings.Contains(logs.String(), "incomplete.json") {
+		t.Fatalf("expected one filename-specific malformed-file diagnostic: %s", logs.String())
+	}
+	if err := os.WriteFile(bad, []byte(strings.Replace(valid, `"g1"`, `"g2"`, 1)+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CollectOnce(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(c.outputPath(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(strings.TrimSpace(string(data)), "\n"); len(lines) != 2 {
+		t.Fatalf("valid session or repaired file lost: %s", data)
+	}
+}
+
+func TestCollectorClaudeNonUsageMessagesDoNotWarn(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "claude.jsonl")
+	writeFixture(t, source, []string{
+		`{"type":"user","message":{"content":"hello"}}`,
+		`{"type":"progress","data":{}}`,
+		`{"timestamp":"2026-05-25T12:34:56Z","message":{"id":"m1","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":2}}}`,
+	})
+	var logs bytes.Buffer
+	c := NewCollector(filepath.Join(dir, "out"), testPricing(t), []Source{{Kind: SourceClaude, Path: source}}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err := c.CollectOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "model is required") {
+		t.Fatalf("non-usage messages still warn: %s", logs.String())
+	}
+	data, err := os.ReadFile(c.outputPath(time.Now()))
+	if err != nil || len(strings.Split(strings.TrimSpace(string(data)), "\n")) != 1 {
+		t.Fatalf("expected only measured usage: %s err=%v", data, err)
+	}
+}
 
 func TestAuditCollectorRetriesAfterOutputFailure(t *testing.T) {
 	dir := t.TempDir()

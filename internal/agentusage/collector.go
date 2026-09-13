@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -442,7 +443,14 @@ func (c *Collector) collectSource(source Source) ([]UsageEvent, error) {
 			}
 			fileEvents, err := ParseGeminiUsageFile(path, displaySource, provider, c.pricing)
 			if err != nil {
-				return nil, err
+				c.logger.Warn("agent usage collector skipped Gemini file", "path", path, "error", err)
+				var syntaxError *json.SyntaxError
+				if errors.As(err, &syntaxError) {
+					// Retry an incomplete/malformed document when its bytes change;
+					// unchanged unrelated files should not flood every collection log.
+					nextFileStates[path] = state
+				}
+				continue
 			}
 			events = append(events, fileEvents...)
 		case SourceAntigravity:
@@ -596,7 +604,9 @@ func parseClaudeFile(path string, pricing *PricingMap) ([]UsageEvent, error) {
 		if err != nil {
 			return nil, err
 		}
-		events = append(events, *event)
+		if event != nil {
+			events = append(events, *event)
+		}
 	}
 	return events, nil
 }

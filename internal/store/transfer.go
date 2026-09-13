@@ -904,7 +904,7 @@ func (s *Store) ImportData(r io.Reader) (ImportSummary, error) {
 	// A raw archive and its later hourly compaction are alternate representations.
 	// Refuse ambiguous overlap rather than silently increasing usage totals.
 	var overlap int
-	err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM api_integration_usage_hourly h JOIN api_integration_usage_events e ON e.integration_name=h.integration_name AND e.account_name=h.account_name AND e.model=h.model AND e.reasoning_effort=h.reasoning_effort AND e.mode=h.mode AND e.speed_mode=h.speed_mode AND e.captured_at COLLATE ONWATCH_RFC3339>=h.first_captured_at COLLATE ONWATCH_RFC3339 AND e.captured_at COLLATE ONWATCH_RFC3339<=h.last_captured_at COLLATE ONWATCH_RFC3339 JOIN data_transfer_records d ON d.table_name='api_integration_usage_events' AND e.id=CAST(d.local_record_id AS INTEGER) WHERE d.origin_id=h.origin_scope)`).Scan(&overlap)
+	err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM api_integration_usage_hourly h CROSS JOIN api_integration_usage_events e ON e.integration_name=h.integration_name AND e.provider=h.provider AND e.account_name=h.account_name AND e.model=h.model AND e.reasoning_effort=h.reasoning_effort AND e.mode=h.mode AND e.speed_mode=h.speed_mode AND e.captured_at COLLATE ONWATCH_RFC3339>=h.first_captured_at COLLATE ONWATCH_RFC3339 AND e.captured_at COLLATE ONWATCH_RFC3339<=h.last_captured_at COLLATE ONWATCH_RFC3339 CROSS JOIN data_transfer_records d ON d.table_name='api_integration_usage_events' AND d.local_record_id=CAST(e.id AS TEXT) WHERE d.origin_id=h.origin_scope)`).Scan(&overlap)
 	if err != nil {
 		return summary, err
 	}

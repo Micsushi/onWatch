@@ -608,6 +608,38 @@ func TestParseGeminiUsageFileSupportsJsonAndJsonlStats(t *testing.T) {
 	}
 }
 
+func TestParseGeminiUsageFileSkipsUnrelatedJSONDocuments(t *testing.T) {
+	for _, data := range []string{`[]`, `["session-index"]`, `null`, `"metadata"`, `{"sessionId":"empty","messages":[]}`} {
+		path := filepath.Join(t.TempDir(), "index.json")
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if events, err := ParseGeminiUsageFile(path, "gemini", "gemini", testPricing(t)); err != nil || len(events) != 0 {
+			t.Fatalf("unrelated document produced usage/error: events=%+v err=%v", events, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeFixture(t, path, []string{`[]`, `{"session_id":"g1","model":"gemini-2.5-pro"}`, `null`, `{"timestamp":"2026-05-25T13:01:01Z","tokens":{"input":10,"output":2,"total":12}}`})
+	if events, err := ParseGeminiUsageFile(path, "gemini", "gemini", testPricing(t)); err != nil || len(events) != 1 || events[0].TotalTokens != 12 {
+		t.Fatalf("JSONL non-records blocked valid usage: events=%+v err=%v", events, err)
+	}
+}
+
+func TestParseClaudeUsageLineSkipsNonUsageMessages(t *testing.T) {
+	for _, line := range []string{`{"type":"user","message":{"content":"hello"}}`, `{"type":"progress","data":{}}`, `{"type":"system","usage":{}}`} {
+		if event, err := ParseClaudeUsageLine([]byte(line), "session.jsonl", testPricing(t)); err != nil || event != nil {
+			t.Fatalf("non-usage message became event: %+v %v", event, err)
+		}
+	}
+	event, err := ParseClaudeUsageLine([]byte(`{"message":{"usage":{"input_tokens":10,"output_tokens":2}}}`), "session.jsonl", testPricing(t))
+	if err != nil || event == nil || event.TotalTokens != 12 {
+		t.Fatalf("positive usage without model was hidden: %+v %v", event, err)
+	}
+	if _, err := event.ToAPIIntegrationLine(); err == nil || !strings.Contains(err.Error(), "model is required") {
+		t.Fatalf("missing model lost meaningful diagnostic: %v", err)
+	}
+}
+
 func TestParseAntigravitySettingsFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session-a.settings.json")

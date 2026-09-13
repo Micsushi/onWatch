@@ -33,6 +33,11 @@ func ParseClaudeUsageLine(line []byte, sourcePath string, pricing *PricingMap) (
 	if len(usage) == 0 {
 		usage = object(obj["usage"])
 	}
+	// Transcripts also contain user messages, progress and session metadata.
+	// These are not usage records and should not become empty-model events.
+	if len(usage) == 0 && floatValue(obj, "costUSD", "cost_usd") <= 0 {
+		return nil, nil
+	}
 	cacheCreation1h := intValue(object(usage["cache_creation"]), "ephemeral_1h_input_tokens", "1h_input_tokens")
 	counts := TokenCounts{
 		InputTokens:           intValue(usage, "input_tokens", "input"),
@@ -533,12 +538,17 @@ func ParseGeminiUsageFile(path, source, provider string, pricing *PricingMap) ([
 	if err != nil {
 		return nil, err
 	}
-	if filepath.Ext(path) == ".jsonl" {
+	if strings.EqualFold(filepath.Ext(path), ".jsonl") {
 		return parseGeminiJSONL(data, path, source, provider, pricing)
 	}
-	var obj map[string]any
-	if err := json.Unmarshal(data, &obj); err != nil {
+	var document any
+	if err := json.Unmarshal(data, &document); err != nil {
 		return nil, err
+	}
+	obj := object(document)
+	if obj == nil {
+		// The source directory also contains indexes and other JSON documents.
+		return nil, nil
 	}
 	event := geminiEventFromObject(obj, path, source, provider, pricing)
 	if event.Model == "" || event.TotalTokens <= 0 {
@@ -816,9 +826,13 @@ func parseGeminiJSONL(data []byte, path, source, provider string, pricing *Prici
 		if line == "" {
 			continue
 		}
-		var obj map[string]any
-		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+		var document any
+		if err := json.Unmarshal([]byte(line), &document); err != nil {
 			return nil, err
+		}
+		obj := object(document)
+		if obj == nil {
+			continue
 		}
 		if s := firstString(obj, "session_id", "sessionId"); s != "" {
 			sessionID = s
