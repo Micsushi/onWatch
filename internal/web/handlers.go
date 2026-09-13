@@ -8423,7 +8423,7 @@ func antigravitySummaryGroupToMap(g api.AntigravityQuotaSummaryGroup, mode strin
 	if groupKey == "" {
 		groupKey = api.AntigravitySummaryGroupKey(displayName)
 	}
-	if displayName == "" {
+	if displayName == "" || displayName == groupKey {
 		displayName = api.AntigravityQuotaGroupDisplayName(groupKey)
 	}
 	qMap := map[string]interface{}{

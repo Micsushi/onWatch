@@ -59,6 +59,20 @@ func insertTestGeminiSnapshot(t *testing.T, s *store.Store, capturedAt time.Time
 }
 
 // insertTestGeminiData inserts a Gemini snapshot with 6 model quotas (2 per family) for realistic test data.
+func TestGeminiCurrentFlagsOldReadings(t *testing.T) {
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	insertTestGeminiSnapshot(t, s, time.Now().Add(-24*time.Hour), []api.GeminiQuota{{ModelID: "gemini-2.5-pro", RemainingFraction: 1}})
+	h := NewHandler(s, nil, nil, nil, createTestConfigWithGemini())
+	quotas := h.buildGeminiCurrent()["quotas"].([]map[string]interface{})
+	if len(quotas) != 1 || quotas[0]["isStale"] != true || quotas[0]["ageSeconds"].(int64) < 86390 {
+		t.Fatalf("missing stale evidence: %v", quotas)
+	}
+}
+
 func insertTestGeminiData(t *testing.T, s *store.Store) {
 	t.Helper()
 	now := time.Now().UTC()

@@ -3254,7 +3254,7 @@ function renderGeminiQuotaCards(quotas, containerId) {
     const remainingPct = (q.remainingPercent || (q.remainingFraction != null ? q.remainingFraction * 100 : 0)).toFixed(1);
     const fractionText = q.cardPercent != null ? cardLabel : `${remainingPct}% remaining`;
 
-    return `<article class="quota-card gemini-card" data-quota="${q.modelId}" data-provider="gemini" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
+    return `<article id="card-gemini-${q.modelId}" class="quota-card gemini-card${q.isStale ? ' stale-card' : ''}" data-quota="${q.modelId}" data-provider="gemini" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
       <header class="card-header">
         <h2 class="quota-title">
           <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
@@ -3273,6 +3273,7 @@ function renderGeminiQuotaCards(quotas, containerId) {
           <div class="progress-fill" id="${progressId}" style="width: ${usagePct}%" data-status="${status}"></div>
         </div>
       </div>
+      <div class="card-freshness${q.isStale ? ' stale' : ''}" id="freshness-gemini-${q.modelId}">${q.ageSeconds != null ? escapeHTML(cardFreshnessLabel(q)) : ''}</div>
       <footer class="card-footer">
         <span class="status-badge" id="${statusId}" data-status="${status}">
           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
@@ -3308,6 +3309,7 @@ function renderCursorQuotaCards(quotas, containerId) {
 }
 
 function updateGeminiCard(q) {
+  updateQuotaFreshness(`card-gemini-${q.modelId}`, `freshness-gemini-${q.modelId}`, q);
   const key = `gemini-${q.modelId}`;
   const prev = State.currentQuotas[key];
   State.currentQuotas[key] = {

@@ -47,6 +47,9 @@ func (h *Handler) buildGeminiCurrent() map[string]interface{} {
 	var quotas []map[string]interface{} //nolint:prealloc
 	for _, fq := range families {
 		quota := map[string]interface{}{
+			"lastUpdatedAt":     latest.CapturedAt.Format(time.RFC3339),
+			"ageSeconds":        int64(now.Sub(latest.CapturedAt).Seconds()),
+			"isStale":           now.Sub(latest.CapturedAt) > 30*time.Minute,
 			"modelId":           fq.FamilyID,
 			"displayName":       fq.DisplayName,
 			"members":           fq.Members,
