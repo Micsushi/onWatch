@@ -711,6 +711,21 @@ func TestDaemonize_SuccessAndLogOpenError(t *testing.T) {
 		}
 
 		t.Setenv("GO_WANT_DAEMON_HELPER", "1")
+		stopFile := filepath.Join(tmp, "stop-helper")
+		t.Setenv("GO_DAEMON_HELPER_STOP_FILE", stopFile)
+		t.Cleanup(func() {
+			_ = os.WriteFile(stopFile, nil, 0o600)
+			data, err := os.ReadFile(pidFile)
+			if err != nil {
+				return
+			}
+			pid, err := strconv.Atoi(strings.Split(string(data), ":")[0])
+			if err == nil {
+				if child, err := os.FindProcess(pid); err == nil {
+					_, _ = child.Wait()
+				}
+			}
+		})
 		os.Args = []string{oldArgs[0], "-test.run=TestDaemonizeHelperProcess"}
 
 		cfg := &config.Config{
@@ -896,6 +911,18 @@ func TestRunUpdate_WithMockedUpdater(t *testing.T) {
 func TestDaemonizeHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_DAEMON_HELPER") != "1" {
 		return
+	}
+	// The parent records the live process identity before releasing the daemon.
+	// Keep this synthetic child alive until the parent finishes its assertions.
+	if stopFile := os.Getenv("GO_DAEMON_HELPER_STOP_FILE"); stopFile != "" {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(stopFile); err == nil {
+				os.Exit(0)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		os.Exit(1)
 	}
 	os.Exit(0)
 }
