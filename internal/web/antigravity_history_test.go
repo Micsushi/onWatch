@@ -125,3 +125,10 @@ delete State.antigravityQuotaWindow;
 assert(antigravityWindowDatasets([{_antigravityWindow:'unknown'}]).length===1,'legacy unknown window visible');
 `)
 }
+
+func TestAntigravityCentralGroupLabel(t *testing.T) {
+	quota := antigravityGroupedQuotaToMap(api.AntigravityGroupedQuota{GroupKey: api.AntigravityQuotaGroupClaudeGPT, DisplayName: api.AntigravityQuotaGroupClaudeGPT}, "usage")
+	if quota["displayName"] != "Claude + GPT Quota" {
+		t.Fatalf("internal group ID leaked into title: %v", quota["displayName"])
+	}
+}

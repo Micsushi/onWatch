@@ -8456,6 +8456,9 @@ func antigravitySummaryGroupToMap(g api.AntigravityQuotaSummaryGroup, mode strin
 }
 
 func antigravityGroupedQuotaToMap(g api.AntigravityGroupedQuota, mode string) map[string]interface{} {
+	if g.DisplayName == "" || g.DisplayName == g.GroupKey {
+		g.DisplayName = api.AntigravityQuotaGroupDisplayName(g.GroupKey)
+	}
 	status := antigravityRemainingStatus(g.RemainingPercent)
 	qMap := map[string]interface{}{
 		"modelId":           g.GroupKey,
