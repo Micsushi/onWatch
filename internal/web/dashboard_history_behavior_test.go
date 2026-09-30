@@ -647,7 +647,7 @@ func TestEventCostSeriesDoesNotInventCollectionGaps(t *testing.T) {
 func TestUsageRefreshUsesItsExactRequestWindow(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
-	createJob := dashboardJavaScriptBetween(t, source, "function createUsageGraphRefreshJob(", "function scheduleUsageGraphWarmup(")
+	createJob := dashboardJavaScriptBetween(t, source, "function createUsageGraphRefreshJob(", "async function fetchHistory(")
 	applyJob := dashboardJavaScriptBetween(t, source, "function applyUsageGraphJob(", "async function runUsageGraphRefreshJob(")
 	for _, expected := range []string{
 		"const requestWindow = historyRequestWindow(range);",

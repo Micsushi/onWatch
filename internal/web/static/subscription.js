@@ -10,7 +10,23 @@
   const esc = value => escapeHTML(String(value ?? ''));
   const date = value => new Date(value).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
   const quotaName = value => ({five_hour:'5-hour',seven_day:'Weekly',seven_day_sonnet:'Weekly Sonnet',seven_day_opus:'Weekly Opus',weekly:'Weekly'})[value]||value.replace('antigravity_','').replaceAll('_',' ').replace(':',' · ');
+  const CACHE_KEY='onwatch-subscription-value-cache-v1';
+  const CACHE_LIMIT=4;
   let data, chart, controller, previousProfile, selection, chartSignature, saving = false, profileDirty = false;
+  const cacheIdentity = () => `${provider}:${new URLSearchParams(location.search).get('account')||'default'}:${el('days').value}`;
+  function readCache() {
+    if(typeof localStorage==='undefined')return null;
+    try{return JSON.parse(localStorage.getItem(CACHE_KEY)||'{}')[cacheIdentity()]?.data||null;}catch(_){return null;}
+  }
+  function writeCache(value) {
+    if(typeof localStorage==='undefined')return;
+    try {
+      const cache=JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');
+      cache[cacheIdentity()]={ts:Date.now(),data:value};
+      Object.entries(cache).sort((a,b)=>(b[1]?.ts||0)-(a[1]?.ts||0)).slice(CACHE_LIMIT).forEach(([key])=>delete cache[key]);
+      localStorage.setItem(CACHE_KEY,JSON.stringify(cache));
+    } catch(_) { /* Storage is an optimization; a live response still renders. */ }
+  }
   const metric = (label,value) => `<div class="platform-cost-metric"><span class="platform-cost-label">${esc(label)}</span><strong>${esc(value)}</strong></div>`;
   const cells = values => '<tr>'+values.map(value=>`<td>${esc(value)}</td>`).join('')+'</tr>';
   const pricedValue = (cost, requests, unknown) => requests > unknown ? usd(cost)+(unknown?' (partial)':'') : '--';
@@ -35,7 +51,7 @@
     chartSignature=signature;
     if (hasPoints && !chart) {
       const color=getComputedStyle(root).getPropertyValue('--text-secondary').trim()||'#8791a0';
-      chart=new Chart(el('chart'),{type:'scatter',data:{datasets:[{label:'Observed API value',data:points.map(p=>({x:p.used,y:p.cost})),borderColor:'#14b8a6',backgroundColor:'#14b8a6',pointRadius:3,showLine:false}]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${num(c.parsed.x)}% used · ${usd(c.parsed.y)} recorded`}}},scales:{x:{min:0,max:100,title:{display:true,text:'Quota used (%)',color},ticks:{color}},y:{beginAtZero:true,title:{display:true,text:'API value since first observation (USD)',color},ticks:{color,callback:v=>usd(v)}}}}});
+      chart=new Chart(el('chart'),{type:'scatter',data:{datasets:[{label:'Observed API value',data:points.map(p=>({x:p.used,y:p.cost})),borderColor:'#14b8a6',backgroundColor:'#14b8a6',borderWidth:2,pointRadius:3,pointHoverRadius:5,tension:.2,showLine:true}]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${num(c.parsed.x)}% used · ${usd(c.parsed.y)} recorded`}}},scales:{x:{min:0,max:100,title:{display:true,text:'Quota used (%)',color},ticks:{color}},y:{beginAtZero:true,title:{display:true,text:'API value since first observation (USD)',color},ticks:{color,callback:v=>usd(v)}}}}});
     }
     const weekly=cycle && (cycle.quota==='seven_day'||cycle.quota==='weekly'||cycle.quota.endsWith(':weekly'));
     el('plans').innerHTML=weekly && cycle.x1!=null ? [[1,20],[5,100],[20,200]].map(([mult,fee])=>{const week=cycle.x1*mult,month=week*30/7;return cells([`x${mult} linear scenario`,usd(fee),usd(week),usd(month),num(month/fee)+'x']);}).join('') : '<tr><td colspan="5">Choose a priced weekly allowance and configure its plan multiplier.</td></tr>';
@@ -81,18 +97,20 @@
       if(!response.ok){const problem=await response.json().catch(()=>null);throw new Error(problem?.error||'Could not load subscription data. Try again.');}
       const next=await response.json();
       if(requestController!==controller)return false;
-      data=next;render(!!profile);
+      data=next;writeCache(next);render(!!profile);
       return true;
-    } catch(error) {if(error.name!=='AbortError' && requestController===controller)el('status').textContent=error.message;}
+    } catch(error) {if(error.name!=='AbortError' && requestController===controller)el('status').textContent=data?`${error.message} Showing saved subscription data.`:error.message;}
     finally {if(requestController===controller){saving=false;root.setAttribute('aria-busy','false');el('refresh').disabled=false;el('days').disabled=false;el('plan-form').querySelector('button[type="submit"]').disabled=false;el('plan-form').querySelectorAll('input').forEach(input=>{input.disabled=false;});el('undo').disabled=!previousProfile;if(document.activeElement===document.body&&focusTarget?.isConnected&&root.contains(focusTarget))(focusTarget.disabled?el('plan-name'):focusTarget).focus();}}
   }
   el('cycle').addEventListener('change',renderCycle);
-  el('days').addEventListener('change',()=>{selection=null;load();});
+  el('days').addEventListener('change',()=>{selection=null;const saved=readCache();if(saved){data=saved;render();el('status').textContent+=' Refreshing in the background.';}load();});
   el('refresh').addEventListener('click',()=>load());
   el('plan-form').addEventListener('input',()=>{profileDirty=true;});
   el('plan-form').addEventListener('submit',async event=>{event.preventDefault();const before=data?.report.profile;if(await load({name:el('plan-name').value,monthlyUsd:Number(el('price').value),multiplier:Number(el('multiplier').value)})){previousProfile=before;el('undo').disabled=!previousProfile;el('undo').textContent='Undo plan change';}});
   el('undo').addEventListener('click',async ()=>{if(previousProfile){const redo=data?.report.profile;if(await load(previousProfile)){previousProfile=redo;el('undo').textContent=el('undo').textContent.startsWith('Undo')?'Redo plan change':'Undo plan change';}}});
   new MutationObserver(()=>{if(data)renderCycle();}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
   setInterval(()=>{if(!document.hidden&&!el('plan-details').open&&!root.contains(document.activeElement))load();},60000);
+  const saved=readCache();
+  if(saved){data=saved;render();el('status').textContent+=' Refreshing in the background.';}
   load();
 })();

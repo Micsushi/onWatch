@@ -103,6 +103,8 @@ func TestDashboardDoesNotWarmEveryProviderAndRange(t *testing.T) {
 		"PLATFORM_COST_PREFETCH_RANGES",
 		"prefetchPlatformCostRanges",
 		"startPlatformCostRefreshLoop",
+		"scheduleUsageGraphWarmup",
+		"schedulePlatformCostWarmup",
 	} {
 		if strings.Contains(source, forbidden) {
 			t.Errorf("dashboard still contains eager warmup path %q", forbidden)
@@ -170,7 +172,7 @@ func TestDashboardCanReusePersistedPresetSnapshotDuringRefresh(t *testing.T) {
 	}
 }
 
-func TestPlatformCostRequestsAreSharedAndWarmLikelyRangesInBackground(t *testing.T) {
+func TestPlatformCostRequestsAreSharedWithoutLoadingUnselectedRanges(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
 
@@ -178,18 +180,34 @@ func TestPlatformCostRequestsAreSharedAndWarmLikelyRangesInBackground(t *testing
 		"platformCostPayloadInflight: {}",
 		"const existing = State.platformCostPayloadInflight[requestKey];",
 		"if (existing) return existing;",
-		"function schedulePlatformCostWarmup(provider, activeRange)",
-		"const preferredRanges = ['30d', '24h', '6h', '1h', '7d', 'all'];",
-		"enqueueGraphRefresh(job, { foreground: false });",
 		"function platformCostHistoryRequestQuery(range, scope = 'platformCost')",
 		"const windowRange = presetHistoryWindow(normalized, new Date());",
 		"const query = queryOverride || platformCostHistoryRequestQuery(range, scope);",
 		"setCachedPlatformCostHistory(job.provider, job.range, payload, job.scope);",
 		"setCachedPlatformCostHistory(job.provider, job.range, payload, alternateScope);",
+		"(breakdownRange === 'custom' || breakdownRange !== costRange)",
+		"State.platformCostBreakdownHistoryRange = job.range;",
 	} {
 		if !strings.Contains(source, marker) {
-			t.Errorf("cost graph does not share or resource-cap background work: missing %q", marker)
+			t.Errorf("cost graph does not share selected-range work: missing %q", marker)
 		}
+	}
+}
+
+func TestPlatformCostChartAlwaysConnectsSamples(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	start := strings.Index(source, "function renderPlatformCostChart(")
+	end := strings.Index(source[start:], "\nfunction bindPlatformCostRangeControls")
+	if start < 0 || end < 0 {
+		t.Fatal("could not isolate platform cost chart")
+	}
+	chart := source[start : start+end]
+	if strings.Count(chart, "showLine: true,") != 2 {
+		t.Fatal("cost and token samples are not both connected by visible lines")
+	}
+	if strings.Contains(chart, "showLine: periodMode") {
+		t.Fatal("cumulative cost mode still disables chart lines")
 	}
 }
 
@@ -339,7 +357,7 @@ func TestArchivePrecisionWarningOnlyFollowsSelectedAllOrOldCustomRange(t *testin
 	}
 
 	payloadStart := strings.Index(source, "async function fetchPlatformCostPayload(")
-	payloadEnd := strings.Index(source[payloadStart:], "\nfunction schedulePlatformCostWarmup")
+	payloadEnd := strings.Index(source[payloadStart:], "\nwindow.addEventListener('pagehide'")
 	if payloadStart < 0 || payloadEnd < 0 {
 		t.Fatal("could not isolate platform cost payload fetch")
 	}

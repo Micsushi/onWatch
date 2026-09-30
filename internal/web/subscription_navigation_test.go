@@ -39,3 +39,27 @@ func TestSubscriptionNavigation_ProviderView(t *testing.T) {
 		}
 	}
 }
+
+func TestDashboardShowsPrimaryGraphsBeforeSecondaryStatusSections(t *testing.T) {
+	t.Parallel()
+	template := dashboardTemplateSource(t)
+
+	orderedMarkers := []string{
+		`id="platform-cost-section"`,
+		`<section class="chart-section`,
+		`id="platform-cost-breakdown-section"`,
+		`id="subscription-value"`,
+		`id="device-health-section"`,
+	}
+	previous := -1
+	for _, marker := range orderedMarkers {
+		index := strings.Index(template, marker)
+		if index < 0 {
+			t.Fatalf("dashboard template missing %q", marker)
+		}
+		if index <= previous {
+			t.Fatalf("dashboard template section %q is out of priority order", marker)
+		}
+		previous = index
+	}
+}

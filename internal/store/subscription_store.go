@@ -43,7 +43,7 @@ func recordSubscriptionTelemetry(db subscriptionExecer, e *ai.UsageEvent) error 
 		if json.Unmarshal(meta.Quota[name], &q) != nil || q.Used == nil || *q.Used < 0 || *q.Used > 100 || math.IsNaN(*q.Used) || q.Reset <= 0 {
 			continue
 		}
-		if err := insertSubscriptionMeter(db, "codex", e.Account, subscription.Meter{At: e.Timestamp, Reset: time.Unix(q.Reset, 0).UTC(), Used: *q.Used, Quota: name, Plan: plan}); err != nil {
+		if err := insertSampledSubscriptionMeter(db, "codex", e.Account, subscription.Meter{At: e.Timestamp, Reset: time.Unix(q.Reset, 0).UTC(), Used: *q.Used, Quota: name, Plan: plan}); err != nil {
 			return err
 		}
 	}
@@ -62,6 +62,30 @@ func insertSubscriptionMeter(db subscriptionExecer, provider, account string, m 
 		return fmt.Errorf("invalid subscription meter")
 	}
 	_, err := db.Exec(`INSERT OR IGNORE INTO subscription_meter_observations(provider,account_name,plan,quota,captured_at,resets_at,utilization) VALUES(?,?,?,?,?,?,?)`, provider, account, m.Plan, m.Quota, m.At.UTC().Format(time.RFC3339Nano), m.Reset.UTC().Format(time.RFC3339Nano), m.Used)
+	return err
+}
+
+// Task logs can repeat the same rounded quota counter several times per second.
+// Persist changes immediately, but retain only one unchanged sample per ten
+// minutes so subscription graphs do not grow with request volume.
+func insertSampledSubscriptionMeter(db subscriptionExecer, provider, account string, m subscription.Meter) error {
+	if account == "" {
+		account = "default"
+	}
+	if provider != "codex" || m.At.IsZero() || m.Used < 0 || m.Used > 100 || math.IsNaN(m.Used) {
+		return fmt.Errorf("invalid subscription meter")
+	}
+	captured := m.At.UTC().Format(time.RFC3339Nano)
+	reset := m.Reset.UTC().Format(time.RFC3339Nano)
+	cutoff := m.At.UTC().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	_, err := db.Exec(`INSERT OR IGNORE INTO subscription_meter_observations(provider,account_name,plan,quota,captured_at,resets_at,utilization)
+		SELECT ?,?,?,?,?,?,?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM subscription_meter_observations
+			WHERE provider=? AND account_name=? AND plan=? AND quota=? AND resets_at=? AND utilization=?
+				AND captured_at COLLATE ONWATCH_RFC3339>=? AND captured_at COLLATE ONWATCH_RFC3339<=?
+		)`, provider, account, m.Plan, m.Quota, captured, reset, m.Used,
+		provider, account, m.Plan, m.Quota, reset, m.Used, cutoff, captured)
 	return err
 }
 

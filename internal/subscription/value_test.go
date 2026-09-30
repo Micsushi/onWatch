@@ -103,3 +103,31 @@ func TestHistoricalPlanDoesNotUseCurrentMultiplier(t *testing.T) {
 		t.Fatal("historical x5 quota must not use current x20 multiplier")
 	}
 }
+
+func TestSelectedAccountPollSuppressesNearbyRolloutTelemetry(t *testing.T) {
+	at := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	reset := at.Add(7 * 24 * time.Hour)
+	meters := []Meter{
+		{At: at, Reset: reset, Used: 10, Quota: "seven_day", Plan: "pro", Source: "poll"},
+		{At: at.Add(time.Second), Reset: reset, Used: 80, Quota: "seven_day", Plan: "plus", Source: "rollout"},
+		{At: at.Add(2 * time.Second), Reset: reset, Used: 9, Quota: "seven_day", Plan: "pro", Source: "rollout"},
+		{At: at.Add(time.Hour), Reset: reset, Used: 20, Quota: "seven_day", Plan: "pro", Source: "poll"},
+	}
+	events := []Event{{At: at.Add(30 * time.Minute), Model: "gpt-6-astra", Requests: 1, Cost: 10, Priced: true}}
+	r := Analyze(events, meters, Profile{PlanType: "pro", Multiplier: 20})
+	if len(r.Cycles) != 1 || r.Cycles[0].Plan != "pro" || r.Cycles[0].Used != 10 {
+		t.Fatalf("nearby rollout telemetry fragmented the selected account: %+v", r.Cycles)
+	}
+}
+
+func TestEmptyCycleFragmentsAreTrimmed(t *testing.T) {
+	at := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	meters := make([]Meter, 0, 100)
+	for i := 0; i < 100; i++ {
+		meters = append(meters, Meter{At: at.Add(time.Duration(i) * time.Minute), Used: float64(i % 2 * 50), Quota: "seven_day", Plan: []string{"plus", "pro"}[i%2], Source: "rollout"})
+	}
+	r := Analyze(nil, meters, Profile{})
+	if len(r.Cycles) != 1 || r.Cycles[0].Start != meters[len(meters)-1].At {
+		t.Fatalf("empty fragments were returned to the graph: %+v", r.Cycles)
+	}
+}

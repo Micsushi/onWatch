@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"github.com/onllm-dev/onwatch/v2/internal/agentusage"
 	"github.com/onllm-dev/onwatch/v2/internal/api"
 	ai "github.com/onllm-dev/onwatch/v2/internal/api_integrations"
@@ -42,6 +43,37 @@ func TestSubscriptionTelemetrySurvivesReplayAndRepricesMissingCost(t *testing.T)
 	}
 	if len(events) != 1 || events[0].Cost != 10 || !events[0].Priced || len(meters) != 1 || meters[0].Used != 0 {
 		t.Fatalf("events %+v meters %+v", events, meters)
+	}
+}
+
+func TestSubscriptionTelemetrySamplesUnchangedRoundedCounters(t *testing.T) {
+	s := newTransferTestStore(t)
+	at := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	reset := at.Add(7 * 24 * time.Hour)
+	for i, used := range []float64{10, 10, 11, 11} {
+		event := agentusage.UsageEvent{
+			Source: "codex", Provider: "openai", Timestamp: at.Add(time.Duration(i) * time.Minute),
+			RequestID: fmt.Sprintf("request-%d", i), Model: "gpt-6-astra", TotalTokens: 1,
+			QuotaTelemetry: map[string]any{"plan": "pro", "seven_day": map[string]any{"used": used, "reset": reset.Unix()}},
+		}
+		line, err := event.ToAPIIntegrationLine()
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := ai.ParseUsageEventLine(line, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.InsertAPIIntegrationUsageEvent(parsed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM subscription_meter_observations").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("unchanged rounded counters stored %d rows; want 2 changed samples", count)
 	}
 }
 

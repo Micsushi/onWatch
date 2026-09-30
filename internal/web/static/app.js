@@ -934,22 +934,6 @@ async function fetchPlatformCostPayload(provider, range, signal, scope = 'platfo
   }
 }
 
-function schedulePlatformCostWarmup(provider, activeRange) {
-  const preferredRanges = ['30d', '24h', '6h', '1h', '7d', 'all'];
-  if (document.hidden) return;
-  if (!supportsPlatformCost(provider) || getCurrentProvider() !== provider) return;
-
-  const normalizedActiveRange = normalizePlatformCostRange(activeRange);
-  const ranges = preferredRanges.filter((range) => (
-    range !== normalizedActiveRange
-    && !getCachedPlatformCostHistory(provider, range, PLATFORM_COST_HISTORY_CACHE_TTL_MS, 'platformCost')
-  ));
-  ranges.forEach((range) => {
-    const job = createPlatformCostRefreshJob(range, provider, 'platformCost');
-    enqueueGraphRefresh(job, { foreground: false });
-  });
-}
-
 window.addEventListener('pagehide', () => {
   abortPlatformCostPrefetches();
 });
@@ -6722,24 +6706,6 @@ function createUsageGraphRefreshJob(range, provider = getCurrentProvider(), acco
   return job;
 }
 
-function scheduleUsageGraphWarmup(provider, accountKey, activeRange) {
-  if (document.hidden) return;
-  const preferredRanges = ['30d', '24h', '6h', '1h', '7d', 'all'];
-  preferredRanges
-    .filter((range) => range !== activeRange)
-    .filter((range) => !getCachedProviderData(
-      'history',
-      provider,
-      historySelectionKey(range),
-      PROVIDER_HISTORY_CACHE_TTL_MS,
-      accountKey,
-    ))
-    .forEach((range) => enqueueGraphRefresh(
-      createUsageGraphRefreshJob(range, provider, accountKey),
-      { foreground: false },
-    ));
-}
-
 async function fetchHistory(range, options = {}) {
   range = normalizeChartRange(range === undefined ? selectedChartRange() : range);
   const provider = getCurrentProvider();
@@ -6762,7 +6728,6 @@ async function fetchHistory(range, options = {}) {
       { stale: Boolean(options.force || !freshCached), ts: cached.ts },
     );
     if (!options.force && freshCached) {
-      scheduleUsageGraphWarmup(provider, accountKey, range);
       return;
     }
   }
@@ -6771,9 +6736,7 @@ async function fetchHistory(range, options = {}) {
   if (range === 'custom') {
     return runCustomGraphRefresh(job);
   }
-  const result = enqueueGraphRefresh(job, { foreground: options.background !== true });
-  result.then(() => scheduleUsageGraphWarmup(provider, accountKey, range)).catch(() => {});
-  return result;
+  return enqueueGraphRefresh(job, { foreground: options.background !== true });
 }
 
 // "Both" Mode: Provider Cards
@@ -7910,11 +7873,13 @@ function renderPlatformCostPanel(provider = getCurrentProvider()) {
 
   renderPlatformCostBreakdown(provider);
   const breakdownRange = normalizePlatformCostRange(State.platformCostBreakdownRange || DEFAULT_CHART_RANGE);
+  const costRange = normalizePlatformCostRange(State.platformCostRange || DEFAULT_CHART_RANGE);
   if (State.platformCostBreakdownHistoryRange !== breakdownRange &&
+      (breakdownRange === 'custom' || breakdownRange !== costRange) &&
       !State.platformCostBreakdownLoading) {
     fetchPlatformCostBreakdownRange(breakdownRange, provider);
   }
-  renderPlatformCostChart(provider, State.platformCostRange || DEFAULT_CHART_RANGE);
+  renderPlatformCostChart(provider, costRange);
 }
 
 function platformCostLoadingLabel(range) {
@@ -8319,7 +8284,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           hoverBackgroundColor: costFill,
           hoverBorderColor: costColor,
           ...graphLineStyle(periodMode),
-          showLine: periodMode,
+          showLine: true,
           fill: false,
           hoverBorderWidth: 2,
         },
@@ -8333,7 +8298,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           hoverBackgroundColor: tokensFill,
           hoverBorderColor: tokensColor,
           ...graphLineStyle(periodMode),
-          showLine: periodMode,
+          showLine: true,
           fill: false,
           hoverBorderWidth: 2,
         },
@@ -8762,6 +8727,13 @@ async function runPlatformCostRefreshJob(job, signal) {
   }
   if (!platformCostJobIsSelected(job)) return;
 
+  if (job.range !== 'custom' && selectedPlatformCostBreakdownRange() === job.range) {
+    State.platformCostBreakdownSessionModels = payload.sessionModels || {};
+    State.platformCostBreakdownHistoryRange = job.range;
+    State.platformCostBreakdownHistoryWindowStart = job.windowStart;
+    State.platformCostBreakdownHistoryWindowEnd = job.windowEnd;
+  }
+
   setGraphHistoryRangeError(job.scope, '');
   if (payload.usesArchivedData) noteArchivedHistorySelection(job.range, job.scope);
   if (job.scope === 'platformCostBreakdown') {
@@ -8835,7 +8807,6 @@ async function fetchPlatformCostHistory(range, provider, options = {}) {
       setDashboardFreshness({ stale: !freshCached, ts: cached.ts });
     }
     if (!options.force && freshCached) {
-      schedulePlatformCostWarmup(provider, range);
       return;
     }
   }
@@ -8855,9 +8826,7 @@ async function fetchPlatformCostHistory(range, provider, options = {}) {
   }
 
   setPlatformCostChartLoading(false);
-  const result = enqueueGraphRefresh(job, { foreground: options.background !== true });
-  result.then(() => schedulePlatformCostWarmup(provider, range)).catch(() => {});
-  return result;
+  return enqueueGraphRefresh(job, { foreground: options.background !== true });
 }
 
 function renderAPIIntegrationsHealth() {
@@ -11733,9 +11702,12 @@ function setupHeaderActions() {
       ];
       const provider = getCurrentProvider();
       if (supportsPlatformCost(provider)) {
-        tasks.push(fetchPlatformCostHistory(selectedPlatformCostRange(), provider));
-        if (document.getElementById('platform-cost-breakdown-section')) {
-          tasks.push(fetchPlatformCostBreakdownRange(selectedPlatformCostBreakdownRange(), provider));
+        const costRange = selectedPlatformCostRange();
+        const breakdownRange = selectedPlatformCostBreakdownRange();
+        tasks.push(fetchPlatformCostHistory(costRange, provider, { force: true }));
+        if (document.getElementById('platform-cost-breakdown-section') &&
+            (breakdownRange === 'custom' || breakdownRange !== costRange)) {
+          tasks.push(fetchPlatformCostBreakdownRange(breakdownRange, provider, { force: true }));
         }
       }
       if (shouldShowCyclesTable()) tasks.push(fetchCycles({ force: true }));

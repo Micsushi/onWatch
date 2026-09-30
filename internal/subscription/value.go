@@ -138,7 +138,7 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 			archiveEnds[i+1] = e.End
 		}
 	}
-	meters = preferRolloutMeters(meters)
+	meters = preferPolledMeters(meters)
 	sort.SliceStable(meters, func(i, j int) bool {
 		if meters[i].Quota != meters[j].Quota {
 			return meters[i].Quota < meters[j].Quota
@@ -310,6 +310,7 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 			c.High = number(c.Cost * 100 / math.Max(1, c.Used-1))
 		}
 	}
+	r.Cycles = trimEmptyCycleFragments(r.Cycles)
 	for _, m := range models {
 		if m.QuotaPoints >= 5 {
 			m.Per100 = number(m.MatchedCost * 100 / m.QuotaPoints)
@@ -335,23 +336,23 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 	return r
 }
 
-// Polls and task logs can lag each other. Prefer the direct rollout counter
-// within ten minutes rather than creating fake resets from the stale poll.
-func preferRolloutMeters(meters []Meter) []Meter {
-	direct := map[string][]time.Time{}
+// A selected account's poll is authoritative. Task-log telemetry can come from
+// another signed-in account, so mixing nearby rollout counters with that poll
+// creates thousands of false resets and an unnecessarily large graph payload.
+func preferPolledMeters(meters []Meter) []Meter {
+	polls := map[string][]time.Time{}
 	for _, m := range meters {
-		if m.Source == "rollout" {
-			k := m.Quota + "|" + m.Plan
-			direct[k] = append(direct[k], m.At)
+		if m.Source == "poll" {
+			polls[m.Quota] = append(polls[m.Quota], m.At)
 		}
 	}
-	for k := range direct {
-		sort.Slice(direct[k], func(i, j int) bool { return direct[k][i].Before(direct[k][j]) })
+	for k := range polls {
+		sort.Slice(polls[k], func(i, j int) bool { return polls[k][i].Before(polls[k][j]) })
 	}
 	out := make([]Meter, 0, len(meters))
 	for _, m := range meters {
-		if m.Source == "poll" {
-			times := direct[m.Quota+"|"+m.Plan]
+		if m.Source == "rollout" {
+			times := polls[m.Quota]
 			i := sort.Search(len(times), func(i int) bool { return !times[i].Before(m.At.Add(-10 * time.Minute)) })
 			if i < len(times) && !times[i].After(m.At.Add(10*time.Minute)) {
 				continue
@@ -360,4 +361,29 @@ func preferRolloutMeters(meters []Meter) []Meter {
 		out = append(out, m)
 	}
 	return out
+}
+
+// Keep completed or progressing cycles plus the newest empty observation for
+// each quota. Empty fragments carry no value evidence and can otherwise make a
+// month's response several megabytes when historical account streams overlap.
+func trimEmptyCycleFragments(cycles []Cycle) []Cycle {
+	latestEmpty := map[string]int{}
+	keep := make([]bool, len(cycles))
+	for i, cycle := range cycles {
+		if len(cycle.Points) > 1 || cycle.Used > 0 || cycle.Cost > 0 {
+			keep[i] = true
+			continue
+		}
+		latestEmpty[cycle.Quota] = i
+	}
+	for _, i := range latestEmpty {
+		keep[i] = true
+	}
+	trimmed := make([]Cycle, 0, len(cycles))
+	for i, cycle := range cycles {
+		if keep[i] {
+			trimmed = append(trimmed, cycle)
+		}
+	}
+	return trimmed
 }
