@@ -114,6 +114,6 @@ unverified instance. Native Windows checks use process handles and supported
 termination rather than POSIX signals; scheduled collector removal ends and
 checks the scheduled action before deleting the schedule.
 
-Builds require Go 1.26.8 or newer. CI includes native Windows checks and a Go
+Builds require Go 1.26.9 or newer. CI includes native Windows checks and a Go
 vulnerability scan. Platform cross-compilation is not a substitute for native
 service, tray and upgrade acceptance tests.

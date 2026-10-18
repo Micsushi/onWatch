@@ -69,7 +69,7 @@ For manual setup or troubleshooting, see the [Windows Setup Guide](docs/WINDOWS_
 
 **Download binaries** from the [Releases](https://github.com/Micsushi/onWatch/releases) page. Binaries are available for macOS (ARM64, AMD64), Linux (AMD64, ARM64), and Windows (AMD64).
 
-**Or build from source** (requires Go 1.26.8+):
+**Or build from source** (requires Go 1.26.9+):
 
 ```bash
 git clone https://github.com/Micsushi/onWatch.git && cd onWatch

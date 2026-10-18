@@ -1,6 +1,6 @@
 module github.com/onllm-dev/onwatch/v2
 
-go 1.26.8
+go 1.26.9
 
 require (
 	fyne.io/systray v1.12.0
