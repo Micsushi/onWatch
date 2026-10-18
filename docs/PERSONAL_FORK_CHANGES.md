@@ -30,6 +30,17 @@ collector deployments.
 
 ## Notifications
 
+The central Server2 deployment enables `ONWATCH_QUIET_WEEKLY_ALERTS=true`.
+Only Codex and Anthropic all-model weekly usage can notify: below 50% at
+halfway through the seven-day cycle, with a 90-minute polling grace period.
+One attempt per provider per seven days is persisted across restarts, shared
+across accounts. Model-specific quotas, resets (including Gemini), overusage,
+threshold, auth-error and polling-health notifications stay silent. Dashboard
+history and health records remain available. Missed checkpoints and uncertain
+deliveries are not replayed. Explicit test buttons remain available.
+
+The legacy settings below apply when this deployment policy is disabled.
+
 - Discord is available as a notification channel.
 - Discord webhook settings live in dashboard settings.
 - Discord webhook URLs are encrypted before storage when an encryption key is available.
@@ -46,10 +57,9 @@ collector deployments.
 
 The [central hosting runbook](central-hosting-operations.md) owns deployment,
 collector enrollment, storage and recovery. Its current topology uses one
-canonical Server2 service and a Server1 Authelia gateway. Both Authelia and
-onWatch login remain enabled; `ONWATCH_TRUST_PROXY_AUTH` stays false because
-other containers share the Docker network. Local Windows mode also keeps
-built-in authentication by default.
+canonical Server2 service and shared Authelia gateways. The deployed dashboard
+trusts the authenticated proxy; its alternate tailnet route uses the same
+protection. Local Windows mode keeps built-in authentication by default.
 
 ## Implemented Config
 

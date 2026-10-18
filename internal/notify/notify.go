@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,8 @@ import (
 
 // NotificationEngine evaluates quota statuses and sends alerts via email, push, and Discord.
 type NotificationEngine struct {
+	quietWeekly          bool
+	weeklyMu             sync.Mutex
 	store                *store.Store
 	logger               *slog.Logger
 	mailer               *SMTPMailer
@@ -141,8 +144,9 @@ const underuseNotificationWindow = 90 * time.Minute
 // New creates a new NotificationEngine with default configuration.
 func New(s *store.Store, logger *slog.Logger) *NotificationEngine {
 	return &NotificationEngine{
-		store:  s,
-		logger: logger,
+		quietWeekly: strings.EqualFold(os.Getenv("ONWATCH_QUIET_WEEKLY_ALERTS"), "true"),
+		store:       s,
+		logger:      logger,
 		cfg: NotificationConfig{
 			Warning:              80,
 			Critical:             95,
@@ -622,6 +626,10 @@ func (e *NotificationEngine) SendTestPush() error {
 // Check evaluates a quota status against thresholds and sends notifications if needed.
 // Runs synchronously -- no goroutines spawned.
 func (e *NotificationEngine) Check(status QuotaStatus) {
+	if e.quietWeekly {
+		e.checkQuietWeekly(status)
+		return
+	}
 	e.mu.RLock()
 	cfg := e.cfg
 	mailer := e.mailer
@@ -1155,6 +1163,9 @@ type AuthErrorAlert struct {
 // Also creates an in-dashboard system alert for when the user logs in.
 // Returns true if at least one notification was sent successfully.
 func (e *NotificationEngine) SendAuthErrorNotification(alert AuthErrorAlert) bool {
+	if e.quietWeekly {
+		return false
+	}
 	e.mu.RLock()
 	cfg := e.cfg
 	mailer := e.mailer

@@ -742,7 +742,12 @@ func (e *NotificationEngine) loadRegisteredPollState(
 func (e *NotificationEngine) pollHealthDeliverySnapshot() (NotificationConfig, *SMTPMailer, *PushSender, *DiscordSender) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.cfg, e.mailer, e.pushSender, e.discord
+	cfg := e.cfg
+	if e.quietWeekly {
+		cfg.NotifyPollFailure = false
+		cfg.NotifyPollRecovery = false
+	}
+	return cfg, e.mailer, e.pushSender, e.discord
 }
 
 func (e *NotificationEngine) pollFailureThreshold() int {

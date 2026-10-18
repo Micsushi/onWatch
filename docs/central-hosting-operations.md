@@ -5,10 +5,19 @@ This runbook moves onWatch from independent full daemons to one canonical Server
 ## Security boundary
 
 - The dashboard listens on container port 9211, published only to loopback port 9213. Tailscale Serve HTTPS 9444 carries dashboard traffic to the existing Server1 Authelia gateway at `onwatch.mshi.ca`. The optional direct Cloudflare Tunnel route requires its own access policy.
-- Authelia and onWatch login both remain enabled. `ONWATCH_TRUST_PROXY_AUTH` stays false because other containers share the Docker network.
+- The deployed shared-login setup enables `ONWATCH_TRUST_PROXY_AUTH`. Both the public domain and Tailscale Serve dashboard listener pass through the authenticated gateway; Serve 9444 targets loopback port 19214, never the unprotected dashboard port.
 - Ingest listens on container port 9212 and is published only to `127.0.0.1:9212`. Tailscale Serve exposes HTTPS 9443 to tailnet peers.
 - Every ingest request still requires a device ID and bearer token. Only the SHA-256 token digest is stored.
 - Provider credentials remain on the one device assigned to poll that account. They are never uploaded.
+
+## Notification policy
+
+Server2 enables `ONWATCH_QUIET_WEEKLY_ALERTS=true` in Compose. Only Codex and
+Anthropic receive a single underusage checkpoint alert below 50% at the weekly
+halfway point; other providers and alert types remain silent. Persistent
+`quiet_weekly_underuse:*` settings prevent repeats across accounts and restarts.
+Setting the environment variable to false restores the legacy notification
+settings. Keep the existing database when deploying or rolling back.
 
 ## Server2 deployment
 
