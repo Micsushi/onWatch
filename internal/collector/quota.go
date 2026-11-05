@@ -16,6 +16,23 @@ import (
 
 const maxQuotaPollBackoff = time.Hour
 
+func (r *Runtime) anthropicAccessToken(ctx context.Context) (string, error) {
+	token := api.DetectAnthropicToken(r.logger)
+	if token == "" {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv("ANTHROPIC_TOKEN_ROTATION"))) {
+		case "on", "true", "1", "yes":
+			if err := api.RefreshAnthropicCredentialsWithClaude(ctx, os.Getenv("ANTHROPIC_CLAUDE_PATH"), os.Getenv("CLAUDE_CONFIG_DIR")); err != nil {
+				return "", fmt.Errorf("renew dedicated Anthropic login: %w", err)
+			}
+			token = api.DetectAnthropicToken(r.logger)
+		}
+	}
+	if token == "" {
+		return "", fmt.Errorf("Anthropic credential unavailable; sign in with Claude using the collector's CLAUDE_CONFIG_DIR")
+	}
+	return token, nil
+}
+
 type quotaPollState struct {
 	Failures int       `json:"failures,omitempty"`
 	NextPoll time.Time `json:"next_poll"`
@@ -189,9 +206,9 @@ func (r *Runtime) pollQuota(ctx context.Context, assignment ingest.ProviderAssig
 		}
 		provider = "openai"
 	case "anthropic":
-		token := api.DetectAnthropicToken(r.logger)
-		if token == "" {
-			return ingest.Event{}, fmt.Errorf("Anthropic credential unavailable")
+		token, err := r.anthropicAccessToken(ctx)
+		if err != nil {
+			return ingest.Event{}, err
 		}
 		response, err := api.NewAnthropicClient(token, r.logger).FetchQuotas(ctx)
 		if err != nil {

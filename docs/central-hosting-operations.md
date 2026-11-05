@@ -201,6 +201,17 @@ Rollback triggers are loss of authenticated access, database integrity failure, 
   account's active login. A copied login can be revoked before its token's stated
   expiry. Point collection at the credential owner's current home; do not rotate
   a refresh token shared with another application.
+- For recurring Anthropic credential expiry, authenticate a dedicated onWatch
+  `CLAUDE_CONFIG_DIR` and set `ANTHROPIC_TOKEN_ROTATION=on` in the collector's
+  `~/.onwatch/.env`. Restart the collector after changing its configuration.
+  The collector uses the official Claude executable to renew an expired login
+  with one restricted Haiku request, then reads the renewed credential and
+  resumes quota polling. This consumes a small amount of Claude usage. Healthy
+  credentials and HTTP 429 responses do not trigger renewal. Shared default
+  profiles, including aliases to that directory, cannot be renewed by onWatch.
+  A revoked or otherwise unrefreshable login still requires `claude auth login`
+  with the same dedicated profile. See the [Windows setup](WINDOWS_SETUP.md#anthropic-claude-code)
+  for the sign-in commands. Failed renewals use the existing retry backoff.
 - On Windows, verify CLI availability from the Scheduled Task context. A packaged
   application's private AppData files can appear at a normal path inside that
   application while being absent for the collector. Install the verified CLI in

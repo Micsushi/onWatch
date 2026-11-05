@@ -61,6 +61,20 @@ func refreshAnthropicCredentialsWithClaude(
 	if configDir == "" {
 		return ErrAnthropicIsolatedProfileRequired
 	}
+	profile, err := filepath.Abs(configDir)
+	if err != nil {
+		return fmt.Errorf("resolve Claude profile: %w", err)
+	}
+	defaultDir := DefaultClaudeConfigDir()
+	if profile == defaultDir || (runtime.GOOS == "windows" && strings.EqualFold(profile, defaultDir)) {
+		return ErrAnthropicIsolatedProfileRequired
+	}
+	// A symlink or junction to the default profile is still a shared login.
+	profileInfo, profileErr := os.Stat(profile)
+	defaultInfo, defaultErr := os.Stat(defaultDir)
+	if profileErr == nil && defaultErr == nil && os.SameFile(profileInfo, defaultInfo) {
+		return ErrAnthropicIsolatedProfileRequired
+	}
 	if strings.TrimSpace(executable) == "" {
 		return ErrClaudeExecutableNotFound
 	}
@@ -94,6 +108,7 @@ func runClaudeCredentialRefresh(ctx context.Context, executable string, args, en
 
 	var stdout, stderr boundedBuffer
 	cmd := exec.CommandContext(refreshCtx, executable, args...)
+	configureClaudeCredentialRefresh(cmd)
 	cmd.Env = env
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
