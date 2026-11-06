@@ -291,7 +291,14 @@ func (a *AnthropicAgent) refreshViaCredentialOwner(ctx context.Context, creds *a
 	} else {
 		a.logger.Info("Anthropic token expired, asking isolated credential owner to refresh")
 	}
-	if err := a.ownerRefresh(ctx); err != nil {
+	err := a.ownerRefresh(ctx)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err == nil && (a.tokenRefresh == nil || a.tokenRefresh() == "") {
+		err = errors.New("anthropic: credential owner returned without a usable token")
+	}
+	if err != nil {
 		a.ownerFailCount++
 		if a.ownerFailCount >= maxOwnerRefreshFailures {
 			a.ownerRetryAt = time.Now().Add(ownerRefreshRetryInterval)
@@ -302,6 +309,12 @@ func (a *AnthropicAgent) refreshViaCredentialOwner(ctx context.Context, creds *a
 	}
 	a.ownerRetryAt = time.Time{}
 	a.ownerFailCount = 0
+	if a.credsRefresh != nil {
+		a.ownerRefreshTokenExpiry = time.Time{}
+		if refreshed := a.credsRefresh(); refreshed != nil {
+			a.ownerRefreshTokenExpiry = refreshed.RefreshTokenExpiresAt
+		}
+	}
 	a.usingFallbackToken = false
 	if a.authPaused {
 		a.authPaused = false
@@ -676,11 +689,16 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 	// Claude process can safely rotate the profile it owns.
 	if a.credsRefresh != nil {
 		creds := a.credsRefresh()
+		a.ownerRefreshTokenExpiry = time.Time{}
 		if creds != nil {
 			a.ownerRefreshTokenExpiry = creds.RefreshTokenExpiresAt
 		}
 		if a.ownerRefresh != nil && (creds == nil || creds.IsExpired()) {
 			if err := a.refreshViaCredentialOwner(ctx, creds); err != nil {
+				if ctx.Err() != nil {
+					reportSkipped()
+					return
+				}
 				// The isolated profile is unusable. Rather than going dark, poll
 				// with a read-only token from another profile when one exists.
 				// Re-checked every cycle: the borrowed token expires on its own
@@ -721,7 +739,7 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 		// Read-only mode cannot refresh anything. Detection returning nothing
 		// means Claude Code's token has gone cold, so drop the one we hold -
 		// reusing it only earns 401s until the agent pauses polling entirely.
-		if newToken == "" && a.ownerRefresh == nil && !a.usingFallbackToken && a.client.HasToken() {
+		if newToken == "" && !a.usingFallbackToken && a.client.HasToken() {
 			a.logger.Info("Anthropic credentials are not currently usable; waiting for Claude Code to refresh them")
 			a.client.SetToken("")
 			a.lastToken = ""

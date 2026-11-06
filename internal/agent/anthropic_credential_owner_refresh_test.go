@@ -63,6 +63,86 @@ func TestAnthropicAgent_ExpiredOwnerRefreshFailureClearsTokenAndSkipsAPI(t *test
 	}
 }
 
+func TestAnthropicAgent_NoOpOwnerDoesNotClaimRecovery(t *testing.T) {
+	for _, fallback := range []string{"", "fallback-token"} {
+		t.Run(fallback, func(t *testing.T) {
+			var requests int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if r.Header.Get("Authorization") != "Bearer fallback-token" {
+					t.Errorf("stale primary sent: %s", r.Header.Get("Authorization"))
+				}
+				_, _ = w.Write([]byte(anthropicResponse(12, 34)))
+			}))
+			defer server.Close()
+			str, err := store.New(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer str.Close()
+			logger := slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))
+			client := api.NewAnthropicClient("expired-token", logger, api.WithAnthropicBaseURL(server.URL))
+			a := NewAnthropicAgent(client, str, nil, time.Minute, logger, nil)
+			a.SetCredentialsRefresh(func() *api.AnthropicCredentials { return nil })
+			a.SetTokenRefresh(func() string { return "" })
+			calls := 0
+			a.SetCredentialOwnerRefresh(func(context.Context) error { calls++; return nil })
+			a.SetFallbackToken(func() string { return fallback })
+			for i := 0; i < maxOwnerRefreshFailures+1; i++ {
+				a.poll(context.Background())
+			}
+			if calls != maxOwnerRefreshFailures || a.ownerRetryAt.IsZero() {
+				t.Fatal("no-op refresh did not back off")
+			}
+			if fallback == "" && (requests != 0 || client.HasToken()) {
+				t.Fatal("expired token was retained")
+			}
+			if fallback != "" && (!a.usingFallbackToken || requests != maxOwnerRefreshFailures+1) {
+				t.Fatal("fallback stopped or falsely promoted to primary")
+			}
+			if raw, _ := str.GetSetting(store.AnthropicPollErrorSetting); raw == "" {
+				t.Fatal("login warning was cleared")
+			}
+		})
+	}
+}
+
+func TestAnthropicAgent_CancelledOwnerDoesNotCountAsLoginFailure(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))
+	str, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer str.Close()
+	a := NewAnthropicAgent(api.NewAnthropicClient("", logger), str, nil, time.Minute, logger, nil)
+	a.credsRefresh = func() *api.AnthropicCredentials { return nil }
+	a.fallbackToken = func() string { t.Fatal("cancellation consulted fallback"); return "" }
+	ctx, cancel := context.WithCancel(context.Background())
+	a.ownerRefresh = func(context.Context) error { cancel(); return context.Canceled }
+	a.poll(ctx)
+	if a.ownerFailCount != 0 || !a.ownerRetryAt.IsZero() {
+		t.Fatal("cancellation counted as login failure")
+	}
+	if raw, err := str.GetSetting(store.AnthropicPollErrorSetting); err != nil || raw != "" {
+		t.Fatalf("cancellation reported a login incident: %q %v", raw, err)
+	}
+}
+
+func TestAnthropicAgent_RenewalUpdatesRefreshExpiryWarning(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))
+	newExpiry := time.Now().Add(30 * 24 * time.Hour)
+	a := &AnthropicAgent{logger: logger, ownerRefreshTokenExpiry: time.Now()}
+	a.ownerRefresh = func(context.Context) error { return nil }
+	a.tokenRefresh = func() string { return "renewed-token" }
+	a.credsRefresh = func() *api.AnthropicCredentials { return &api.AnthropicCredentials{RefreshTokenExpiresAt: newExpiry} }
+	if err := a.refreshViaCredentialOwner(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !a.ownerRefreshTokenExpiry.Equal(newExpiry) || a.credentialOwnerExpiringMessage() != "" {
+		t.Fatal("renewal retained stale expiry warning")
+	}
+}
+
 func TestAnthropicAgent_MissingOwnerCredentialsClearsStaleTokenAndSkipsAPI(t *testing.T) {
 	var apiCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

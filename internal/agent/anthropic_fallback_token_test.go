@@ -177,12 +177,14 @@ func TestAnthropicAgent_FallbackKeepsDegradedWarningAfterSuccess(t *testing.T) {
 	client := api.NewAnthropicClient("", logger, api.WithAnthropicBaseURL(server.URL))
 	agent := NewAnthropicAgent(client, str, tracker.NewAnthropicTracker(str, logger), time.Minute, logger, nil)
 	agent.SetCredentialsRefresh(func() *api.AnthropicCredentials { return nil })
-	agent.SetTokenRefresh(func() string { return "" })
+	primaryToken := ""
+	agent.SetTokenRefresh(func() string { return primaryToken })
 	ownerFails := true
 	agent.SetCredentialOwnerRefresh(func(context.Context) error {
 		if ownerFails {
 			return errors.New("Claude login required")
 		}
+		primaryToken = "renewed-primary-token"
 		return nil
 	})
 	agent.SetFallbackToken(func() string { return "main-profile-token" })
@@ -372,12 +374,14 @@ func TestAnthropicAgent_OwnerRefreshRecoversAfterBackoffWindow(t *testing.T) {
 	client := api.NewAnthropicClient("", logger, api.WithAnthropicBaseURL(server.URL))
 	agent := NewAnthropicAgent(client, str, tracker.NewAnthropicTracker(str, logger), time.Minute, logger, nil)
 	agent.SetCredentialsRefresh(func() *api.AnthropicCredentials { return nil })
-	agent.SetTokenRefresh(func() string { return "" })
+	primaryToken := ""
+	agent.SetTokenRefresh(func() string { return primaryToken })
 	ownerFails := true
 	agent.SetCredentialOwnerRefresh(func(context.Context) error {
 		if ownerFails {
 			return errors.New("Claude login required")
 		}
+		primaryToken = "renewed-primary-token"
 		return nil
 	})
 	agent.SetFallbackToken(func() string { return "main-profile-token" })

@@ -108,6 +108,8 @@ func runClaudeCredentialRefresh(ctx context.Context, executable string, args, en
 
 	var stdout, stderr boundedBuffer
 	cmd := exec.CommandContext(refreshCtx, executable, args...)
+	// Descendants can inherit stdout/stderr after Claude exits or is killed.
+	cmd.WaitDelay = time.Second
 	configureClaudeCredentialRefresh(cmd)
 	cmd.Env = env
 	cmd.Stdout = &stdout
@@ -118,6 +120,12 @@ func runClaudeCredentialRefresh(ctx context.Context, executable string, args, en
 		}
 		return fmt.Errorf("anthropic: Claude credential refresh failed: %w%s",
 			err, claudeRefreshDetail(stdout.Bytes(), stderr.Bytes()))
+	}
+	var result struct {
+		IsError bool `json:"is_error"`
+	}
+	if json.Unmarshal(stdout.Bytes(), &result) == nil && result.IsError {
+		return fmt.Errorf("anthropic: Claude credential refresh failed%s", claudeRefreshDetail(stdout.Bytes(), stderr.Bytes()))
 	}
 	return nil
 }
