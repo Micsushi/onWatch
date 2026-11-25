@@ -40,16 +40,15 @@ published meter change is a particularly coarse estimate. The model-specific
 table keeps whole-plan figures such as [Wokey's mixed Codex traffic](https://wokey.ai/codex-usage-limits)
 out of per-effort rows.
 
-When a setting has a priced token profile and no matched quota, the chart can
-estimate it using the median four-week API value from other efforts of the
-same model at Standard speed. It prefers same-tier local measurements. For
-Standard GPT-6 Astra and Sol family settings on Plus or $200 Pro, it can also
-use a same-tier Astra/Sol budget as a proxy. Their Standard API rates are
-proportional to the published credit weights, but the [Codex rate card](https://learn.chatgpt.com/docs/pricing?codex-pricing-speed=ultrafast)
-does not publish the included weekly allowance in credits. These projections
-assume a similar allowance per API dollar. A recorded or VulcanBench token
-profile controls how much of that API value becomes output at the selected
-effort. When either input is missing, the estimate stays unavailable.
+For missing efforts, the chart can use the median measured output per quota
+point from other standard-speed efforts of the same model. For Codex, when
+VulcanBench publishes a complete token profile for the setting, it can use the
+[published purchase-credit token weights](https://learn.chatgpt.com/docs/pricing#token-rates)
+to translate a same-plan measured allowance into the expected output for that
+effort. It prefers measurements of the same model. Purchased-credit weights
+are a proxy for the relative included quota cost. The provider does not publish
+the included weekly allowance in credits. Both methods are shown as estimates
+and use no API price in the calculation.
 
 The combined estimate uses an equal mix of attempts from the eligible suites
 available for that exact model and effort. For one attempt on each suite, add
@@ -65,19 +64,28 @@ the benchmark's pass rule. Combined averages the pass rates across available
 suites equally. **Evidence** lists the underlying passes, attempts, and mean
 output per attempt. Coverage differs by model and effort.
 
-The upper-right corner corresponds to higher API-equivalent dollars per
-subscription dollar and more estimated passes in four weeks. Compare those
-directions on the same workload. A fast, cheap model can complete more tasks
-while passing a smaller share of attempts. Use the pass rate and the workload
-together when a failure is expensive or a change needs extensive review.
+The chart uses four weekly allowances, or 400 percentage points. Divide 400
+by projected attempts to get the weekly quota percentage per attempt. Divide
+projected solves by the plan fee to get solves per subscription dollar. The
+upper-left corner favors less quota per attempt and more successful work per
+dollar. The horizontal axis uses a logarithmic scale so small and large quota
+shares remain visible. The tooltip also gives quota and prorated subscription
+cost per successful solve where the pass rate is positive. The latter divides
+the plan fee by four weeks of projected solves. It describes how much of the
+fee the solve represents under full use. The subscription fee itself is fixed.
 
-Lines connect effort levels in order for the same model, speed, and suite
-mix. The line uses one point per effort, favoring same-tier local evidence,
-same-tier published evidence, scaled evidence, and then modeled estimates.
-Dashed segments mark a change in evidence source or scale, or a modeled
-endpoint. Other source observations remain separate points. Hover or tap a
-point for its effort, pass rate, and source. **CSV** includes the pass fraction,
-quota points, four-week estimates, and suites.
+All models start visible. Lines connect model efforts in order for the same
+speed and workload. The chart uses one point per setting, favoring same-tier
+local evidence, same-tier published evidence, scaled evidence, and then modeled
+estimates. Dashed segments mark a change in evidence or scaling, or a modeled
+endpoint. Alternate observations appear in Evidence and CSV. Hover a point
+or focus or hover a model in the legend to highlight that model's efforts.
+Click or press Enter on a model to toggle its chart visibility. The table keeps
+rows with missing measurements, including VulcanBench's Luna Extra High and
+Max. The [Luna evidence](https://github.com/morganlinton/VulcanBenchCOM/tree/main/assets/data/swe-v4-gpt6-luna-v316)
+omits token receipts for six timeouts across those efforts. Terminal-Bench
+provides a separate Luna Max result. CSV includes quota per attempt, quota
+and cost per solve, pass rate, and evidence.
 
 ### Quality-adjusted work
 
@@ -92,8 +100,9 @@ The work units equal estimated solves × min(8, 4^(score minus median, in
 percentage points, divided by 5)). At an 80% median, a 70% pass rate yields
 1/16×, 75% yields ¼×, 80% yields 1×, and 85% yields 4×. Work units express a
 preference around the benchmark's median. A weight of 4× changes how much a solve counts
-in the comparison. The separately reported estimated solve count and API
-value still use their original calculations. Hover a point for its estimated
+in the comparison. The chart divides these units by the subscription fee.
+The raw solve estimate and quota per attempt are independent of the quality
+weight. Hover a point for its estimated
 solves and weight. CSV includes those figures and the median in this view.
 The curve magnifies uncertainty in small benchmark cohorts and coarse quota
 observations along with differences in measured pass rates.

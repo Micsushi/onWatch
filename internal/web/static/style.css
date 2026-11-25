@@ -4638,16 +4638,16 @@ select.settings-input {
 .subscription-chart-corner {
   position: absolute;
   inset-block-start: 4px;
-  inset-inline-end: 6px;
-  padding: 2px 9px 3px 4px;
+  inset-inline-start: 5ch;
+  padding: 2px 4px 3px 9px;
   border-block-start: 1px solid currentColor;
-  border-inline-end: 1px solid currentColor;
+  border-inline-start: 1px solid currentColor;
   color: var(--accent-teal-text);
   font-size: .75rem;
   font-weight: 600;
   pointer-events: none;
 }
-.subscription-chart-coverage { margin-inline-start: 8px; font-size: .8rem; font-weight: 400; color: var(--text-secondary); }
+.subscription-chart-coverage { display: inline-block; margin-inline-start: 8px; font-size: .8rem; font-weight: 400; color: var(--text-secondary); }
 .subscription-chart-legend:not([hidden]) { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 6px; padding: 0; list-style: none; }
 .subscription-chart-legend li { display: inline-flex; align-items: center; gap: 6px; font-size: .8rem; }
 .subscription-chart-legend li::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--plot-color); }
@@ -4655,6 +4655,24 @@ select.settings-input {
 .subscription-chart-source-key { --plot-color: var(--text-secondary); color: var(--text-secondary); }
 .subscription-chart-source-key .published::before { background: transparent; border: 1px solid var(--plot-color); }
 .subscription-chart-source-key .estimated::before { opacity: .45; }
+.subscription-model-legend:not([hidden]) { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+.subscription-model-legend button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px 5px 5px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: .8rem;
+  cursor: pointer;
+}
+.subscription-model-legend button[data-highlight], .subscription-model-legend button:hover { border-color: var(--series-color); }
+.subscription-model-legend button:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+.subscription-model-legend button[aria-pressed="false"] { text-decoration: line-through; color: var(--text-secondary); }
+@media (pointer: coarse) { .subscription-model-legend button { min-height: 44px; } }
 .subscription-capacity-table table { min-width: 0; table-layout: fixed; }
 .subscription-capacity-table thead th:first-child { width: 34%; }
 .subscription-capacity-table thead th:nth-child(2) { width: 18%; }

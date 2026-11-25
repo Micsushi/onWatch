@@ -56,6 +56,9 @@
   const capacityBenchmark = capacityTier && el('capacity-benchmark');
   const capacityMetric = capacityTier && el('capacity-metric');
   const capacityReports = new Map();
+  const hiddenCapacityModels = new Set();
+  const capacityModelLegend = capacityTier && el('capacity-model-legend');
+  let highlightedCapacityModel = '';
   const effortOrder = ['minimal','low','medium','high','xhigh','max','ultra'];
   const standardEfforts = ['low','medium','high','xhigh','max'];
   const capacityModels = {
@@ -105,7 +108,15 @@
     estimate: {name:'Estimated'},
   };
   const modelKey = ({model,effort,speed}) => [model,effort,speed].join('|');
-  const standardAstraSol = row => !row.speed && /^gpt-6(?:\.[12])?-(?:astra|sol)$/.test(row.model);
+  const codexCreditRates = {
+    'gpt-6.2-astra':[200,10,1000], 'gpt-6-astra':[250,25,1250],
+    'gpt-6.2-sol':[50,2.5,250], 'gpt-6.1-sol':[50,2.5,250], 'gpt-6-sol':[50,5,250],
+    'gpt-6.1-terra':[25,1.25,125], 'gpt-6-luna':[2.5,0.25,12.5],
+  };
+  function quotaCredits(model, input, cached, output) {
+    const rates = codexCreditRates[model];
+    return rates ? (Math.max(0,input-cached)*rates[0] + cached*rates[1] + output*rates[2])/1e6 : 0;
+  }
   const median = values => {
     const sorted = values.slice().sort((a,b)=>a-b);
     const middle = (sorted.length-1)/2;
@@ -216,7 +227,7 @@
     for (const item of configs.values()) {
       if (!item.pools.size && !item.benchmarks.length && !item.speed && [...configs.values()].some(other => other.model === item.model && other.effort === item.effort && other.speed)) continue;
       const eligible = [...item.pools.values()].flatMap(sample => {
-        if (!(sample.points > 0)) return [];
+        if (!(sample.points > 0 && sample.output > 0)) return [];
         const googleShared = provider !== 'antigravity' || ['gemini-weekly','antigravity_gemini_pro:weekly'].includes(sample.pool);
         const scale = sample.plan === plan.id && (plan.id || tier === 'current') ? 1
           : googleShared ? tierScale(plan.id) / tierScale(sample.plan) : null;
@@ -239,44 +250,140 @@
         const inTokens = sample.input * factor;
         const outTokens = sample.output * factor;
         const api = sample.unpriced ? null : sample.cost * factor;
-        return [{sample, scale, inTokens, outTokens, api,
-          solves:outputPerMix > 0 && outTokens > 0 ? outTokens * solvesPerMix / outputPerMix : null,
-          perDollar:api != null && plan.fee > 0 ? api / plan.fee : null}];
+        return [{sample, scale, inTokens, outTokens, api, cachedTokens:sample.cached * factor}];
       });
       const passRate = item.benchmarks.length ? solvesPerMix/item.benchmarks.length : null;
-      rows.push({...item, provider, plan, estimates, passRate, solvesPerOutput:outputPerMix > 0 ? solvesPerMix/outputPerMix : null});
+      rows.push({...item, provider, plan, estimates, passRate,
+        outputPerAttempt:outputPerMix > 0 ? outputPerMix/item.benchmarks.length : null});
     }
 
-    // Forecast missing efforts from a priced workload and a measured budget
-    // for this model. A Codex Astra/Sol budget is a rough fallback, since
-    // their Standard short-context API prices use the same dollars per credit.
-    const workloads = new Map((benchmarkData?.benchmarkProfiles || []).map(([model,effort,input,output,cost]) =>
-      [modelKey(modelConfig(model,effort)), {input,output,cost,label:'VulcanBench workload'}]));
-    for (const usage of report?.models || []) {
-      if (usage.requests > 0 && usage.unknownRequests === 0 && usage.cost > 0 && usage.output > 0) {
-        workloads.set(modelKey(config(usage.model,usage.effort,usage.speed)), {...usage,label:'Recorded workload'});
+    const workloads = new Map((benchmarkData?.codexWorkloads || []).map(([model,effort,input,cached,output]) =>
+      [modelKey(modelConfig(model,effort)), {input,cached,output}]));
+    const anchors = rows.filter(row => !row.speed).flatMap(row => row.estimates.map(estimate => ({model:row.model, estimate})));
+    for (const row of rows) {
+      if (row.estimates.length || row.speed || !row.outputPerAttempt) continue;
+      const matches = anchors.filter(anchor => anchor.model === row.model);
+      const local = matches.filter(({estimate}) => estimate.sample.source === 'local' && estimate.scale === 1);
+      const sameModel = local.length ? local : matches;
+      const workload = workloads.get(modelKey(row));
+      // Purchased-credit weights stand in for relative included Codex usage only in this estimate.
+      const workloadCredits = workload ? quotaCredits(row.model,workload.input,workload.cached,workload.output) : 0;
+      const creditAnchor = ({model,estimate}) => quotaCredits(model,estimate.inTokens,estimate.cachedTokens,estimate.outTokens);
+      const ownCredits = sameModel.map(creditAnchor).filter(credits => credits > 0);
+      const poolCredits = (ownCredits.length ? ownCredits : anchors.map(creditAnchor).filter(credits => credits > 0));
+      if (workloadCredits > 0 && poolCredits.length) {
+        const factor = median(poolCredits)/workloadCredits;
+        row.estimates.push({sample:{source:'estimate', basis:`${ownCredits.length ? 'Same model' : 'Same plan'} · Codex credit weights`},
+          scale:1, inTokens:workload.input * factor, outTokens:workload.output * factor, api:null});
+      } else if (sameModel.length) {
+        row.estimates.push({sample:{source:'estimate',basis:'Same model · output per quota point'}, scale:1,
+          inTokens:median(sameModel.map(({estimate})=>estimate.inTokens)),
+          outTokens:median(sameModel.map(({estimate})=>estimate.outTokens)),api:null});
       }
     }
-    const anchors = rows.flatMap(row => row.estimates.filter(v => v.api > 0).map(v => ({row, ...v})));
     for (const row of rows) {
-      if (row.estimates.length || row.speed) continue;
-      const workload = workloads.get(modelKey(row));
-      if (!(workload?.cost > 0 && workload.output > 0)) continue;
-      const sameModel = anchors.filter(v => v.row.model === row.model && !v.row.speed);
-      const candidates = sameModel.length ? sameModel
-        : provider === 'codex' && ['plus','pro'].includes(plan.id) && standardAstraSol(row) ? anchors.filter(v => standardAstraSol(v.row)) : [];
-      if (!candidates.length) continue;
-      const local = candidates.filter(v => v.sample.source === 'local' && v.scale === 1);
-      const budget = median((local.length ? local : candidates).map(v => v.api));
-      const outTokens = workload.output * budget / workload.cost;
-      row.estimates.push({sample:{source:'estimate', basis:`${sameModel.length ? 'Same model' : 'Astra/Sol proxy'} · ${workload.label}`},
-        scale:1, inTokens:workload.input * budget / workload.cost, outTokens, api:budget,
-        solves:row.solvesPerOutput == null ? null : outTokens*row.solvesPerOutput,
-        perDollar:plan.fee > 0 ? budget/plan.fee : null});
+      if (!row.outputPerAttempt) continue;
+      for (const estimate of row.estimates) {
+        const attempts = estimate.outTokens / row.outputPerAttempt;
+        estimate.solves = attempts * row.passRate;
+        estimate.quotaPerAttempt = 400 / attempts;
+        estimate.quotaPerSolve = estimate.solves > 0 ? 400 / estimate.solves : null;
+        estimate.subscriptionPerSolve = estimate.solves > 0 && row.plan.fee > 0 ? row.plan.fee / estimate.solves : null;
+      }
     }
     return rows;
   }
 
+
+  function highlightCapacityModel(key = '') {
+    if (hiddenCapacityModels.has(key)) key = '';
+    if (key === highlightedCapacityModel) return;
+    highlightedCapacityModel = key;
+    for (const button of capacityModelLegend.children) {
+      button.toggleAttribute('data-highlight',button.dataset.model === key);
+    }
+    capacityChart?.update('none');
+  }
+
+  function renderCapacityModelLegend(datasets) {
+    const models = [...new Map(datasets.map(set => [set.modelKey,set])).values()];
+    const signature = JSON.stringify(models.map(set => [set.modelKey,set.pointStyle,set.shade]));
+    if (capacityModelLegend.dataset.signature === signature) return;
+    capacityModelLegend.dataset.signature = signature;
+    const focused = capacityModelLegend.contains(document.activeElement) ? document.activeElement.dataset.model : '';
+    const buttons = models.map(set => {
+      const key = set.modelKey;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.model = key;
+      button.style.setProperty('--series-color',set.shade);
+      button.setAttribute('aria-pressed',String(!hiddenCapacityModels.has(key)));
+      button.toggleAttribute('data-highlight',key === highlightedCapacityModel);
+      const marker = document.createElement('canvas');
+      marker.width = marker.height = 17;
+      marker.setAttribute('aria-hidden','true');
+      const context = marker.getContext('2d');
+      context.fillStyle = context.strokeStyle = set.shade;
+      Chart.helpers.drawPoint(context,{pointStyle:set.pointStyle,radius:5,borderWidth:1},8.5,8.5);
+      button.append(marker,set.label);
+      button.addEventListener('pointerenter',() => highlightCapacityModel(key));
+      button.addEventListener('pointerleave',() => highlightCapacityModel());
+      button.addEventListener('focus',() => highlightCapacityModel(key));
+      button.addEventListener('blur',() => highlightCapacityModel());
+      button.addEventListener('click',() => {
+        const visible = hiddenCapacityModels.delete(key);
+        if (!visible) hiddenCapacityModels.add(key);
+        button.setAttribute('aria-pressed',String(visible));
+        capacityChart.data.datasets.forEach((dataset,index) => {
+          if (dataset.modelKey === key) capacityChart.setDatasetVisibility(index,visible);
+        });
+        highlightCapacityModel(key);
+        capacityChart.update('none');
+      });
+      return button;
+    });
+    capacityModelLegend.replaceChildren(...buttons);
+    buttons.find(button => button.dataset.model === focused)?.focus({preventScroll:true});
+  }
+
+  const capacityEffortLabels = {
+    id:'capacityEffortLabels',
+    afterEvent(chart,{event,inChartArea,replay}) {
+      if (replay || !['mousemove','mouseout','touchstart','touchmove'].includes(event.type)) return;
+      const [item] = inChartArea ? chart.getActiveElements() : [];
+      highlightCapacityModel(item ? chart.data.datasets[item.datasetIndex].modelKey : '');
+    },
+    afterDatasetsDraw(chart) {
+      if (!highlightedCapacityModel) return;
+      const {ctx,chartArea} = chart;
+      const occupied = [];
+      ctx.save();
+      ctx.font = `600 11px ${Chart.defaults.font.family}`;
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3;
+      ctx.lineJoin = 'round';
+      for (const meta of chart.getSortedVisibleDatasetMetas()) {
+        const set = chart.data.datasets[meta.index];
+        if (set.modelKey !== highlightedCapacityModel) continue;
+        ctx.fillStyle = set.shade;
+        ctx.strokeStyle = set.surface;
+        meta.data.forEach(({x,y,skip},index) => {
+          if (skip) return;
+          const label = set.data[index].effort;
+          const width = ctx.measureText(label).width + 6;
+          const left = Math.max(chartArea.left,Math.min(x + 10,chartArea.right-width));
+          const center = [-9,11,-25,27,-41,43,-57,59].map(offset => y+offset)
+            .find(pos => pos >= chartArea.top+6 && pos <= chartArea.bottom-6 &&
+              !occupied.some(box => Math.abs(pos-box.y)<14 && left<box.right && left+width>box.left));
+          if (center == null) return;
+          occupied.push({left,right:left+width,y:center});
+          ctx.strokeText(label,left+3,center);
+          ctx.fillText(label,left+3,center);
+        });
+      }
+      ctx.restore();
+    },
+  };
 
   function renderCapacity() {
     if (!capacityTier) return;
@@ -288,30 +395,30 @@
     const baseline = cohort?.length ? median(cohort.map(row => row[2]/row[3])) : null;
     const workMetric = qualityMode ? 'workUnits' : 'solves';
     const allRows = providers.flatMap(id => buildCapacityRows(id,capacityReports.get(id),capacityTier.value,suite));
-    if (baseline != null) {
-      for (const row of allRows) {
-        if (row.passRate == null) continue;
+    for (const row of allRows) {
+      if (baseline != null && row.passRate != null) {
         row.qualityWeight = Math.min(8, 4 ** ((row.passRate-baseline)/0.05));
-        for (const estimate of row.estimates) {
-          if (estimate.solves != null) estimate.workUnits = estimate.solves * row.qualityWeight;
-        }
+      }
+      for (const estimate of row.estimates) {
+        if (estimate.solves == null) continue;
+        if (row.qualityWeight != null) estimate.workUnits = estimate.solves * row.qualityWeight;
+        if (row.plan.fee > 0 && estimate[workMetric] != null) estimate.workPerDollar = estimate[workMetric] / row.plan.fee;
       }
     }
-    const ids = ['', '*', ...[...new Set(allRows.map(row => row.model))].sort()];
+    const ids = ['*', ...[...new Set(allRows.map(row => row.model))].sort()];
     const model = ids.includes(requestedModel) && requestedModel ? requestedModel
-      : ids.includes(capacityModel.value) ? capacityModel.value : '';
+      : ids.includes(capacityModel.value) ? capacityModel.value : '*';
     if (model === requestedModel) requestedModel = '';
     if (ids.join('|') !== [...capacityModel.options].map(option => option.value).join('|')) {
-      capacityModel.replaceChildren(...ids.map(id => new Option(id === '*' ? 'All models' : id ? modelName(id) : 'Overview', id)));
+      capacityModel.replaceChildren(...ids.map(id => new Option(id === '*' ? 'All models' : modelName(id), id)));
     }
     capacityModel.value = model;
     const order = effort => effortOrder.includes(effort) ? effortOrder.indexOf(effort) : effortOrder.length;
-    const modelKey = row => row.provider + '|' + row.model;
-    const pricedModels = new Set(allRows.filter(row => row.estimates.length).map(modelKey));
     const featured = {codex:'gpt-6.2-astra', anthropic:'claude-sonnet-5-5', antigravity:'gemini-4-neon'};
     const isFeatured = row => row.model === featured[row.provider];
-    const rows = allRows.filter(row => model === '*' || (model ? row.model === model
-      : row.estimates.length || row.benchmarks.length && (isFeatured(row) || pricedModels.has(modelKey(row)))));
+    const rows = allRows.filter(row => model === '*'
+      ? row.benchmarks.length || row.estimates.length || Object.hasOwn(capacityModels[row.provider],row.model)
+      : row.model === model);
     rows.sort((a,b) => providers.indexOf(a.provider)-providers.indexOf(b.provider) ||
       Number(isFeatured(b))-Number(isFeatured(a)) || a.model.localeCompare(b.model) ||
       order(a.effort)-order(b.effort) || a.speed.localeCompare(b.speed));
@@ -334,15 +441,18 @@
     const passes = n => n == null ? '—' : num(Math.round(n*100)) + '%';
     const decimals = new Intl.NumberFormat(undefined,{maximumFractionDigits:2});
     const small = n => n > 0 && n < 0.01 ? '<0.01' : decimals.format(n);
-    const formatWork = qualityMode ? n => n < 1 ? small(n) : whole(n) : whole;
+    const formatWork = n => n < 1 ? small(n) : num(n);
     const workLabel = qualityMode ? 'work units' : 'solves';
     const qualityNote = el('capacity-quality-note');
     qualityNote.hidden = !qualityMode || baseline == null;
     qualityNote.textContent = baseline == null ? '' : `Hypothetical work units = estimated solves × weight. Median ${num(baseline*100)}% = 1×. Five points up gives 4×, five down gives ¼× (8× cap).`;
-    el('capacity-work-column').textContent = qualityMode ? 'Work units / 4 wk' : 'Solves / 4 wk';
-    el('capacity-chart-title').textContent = qualityMode ? 'Value vs. quality-adjusted work' : 'Value vs. solves';
-    el('capacity-corner').textContent = `More value + more ${workLabel}`;
-    el('capacity-chart').setAttribute('aria-label', `Four-week ${workLabel} by API dollars per subscription dollar. Values are also in the table below.`);
+    el('capacity-work-column').textContent = qualityMode ? 'Work units / $1' : 'Solves / $1';
+    el('capacity-chart-title').textContent = qualityMode ? 'Quota vs. quality-adjusted work' : 'Quota vs. solves';
+    el('capacity-corner').textContent = `Less quota + more ${workLabel} per $1`;
+    el('capacity-chart').setAttribute('aria-label', `${workLabel} per subscription dollar by percent of weekly quota per attempt. Less quota and more work are toward the upper left. Values are also in the table below.`);
+    const quotaNumber = new Intl.NumberFormat(undefined,{maximumSignificantDigits:3});
+    const quota = n => `${quotaNumber.format(n)}%`;
+    const feePerSolve = n => n < 0.01 ? '<$0.01' : usd(n);
     el('capacity-rows').innerHTML = providers.map(id => {
       const group = rows.filter(row => row.provider === id);
       if (!group.length) return '';
@@ -351,7 +461,7 @@
       const heading = [first.plan.name, fee].filter(Boolean).join(' · ');
       return `<tr class="subscription-provider-row"><th scope="row" colspan="5">${esc(scopeLabel(first))}<span>${esc(heading)}</span></th></tr>` +
         group.map((row,index) => `<tr><th scope="row" aria-label="${esc(modelLabel(row))}">${row.model !== group[index-1]?.model ? esc(modelName(row.model)) : ''}</th><td>${esc(effortName(row))}</td>` +
-          [range(row.estimates,'perDollar',usd), range(row.estimates,workMetric,formatWork)]
+          [range(row.estimates,'quotaPerAttempt',quota), range(row.estimates,'workPerDollar',formatWork)]
             .map(value=>`<td>${esc(value)}</td>`).join('') +
           `<td title="${esc(row.qualityWeight == null ? suiteNames(row) : `${small(row.qualityWeight)}× work weight · ${suiteNames(row)}`)}">${passes(row.passRate)}</td></tr>`).join('');
     }).join('');
@@ -360,7 +470,8 @@
     capacityExport = rows.flatMap(row => row.estimates.map(estimate => [
       row.provider, row.model, row.plan.name, row.effort, row.speed, quotaSources[estimate.sample.source].name,
       estimate.sample.basis, estimate.sample.points,
-      estimate.inTokens, estimate.outTokens, estimate.api, estimate.perDollar, estimate.solves, row.passRate, suiteNames(row),
+      estimate.inTokens, estimate.outTokens, estimate.api, estimate.api != null && row.plan.fee > 0 ? estimate.api / row.plan.fee : null,
+      estimate.solves, row.passRate, suiteNames(row), estimate.quotaPerAttempt, estimate.quotaPerSolve, estimate.subscriptionPerSolve, estimate.workPerDollar,
       ...(qualityMode ? [baseline,row.qualityWeight,estimate.workUnits] : []),
     ]));
     el('capacity-export').disabled = !capacityExport.length;
@@ -404,26 +515,26 @@
     const evidenceRank = estimate => estimate.sample.source === 'estimate' ? 4
       : (estimate.scale === 1 ? 0 : 2) + (estimate.sample.source === 'local' ? 0 : 1);
     for (const row of rows) {
-      const points = row.estimates.filter(estimate => Number.isFinite(estimate.perDollar) && Number.isFinite(estimate[workMetric]))
-        .sort((a,b)=>evidenceRank(a)-evidenceRank(b));
-      if (!points.length) continue;
+      const [estimate] = row.estimates.filter(estimate => Number.isFinite(estimate.quotaPerAttempt) && Number.isFinite(estimate.workPerDollar))
+        .sort((a,b)=>evidenceRank(a)-evidenceRank(b) || b.sample.points-a.sample.points);
+      if (!estimate) continue;
       const suites = suiteNames(row);
-      points.forEach((estimate,index) => {
-        const group = [row.provider,row.model,row.speed,suites,index ? 'alternate' : 'primary'].join('|');
-        if (!groups.has(group)) groups.set(group, []);
-        const sample = estimate.sample;
-        const basis = sample.basis || (sample.source === 'daily' && sample.points <= 2 ? `${sample.points} pp · coarse meter` : '');
-        groups.get(group).push({x:estimate.perDollar,y:estimate[workMetric],solves:estimate.solves,
-          qualityWeight:row.qualityWeight,effort:effortName(row),passRate:row.passRate,
-          source:sample.source,basis,scale:estimate.scale});
-      });
+      const group = [row.provider,row.model,row.speed,suites].join('|');
+      if (!groups.has(group)) groups.set(group, []);
+      const sample = estimate.sample;
+      const basis = sample.basis || (sample.source === 'daily' && sample.points <= 2 ? `${sample.points} pp · coarse meter` : '');
+      groups.get(group).push({x:estimate.quotaPerAttempt,y:estimate.workPerDollar,solves:estimate.solves,
+        quotaPerSolve:estimate.quotaPerSolve,subscriptionPerSolve:estimate.subscriptionPerSolve,
+        qualityWeight:row.qualityWeight,effort:effortName(row),passRate:row.passRate,
+        source:sample.source,basis,scale:estimate.scale});
       plottedByProvider.set(row.provider,plottedByProvider.get(row.provider)+1);
     }
     const canPlot = groups.size > 0 && typeof Chart !== 'undefined';
     const plotted = [...plottedByProvider.values()].reduce((sum,count) => sum+count, 0);
+    const benchmarked = rows.filter(row => row.benchmarks.length).length;
     const loading = status.textContent === 'Loading…';
     const needsWorkload = qualityMode && suite === 'all';
-    el('capacity-coverage').textContent = !loading && rows.length && !needsWorkload ? `${plotted}/${rows.length} settings plotted` : '';
+    el('capacity-coverage').textContent = !loading && benchmarked && !needsWorkload ? `${plotted}/${benchmarked} benchmark settings` : '';
     el('capacity-chart-wrap').hidden = !canPlot;
     const empty = el('capacity-chart-empty');
     empty.hidden = canPlot || loading;
@@ -431,6 +542,7 @@
       : groups.size ? 'Chart unavailable' : 'No settings have both estimates';
     const legend = el('capacity-legend');
     legend.hidden = !canPlot;
+    capacityModelLegend.hidden = !canPlot;
     el('capacity-source-key').hidden = !canPlot;
     if (!canPlot || !el('capacity-chart-details').open) return;
     const theme = getComputedStyle(root);
@@ -447,55 +559,52 @@
     const shapes = ['circle','triangle','rectRot','rectRounded','star','rect','crossRot','cross','dash','line'];
     const modelOrder = new Map(providers.map(id => [id, [...new Set(allRows.filter(row=>row.provider===id && row.estimates.length)
       .map(row=>row.model))].sort()]));
+    const seriesColor = (key,shade) => highlightedCapacityModel && highlightedCapacityModel !== key ? shade+'35' : shade;
     const datasets = [...groups.entries()].map(([key,data]) => {
-      const [id,model,speed,suites,series] = key.split('|');
+      const [id,model,,suites] = key.split('|');
       const shade = resetColors[id][light ? 0 : 1];
       const pointStyle = shapes[modelOrder.get(id).indexOf(model) % shapes.length];
+      const modelKey = id+'|'+model;
       return {label:modelName(model), provider:comparisonRows.get(id).dataset.label,
-        modelKey:id+'|'+model, borderColor:shade, backgroundColor:shade, pointStyle,
-        pointBackgroundColor:data.map(point=>point.source === 'local' ? shade : point.source === 'estimate' ? shade+'55' : surface),
-        pointBorderColor:shade, pointBorderWidth:1.5, pointRadius:6, pointHitRadius:10, pointHoverRadius:9,
-        showLine:series === 'primary' && data.length>1, borderWidth:1.6,
+        modelKey, shade, surface, pointStyle, hidden:hiddenCapacityModels.has(modelKey),
+        borderColor:() => seriesColor(modelKey,shade),
+        pointBackgroundColor:({dataIndex}) => {
+          const source = data[dataIndex]?.source;
+          if (source === 'estimate') return shade+(highlightedCapacityModel && highlightedCapacityModel !== modelKey ? '1a' : '55');
+          return source === 'local' ? seriesColor(modelKey,shade) : surface;
+        },
+        pointBorderColor:() => seriesColor(modelKey,shade), pointBorderWidth:1.5,
+        pointRadius:() => highlightedCapacityModel === modelKey ? 7 : 5,
+        pointHitRadius:8, pointHoverRadius:9,
+        showLine:data.length>1, borderWidth:() => highlightedCapacityModel === modelKey ? 2.6 : 1.6,
         segment:{borderDash:({p0DataIndex,p1DataIndex})=>{
           const first = data[p0DataIndex], second = data[p1DataIndex];
           return first.source === second.source && first.source !== 'estimate' && first.scale === second.scale ? [] : [4,4];
         }},
         data, suites};
     });
+    if (!datasets.some(set => set.modelKey === highlightedCapacityModel)) highlightCapacityModel();
     capacityChart = new Chart(el('capacity-chart'), {
       type:'scatter', data:{datasets},
+      plugins:[capacityEffortLabels],
       options:{responsive:true, maintainAspectRatio:false, animation:false,
         layout:{padding:{top:28}},
-        plugins:{legend:{position:'bottom', labels:{color,usePointStyle:true,boxWidth:10,padding:12,
-          generateLabels:chart => {
-            const keys = new Set();
-            return chart.data.datasets.flatMap((set,index) => {
-              if (keys.has(set.modelKey)) return [];
-              keys.add(set.modelKey);
-              return [{text:set.label, pointStyle:set.pointStyle, fillStyle:set.backgroundColor,
-                strokeStyle:set.borderColor, lineWidth:1, datasetIndex:index, fontColor:color, hidden:!chart.isDatasetVisible(index)}];
-            });
-          },
-        }, onClick:(_event,item,{chart}) => {
-          const key = chart.data.datasets[item.datasetIndex].modelKey;
-          chart.data.datasets.forEach((set,index) => {
-            if (set.modelKey === key) chart.setDatasetVisibility(index,item.hidden);
-          });
-          chart.update();
-        }},tooltip:{callbacks:{
+        plugins:{legend:{display:false},tooltip:{callbacks:{
           title:([item]) => `${item.dataset.label} · ${item.raw.effort}`,
-          label:item => `${usd(item.parsed.x)} per $1 · ${formatWork(item.parsed.y)} ${workLabel} per 4 weeks`,
-          afterLabel:item => [qualityMode ? `${whole(item.raw.solves)} est. solves · ${small(item.raw.qualityWeight)}× work weight` : '',
+          label:item => `${quota(item.parsed.x)} weekly quota per attempt · ${formatWork(item.parsed.y)} ${workLabel} per $1`,
+          afterLabel:item => [item.raw.quotaPerSolve != null ? `${quota(item.raw.quotaPerSolve)} weekly quota · ${feePerSolve(item.raw.subscriptionPerSolve)} of plan per solve` : '',
+            qualityMode ? `${whole(item.raw.solves)} est. solves / 4 wk · ${small(item.raw.qualityWeight)}× weight` : `${whole(item.raw.solves)} est. solves / 4 wk`,
             `${passes(item.raw.passRate)} passed · ${quotaSources[item.raw.source].name}`, item.raw.basis, ...item.dataset.suites.split(' + ')].filter(Boolean),
         }}},
         scales:{
-          x:{beginAtZero:true,grid:{color:grid},title:{display:true,text:'API $ per $1 paid',color},
-            ticks:{color,maxTicksLimit:7,callback:value=>'$'+num(value)}},
-          y:{beginAtZero:true,grid:{color:grid},title:{display:true,text:`${qualityMode ? 'Work units' : 'Est. solves'} / 4 weeks`,color},
+          x:{type:'logarithmic',grid:{color:grid},title:{display:true,text:'Weekly quota per attempt',color},
+            ticks:{color,maxTicksLimit:8,callback:(value,index,ticks) => ticks[index].major ? quota(value) : ''}},
+          y:{beginAtZero:true,grid:{color:grid},title:{display:true,text:`${qualityMode ? 'Work units' : 'Est. solves'} / $1 subscription`,color},
             ticks:{color,maxTicksLimit:6,callback:value=>tokens(value)}},
         },
       },
     });
+    renderCapacityModelLegend(datasets);
   }
   const capacityParams = new URLSearchParams(location.search);
   let requestedModel = modelID(capacityParams.get('model') || '');
@@ -512,9 +621,11 @@
     if ([...capacityBenchmark.options].some(option => option.value === workload)) capacityBenchmark.value = workload;
     if (capacityParams.get('metric') === 'quality') capacityMetric.value = 'quality';
     [capacityTier,capacityProvider,capacityModel,capacityBenchmark,capacityMetric].forEach(control => control.addEventListener('change',renderCapacity));
+    el('capacity-chart').addEventListener('pointerleave',() => highlightCapacityModel());
     el('capacity-chart-details').addEventListener('toggle',renderCapacity);
     el('capacity-export').addEventListener('click', () => {
       const header = ['Provider','Model','Plan','Effort','Speed','Quota source','Estimate basis','Quota points','Input tokens / 4 weeks','Output tokens / 4 weeks','API USD / 4 weeks','API USD per USD paid','Estimated solves / 4 weeks','Benchmark pass fraction','Benchmark'];
+      header.push('Weekly quota percent per attempt','Weekly quota percent per solve','Subscription USD per solve',capacityMetric.value === 'quality' ? 'Hypothetical work units per subscription USD' : 'Estimated solves per subscription USD');
       if (capacityMetric.value === 'quality') header.push('Median benchmark pass fraction','Relative quality weight','Hypothetical work units / 4 weeks');
       const quote = value => {
         const plain = String(value ?? '');
