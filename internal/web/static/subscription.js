@@ -53,6 +53,8 @@
   const capacityTier = comparison && el('capacity-tier');
   const capacityProvider = capacityTier && el('capacity-provider');
   const capacityModel = capacityTier && el('capacity-model');
+  const capacityBenchmark = capacityTier && el('capacity-benchmark');
+  const capacityMetric = capacityTier && el('capacity-metric');
   const capacityReports = new Map();
   const effortOrder = ['minimal','low','medium','high','xhigh','max','ultra'];
   const standardEfforts = ['low','medium','high','xhigh','max'];
@@ -280,8 +282,21 @@
     if (!capacityTier) return;
     const key = capacityProvider.value;
     const providers = key === 'all' ? [...comparisonRows.keys()] : [key];
-    const suite = el('capacity-benchmark').value;
+    const suite = capacityBenchmark.value;
+    const qualityMode = capacityMetric.value === 'quality';
+    const cohort = qualityMode && benchmarkData?.[suite]?.filter(row => row[3] > 0 && row[4] > 0);
+    const baseline = cohort?.length ? median(cohort.map(row => row[2]/row[3])) : null;
+    const workMetric = qualityMode ? 'workUnits' : 'solves';
     const allRows = providers.flatMap(id => buildCapacityRows(id,capacityReports.get(id),capacityTier.value,suite));
+    if (baseline != null) {
+      for (const row of allRows) {
+        if (row.passRate == null) continue;
+        row.qualityWeight = Math.min(8, 4 ** ((row.passRate-baseline)/0.05));
+        for (const estimate of row.estimates) {
+          if (estimate.solves != null) estimate.workUnits = estimate.solves * row.qualityWeight;
+        }
+      }
+    }
     const ids = ['', '*', ...[...new Set(allRows.map(row => row.model))].sort()];
     const model = ids.includes(requestedModel) && requestedModel ? requestedModel
       : ids.includes(capacityModel.value) ? capacityModel.value : '';
@@ -317,6 +332,17 @@
     const suiteNames = row => row.benchmarks.map(sample => codingBenchmarks[sample.id].name).join(' + ');
     const whole = n => num(Math.round(n));
     const passes = n => n == null ? '—' : num(Math.round(n*100)) + '%';
+    const decimals = new Intl.NumberFormat(undefined,{maximumFractionDigits:2});
+    const small = n => n > 0 && n < 0.01 ? '<0.01' : decimals.format(n);
+    const formatWork = qualityMode ? n => n < 1 ? small(n) : whole(n) : whole;
+    const workLabel = qualityMode ? 'work units' : 'solves';
+    const qualityNote = el('capacity-quality-note');
+    qualityNote.hidden = !qualityMode || baseline == null;
+    qualityNote.textContent = baseline == null ? '' : `Hypothetical work units = estimated solves × weight. Median ${num(baseline*100)}% = 1×. Five points up gives 4×, five down gives ¼× (8× cap).`;
+    el('capacity-work-column').textContent = qualityMode ? 'Work units / 4 wk' : 'Solves / 4 wk';
+    el('capacity-chart-title').textContent = qualityMode ? 'Value vs. quality-adjusted work' : 'Value vs. solves';
+    el('capacity-corner').textContent = `More value + more ${workLabel}`;
+    el('capacity-chart').setAttribute('aria-label', `Four-week ${workLabel} by API dollars per subscription dollar. Values are also in the table below.`);
     el('capacity-rows').innerHTML = providers.map(id => {
       const group = rows.filter(row => row.provider === id);
       if (!group.length) return '';
@@ -325,9 +351,9 @@
       const heading = [first.plan.name, fee].filter(Boolean).join(' · ');
       return `<tr class="subscription-provider-row"><th scope="row" colspan="5">${esc(scopeLabel(first))}<span>${esc(heading)}</span></th></tr>` +
         group.map((row,index) => `<tr><th scope="row" aria-label="${esc(modelLabel(row))}">${row.model !== group[index-1]?.model ? esc(modelName(row.model)) : ''}</th><td>${esc(effortName(row))}</td>` +
-          [range(row.estimates,'perDollar',usd), range(row.estimates,'solves',whole)]
+          [range(row.estimates,'perDollar',usd), range(row.estimates,workMetric,formatWork)]
             .map(value=>`<td>${esc(value)}</td>`).join('') +
-          `<td title="${esc(suiteNames(row))}">${passes(row.passRate)}</td></tr>`).join('');
+          `<td title="${esc(row.qualityWeight == null ? suiteNames(row) : `${small(row.qualityWeight)}× work weight · ${suiteNames(row)}`)}">${passes(row.passRate)}</td></tr>`).join('');
     }).join('');
 
     const status = el('capacity-status');
@@ -335,6 +361,7 @@
       row.provider, row.model, row.plan.name, row.effort, row.speed, quotaSources[estimate.sample.source].name,
       estimate.sample.basis, estimate.sample.points,
       estimate.inTokens, estimate.outTokens, estimate.api, estimate.perDollar, estimate.solves, row.passRate, suiteNames(row),
+      ...(qualityMode ? [baseline,row.qualityWeight,estimate.workUnits] : []),
     ]));
     el('capacity-export').disabled = !capacityExport.length;
     status.textContent = providers.some(id => !capacityReports.has(id)) || (!benchmarkData && !benchmarkError) ? 'Loading…'
@@ -377,7 +404,7 @@
     const evidenceRank = estimate => estimate.sample.source === 'estimate' ? 4
       : (estimate.scale === 1 ? 0 : 2) + (estimate.sample.source === 'local' ? 0 : 1);
     for (const row of rows) {
-      const points = row.estimates.filter(estimate => Number.isFinite(estimate.perDollar) && Number.isFinite(estimate.solves))
+      const points = row.estimates.filter(estimate => Number.isFinite(estimate.perDollar) && Number.isFinite(estimate[workMetric]))
         .sort((a,b)=>evidenceRank(a)-evidenceRank(b));
       if (!points.length) continue;
       const suites = suiteNames(row);
@@ -386,7 +413,8 @@
         if (!groups.has(group)) groups.set(group, []);
         const sample = estimate.sample;
         const basis = sample.basis || (sample.source === 'daily' && sample.points <= 2 ? `${sample.points} pp · coarse meter` : '');
-        groups.get(group).push({x:estimate.perDollar,y:estimate.solves,effort:effortName(row),passRate:row.passRate,
+        groups.get(group).push({x:estimate.perDollar,y:estimate[workMetric],solves:estimate.solves,
+          qualityWeight:row.qualityWeight,effort:effortName(row),passRate:row.passRate,
           source:sample.source,basis,scale:estimate.scale});
       });
       plottedByProvider.set(row.provider,plottedByProvider.get(row.provider)+1);
@@ -394,11 +422,13 @@
     const canPlot = groups.size > 0 && typeof Chart !== 'undefined';
     const plotted = [...plottedByProvider.values()].reduce((sum,count) => sum+count, 0);
     const loading = status.textContent === 'Loading…';
-    el('capacity-coverage').textContent = !loading && rows.length ? `${plotted}/${rows.length} settings plotted` : '';
+    const needsWorkload = qualityMode && suite === 'all';
+    el('capacity-coverage').textContent = !loading && rows.length && !needsWorkload ? `${plotted}/${rows.length} settings plotted` : '';
     el('capacity-chart-wrap').hidden = !canPlot;
     const empty = el('capacity-chart-empty');
     empty.hidden = canPlot || loading;
-    empty.textContent = groups.size ? 'Chart unavailable' : 'No settings have both estimates';
+    empty.textContent = needsWorkload ? 'Choose one benchmark workload for quality adjustment.'
+      : groups.size ? 'Chart unavailable' : 'No settings have both estimates';
     const legend = el('capacity-legend');
     legend.hidden = !canPlot;
     el('capacity-source-key').hidden = !canPlot;
@@ -454,13 +484,14 @@
           chart.update();
         }},tooltip:{callbacks:{
           title:([item]) => `${item.dataset.label} · ${item.raw.effort}`,
-          label:item => `${usd(item.parsed.x)} per $1 · ${whole(item.parsed.y)} solves per 4 weeks`,
-          afterLabel:item => [`${passes(item.raw.passRate)} passed · ${quotaSources[item.raw.source].name}`, item.raw.basis, ...item.dataset.suites.split(' + ')].filter(Boolean),
+          label:item => `${usd(item.parsed.x)} per $1 · ${formatWork(item.parsed.y)} ${workLabel} per 4 weeks`,
+          afterLabel:item => [qualityMode ? `${whole(item.raw.solves)} est. solves · ${small(item.raw.qualityWeight)}× work weight` : '',
+            `${passes(item.raw.passRate)} passed · ${quotaSources[item.raw.source].name}`, item.raw.basis, ...item.dataset.suites.split(' + ')].filter(Boolean),
         }}},
         scales:{
           x:{beginAtZero:true,grid:{color:grid},title:{display:true,text:'API $ per $1 paid',color},
             ticks:{color,maxTicksLimit:7,callback:value=>'$'+num(value)}},
-          y:{beginAtZero:true,grid:{color:grid},title:{display:true,text:'Est. solves / 4 weeks',color},
+          y:{beginAtZero:true,grid:{color:grid},title:{display:true,text:`${qualityMode ? 'Work units' : 'Est. solves'} / 4 weeks`,color},
             ticks:{color,maxTicksLimit:6,callback:value=>tokens(value)}},
         },
       },
@@ -477,10 +508,14 @@
     }
     const tier = capacityParams.get('tier');
     if (['base','mid','higher','current'].includes(tier)) capacityTier.value = tier;
-    [capacityTier,capacityProvider,capacityModel,el('capacity-benchmark')].forEach(control => control.addEventListener('change',renderCapacity));
+    const workload = capacityParams.get('benchmark');
+    if ([...capacityBenchmark.options].some(option => option.value === workload)) capacityBenchmark.value = workload;
+    if (capacityParams.get('metric') === 'quality') capacityMetric.value = 'quality';
+    [capacityTier,capacityProvider,capacityModel,capacityBenchmark,capacityMetric].forEach(control => control.addEventListener('change',renderCapacity));
     el('capacity-chart-details').addEventListener('toggle',renderCapacity);
     el('capacity-export').addEventListener('click', () => {
       const header = ['Provider','Model','Plan','Effort','Speed','Quota source','Estimate basis','Quota points','Input tokens / 4 weeks','Output tokens / 4 weeks','API USD / 4 weeks','API USD per USD paid','Estimated solves / 4 weeks','Benchmark pass fraction','Benchmark'];
+      if (capacityMetric.value === 'quality') header.push('Median benchmark pass fraction','Relative quality weight','Hypothetical work units / 4 weeks');
       const quote = value => {
         const plain = String(value ?? '');
         const safe = typeof value === 'string' && /^[=+\-@\s]/.test(plain) ? "'" + plain : plain;

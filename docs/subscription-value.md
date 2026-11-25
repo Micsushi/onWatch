@@ -79,6 +79,25 @@ endpoint. Other source observations remain separate points. Hover or tap a
 point for its effort, pass rate, and source. **CSV** includes the pass fraction,
 quota points, four-week estimates, and suites.
 
+### Quality-adjusted work
+
+Choose **Quality-adjusted** and a single benchmark to compare a
+hypothetical preference for reliability. The score is the benchmark pass
+rate. The reference is the median pass rate across all catalogued settings in
+that benchmark, including settings with no quota estimate. It stays fixed when
+you filter models, providers, or plans. Combined benchmarks cover different
+workloads, so they have no single reference for this view.
+
+The work units equal estimated solves × min(8, 4^(score minus median, in
+percentage points, divided by 5)). At an 80% median, a 70% pass rate yields
+1/16×, 75% yields ¼×, 80% yields 1×, and 85% yields 4×. Work units express a
+preference around the benchmark's median. A weight of 4× changes how much a solve counts
+in the comparison. The separately reported estimated solve count and API
+value still use their original calculations. Hover a point for its estimated
+solves and weight. CSV includes those figures and the median in this view.
+The curve magnifies uncertainty in small benchmark cohorts and coarse quota
+observations along with differences in measured pass rates.
+
 ### Quality on larger workloads
 
 Haiku 5.5 at Max passed 22 of 23 legacy reconstruction tasks on

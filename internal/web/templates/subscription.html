@@ -88,11 +88,16 @@
                 <option value="all">Combined benchmarks</option>
                 <option value="deepSWE">DeepSWE v1.1 (flagged)</option>
             </select>
+            <select id="subscription-capacity-metric" aria-label="Work metric" aria-describedby="subscription-capacity-quality-note">
+                <option value="solves">Estimated solves</option>
+                <option value="quality">Quality-adjusted</option>
+            </select>
             <button type="button" class="btn" id="subscription-capacity-export" disabled>CSV</button>
         </div>
         <div class="subscription-note" id="subscription-capacity-status" role="status">Loading…</div>
+        <p class="subscription-note" id="subscription-capacity-quality-note" hidden></p>
         <details id="subscription-capacity-chart-details" open>
-            <summary>Value vs. solves <span id="subscription-capacity-coverage" class="subscription-chart-coverage"></span></summary>
+            <summary><span id="subscription-capacity-chart-title">Value vs. solves</span> <span id="subscription-capacity-coverage" class="subscription-chart-coverage"></span></summary>
             <div class="subscription-plot-legend">
                 <ul id="subscription-capacity-legend" class="subscription-chart-legend" aria-label="Chart providers" hidden></ul>
                 <ul id="subscription-capacity-source-key" class="subscription-chart-legend subscription-chart-source-key" aria-label="Chart evidence" hidden>
@@ -100,14 +105,14 @@
                 </ul>
             </div>
             <div class="subscription-chart subscription-capacity-chart" id="subscription-capacity-chart-wrap" hidden>
-                <span class="subscription-chart-corner">More value + more solves</span>
+                <span class="subscription-chart-corner" id="subscription-capacity-corner">More value + more solves</span>
                 <canvas id="subscription-capacity-chart" role="img" aria-label="Four-week benchmark solves by API dollars per subscription dollar. Up and right means more solves and more value on the selected workload. Values are also in the table below."></canvas>
             </div>
             <div class="subscription-note" id="subscription-capacity-chart-empty" hidden></div>
         </details>
         <div class="table-container subscription-comparison-table subscription-capacity-table" role="region" aria-label="Four-week estimates" tabindex="0">
             <table class="data-table">
-                <thead><tr><th scope="col">Model</th><th scope="col">Effort</th><th scope="col">API $ / $1</th><th scope="col">Solves / 4 wk</th><th scope="col" title="Share of benchmark attempts that passed">Pass rate</th></tr></thead>
+                <thead><tr><th scope="col">Model</th><th scope="col">Effort</th><th scope="col">API $ / $1</th><th scope="col" id="subscription-capacity-work-column">Solves / 4 wk</th><th scope="col" title="Share of benchmark attempts that passed">Pass rate</th></tr></thead>
                 <tbody id="subscription-capacity-rows"></tbody>
             </table>
         </div>
