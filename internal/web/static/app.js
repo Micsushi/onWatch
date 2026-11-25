@@ -129,7 +129,7 @@ function getBothViewProviders() {
   if (tabs.length > 0) {
     return [...tabs]
       .map(el => el.dataset.provider)
-      .filter((provider) => provider && provider !== 'both' && provider !== 'api-integrations');
+      .filter((provider) => provider && !['both', 'api-integrations', 'subscription-value'].includes(provider));
   }
   return [];
 }
@@ -3141,17 +3141,39 @@ function antigravityUpdateWindows(keyPrefix, windows) {
   });
 }
 
+function antigravityQuotaKey(quota) {
+  return quota.quotaGroup || quota.modelId || quota.name;
+}
+
+function renderAntigravityQuotaGroups(quotas, renderCards, detailsOpen) {
+  const primary = [];
+  const secondary = [];
+  for (const quota of quotas) {
+    (antigravityQuotaKey(quota) === 'antigravity_claude_gpt' ? secondary : primary).push(quota);
+  }
+  const ordered = sortItemsByPreference(primary, ['antigravity_gemini_pro'], antigravityQuotaKey);
+  if (!secondary.length) return renderCards(ordered);
+
+  return `${ordered.length ? `<div class="antigravity-primary-quotas">${renderCards(ordered)}</div>` : ''}
+    <details class="dashboard-detail antigravity-quota-details"${detailsOpen ? ' open' : ''}>
+      <summary>Claude + GPT quota details</summary>
+      ${renderCards(secondary)}
+    </details>`;
+}
+
 function renderAntigravityQuotaCards(quotas, containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
+  const details = container.querySelector('.antigravity-quota-details');
+  const summaryHadFocus = details?.firstElementChild === document.activeElement;
 
-  container.innerHTML = quotas.map((q, i) => {
+  const renderCards = (items) => items.map((q, i) => {
     const icon = getAntigravityIcon(q.modelId);
-    const displayName = q.displayName || q.label || q.modelId;
+    const displayName = escapeHTML(q.displayName || q.label || q.modelId);
     const windows = antigravityWindowsForQuota(q);
     const windowsHTML = antigravityWindowsHTML(`antigravity-${q.modelId}`, windows);
 
-    return `<article class="quota-card antigravity-card multi-window${q.isStale ? ' stale-card' : ''}" id="card-antigravity-${escapeHTML(q.modelId)}" data-quota="${q.modelId}" data-provider="antigravity" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
+    return `<article class="quota-card antigravity-card multi-window${q.isStale ? ' stale-card' : ''}" id="card-antigravity-${escapeHTML(q.modelId)}" data-quota="${escapeHTML(q.modelId)}" data-provider="antigravity" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
       <header class="card-header">
         <h2 class="quota-title">
           <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icon}</svg>
@@ -3163,6 +3185,9 @@ function renderAntigravityQuotaCards(quotas, containerId) {
       <div class="card-freshness${q.isStale ? ' stale' : ''}" id="freshness-antigravity-${escapeHTML(q.modelId)}">${q.ageSeconds != null ? escapeHTML(cardFreshnessLabel(q)) : ''}</div>
     </article>`;
   }).join('');
+
+  container.innerHTML = renderAntigravityQuotaGroups(quotas, renderCards, details?.open);
+  if (summaryHadFocus) container.querySelector('.antigravity-quota-details > summary')?.focus();
 
   // Re-attach modal click handlers for new cards
   container.querySelectorAll('.quota-card[role="button"]').forEach(card => {
@@ -4585,7 +4610,7 @@ function applyProviderCurrentPayload(provider, data, apiIntegrationsCurrentData 
   } else if (provider === 'antigravity') {
     if (data.quotas) {
       const container = document.getElementById('quota-grid-antigravity');
-      if (container && container.children.length === 0) {
+      if (container && !antigravityQuotaCardsMatch(container, data.quotas)) {
         renderAntigravityQuotaCards(data.quotas, 'quota-grid-antigravity');
       }
       data.quotas.forEach(q => updateAntigravityCard(q));
@@ -6772,6 +6797,17 @@ function toTitleCase(value) {
     .join(' ');
 }
 
+function subscriptionRenewalLabel(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return '';
+  const date = new Date(value + 'T00:00:00');
+  if (Number.isNaN(date.getTime())) return '';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const options = { month: 'short', day: 'numeric' };
+  if (date.getFullYear() !== today.getFullYear()) options.year = 'numeric';
+  return `${date < today ? 'Last recorded renewal' : 'Renews'} ${date.toLocaleDateString(undefined, options)}`;
+}
+
 function sanitizeProviderCardKey(value) {
   return String(value || '')
     .toLowerCase()
@@ -6940,6 +6976,7 @@ function normalizeBothQuotas(provider, payload) {
       : (quota.cardLabel || 'Utilization');
     return {
       ...quota,
+      name: provider === 'antigravity' ? antigravityQuotaKey(quota) : quota.name,
       cardPercent: percent,
       displayName: quota.displayName
         || codexDisplayNames[quota.name]
@@ -7026,7 +7063,8 @@ function buildAllProviderEntries() {
           provider: 'codex',
           cardKey,
           title: `Codex - Account: ${accountName}`,
-          badge: toTitleCase(account.planType || ''),
+          badge: account.subscriptionPlan?.name || toTitleCase(account.planType || ''),
+          nextBillingDate: account.subscriptionPlan?.nextBillingDate || '',
           planType: account.planType || '',
           quotas: normalizeBothQuotas('codex', account),
           insights: insightPayload,
@@ -7094,11 +7132,12 @@ function buildAllProviderEntries() {
       provider,
       cardKey: sanitizeProviderCardKey(provider),
       title: bothProviderNames[provider] || toTitleCase(provider),
-      badge: provider === 'copilot'
+      badge: payload.subscriptionPlan?.name || (provider === 'copilot'
         ? 'Beta'
         : (provider === 'cursor'
           ? (payload.planName || toTitleCase(payload.accountType || ''))
-          : toTitleCase(payload.planType || '')),
+          : toTitleCase(payload.planType || ''))),
+      nextBillingDate: payload.subscriptionPlan?.nextBillingDate || '',
       planType: payload.planType || '',
       pollError: payload.pollError || null,
       quotas: normalizeBothQuotas(provider, payload),
@@ -9143,6 +9182,13 @@ function destroyProviderCardCharts() {
   State.providerCharts = {};
 }
 
+function antigravityQuotaCardsMatch(container, quotas) {
+  const cards = container.querySelectorAll('.quota-card[data-quota]');
+  if (cards.length !== quotas.length) return false;
+  const renderedKeys = new Set(Array.from(cards, card => card.dataset.quota));
+  return quotas.every(quota => renderedKeys.has(antigravityQuotaKey(quota)));
+}
+
 function renderAllProvidersView() {
   const container = document.getElementById('all-providers-container');
   if (!container) return;
@@ -9166,7 +9212,13 @@ function renderAllProvidersView() {
     if (!card) return false;
     // A poll error appearing or clearing changes the card structure.
     const hasBanner = card.querySelector('.poll-error-banner') !== null;
-    return hasBanner === Boolean(entry.pollError && entry.pollError.message);
+    const hasSubscription = ['anthropic', 'codex', 'antigravity'].includes(entry.provider);
+    return hasBanner === Boolean(entry.pollError && entry.pollError.message)
+      && (!hasSubscription || (
+        (card.querySelector('.provider-card-badge')?.textContent || '') === (entry.badge || '')
+        && (card.querySelector('.provider-card-renewal')?.textContent || '') === subscriptionRenewalLabel(entry.nextBillingDate)
+      ))
+      && (entry.provider !== 'antigravity' || antigravityQuotaCardsMatch(card, entry.quotas));
   });
 
   if (canUpdateInPlace) {
@@ -9181,18 +9233,27 @@ function renderAllProvidersView() {
   // Full (re)build: structure changed or first render.
   destroyProviderCardCharts();
   const collapsedState = loadProviderCardCollapseState();
+  const antigravityDetails = container.querySelector('.antigravity-quota-details');
+  const summaryHadFocus = antigravityDetails?.firstElementChild === document.activeElement;
 
   container.innerHTML = entries.map((entry) => {
     const collapsed = Boolean(collapsedState[entry.cardKey]);
     const badge = entry.badge ? `<span class="provider-card-badge">${escapeHTML(entry.badge)}</span>` : '';
+    const renewalLabel = subscriptionRenewalLabel(entry.nextBillingDate);
+    const renewal = renewalLabel ? `<time class="provider-card-renewal" datetime="${escapeHTML(entry.nextBillingDate)}">${escapeHTML(renewalLabel)}</time>` : '';
     if (entry.summaryOnly) {
       return renderAPIIntegrationsSummaryCard(entry, collapsed);
     }
+    const renderCards = (quotas) => renderProviderKPIHTML(quotas, entry.cardKey);
+    const quotaCards = entry.provider === 'antigravity' && entry.quotas.length
+      ? renderAntigravityQuotaGroups(entry.quotas, renderCards, antigravityDetails?.open)
+      : renderCards(entry.quotas);
     return `<section class="provider-card ${collapsed ? 'collapsed' : ''}" data-card-key="${entry.cardKey}" data-provider="${entry.provider}">
       <header class="provider-card-header">
         <div class="provider-card-title">
           <span>${escapeHTML(entry.title)}</span>
           ${badge}
+          ${renewal}
         </div>
         <button class="provider-card-collapse-btn" type="button" data-card-key="${entry.cardKey}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${escapeHTML(entry.title)}">
           <svg class="provider-card-collapse-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -9202,10 +9263,11 @@ function renderAllProvidersView() {
       </header>
       <div class="provider-card-body">
         ${pollErrorBannerHTML(entry.pollError)}
-        <div class="provider-kpis">${renderProviderKPIHTML(entry.quotas, entry.cardKey)}</div>
+        <div class="provider-kpis">${quotaCards}</div>
       </div>
     </section>`;
   }).join('');
+  if (summaryHadFocus) container.querySelector('.antigravity-quota-details > summary')?.focus();
 
   container.querySelectorAll('.provider-card-collapse-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -11565,9 +11627,19 @@ function setupTableControls() {
 function setupProviderSelector() {
   const tabs = document.getElementById('provider-tabs');
   if (!tabs) return;
+  if (getCurrentProvider() === 'subscription-value') tabs.scrollLeft = tabs.scrollWidth;
   tabs.querySelectorAll('.provider-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       const provider = tab.dataset.provider;
+      if (provider === 'subscription-value') {
+        const current = getCurrentProvider();
+        if (current === provider) return;
+        const params = new URLSearchParams({ provider });
+        if (['anthropic', 'codex', 'antigravity'].includes(current)) params.set('view', current);
+        if (State.codexAccount) params.set('account', State.codexAccount);
+        window.location.href = `${BASE_PATH}/?${params}`;
+        return;
+      }
       saveDefaultProvider(provider);
       window.location.href = `${BASE_PATH}/?provider=${provider}`;
     });
@@ -14394,6 +14466,13 @@ async function fetchDeviceHealth() {
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
+  if (location.hash === '#subscription-value' && ['anthropic', 'codex', 'antigravity'].includes(getCurrentProvider())) {
+    const params = new URLSearchParams(location.search);
+    params.set('view', getCurrentProvider());
+    params.set('provider', 'subscription-value');
+    location.replace(`${BASE_PATH}/?${params}`);
+    return;
+  }
   applyForkPreferences({
     all_dashboard_density: loadAllDashboardDensity(),
   });

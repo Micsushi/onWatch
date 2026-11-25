@@ -756,7 +756,7 @@ func NewHandler(store *store.Store, tracker *tracker.Tracker, logger *slog.Logge
 		data, _ := staticFS.ReadFile("static/" + name)
 		return fmt.Sprintf("%x", sha256.Sum256(data))
 	}}
-	dashboardTmpl, err := template.New("").Funcs(assets).ParseFS(templatesFS, "templates/layout.html", "templates/dashboard.html")
+	dashboardTmpl, err := template.New("").Funcs(assets).ParseFS(templatesFS, "templates/layout.html", "templates/dashboard.html", "templates/subscription.html")
 	if err != nil {
 		logger.Error("failed to parse dashboard template", "error", err)
 		dashboardTmpl = template.New("empty")
@@ -2102,6 +2102,8 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	providers := []string{}
+	subscriptions := []string{}
+	var subscriptionAccounts []store.ProviderAccount
 	currentProvider := ""
 	hasTools := false
 	toolsVisible := false
@@ -2137,6 +2139,22 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 			providers = append(providers, "both")
 		}
 		currentProvider = h.forkDefaultProvider(r, providers)
+		visibility := h.providerVisibilitySettings()
+		for _, provider := range []string{"anthropic", "codex", "antigravity"} {
+			if !slices.Contains(providers, provider) || !providerTelemetryEnabled(visibility, provider) {
+				continue
+			}
+			if provider == "codex" {
+				subscriptionAccounts = h.subscriptionCodexAccounts()
+				if len(subscriptionAccounts) == 0 {
+					continue
+				}
+			}
+			subscriptions = append(subscriptions, provider)
+		}
+		if len(subscriptions) > 0 {
+			providers = append(providers, "subscription-value")
+		}
 		// Allow overriding via query param
 		if reqProvider := r.URL.Query().Get("provider"); reqProvider != "" {
 			reqProvider = strings.ToLower(reqProvider)
@@ -2184,6 +2202,23 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		"ToolsVisible":    toolsVisible,
 		"PollIntervalSec": h.getPollIntervalSec(),
 		"BasePath":        h.getBasePath(),
+	}
+	if currentProvider == "subscription-value" {
+		data["Title"] = "Subscription Value"
+		data["SubscriptionProviders"] = subscriptions
+		selected := r.URL.Query().Get("view")
+		if !slices.Contains(subscriptions, selected) {
+			selected = subscriptions[0]
+		}
+		data["SubscriptionProvider"] = selected
+		if slices.Contains(subscriptions, "codex") {
+			accountID := parseCodexAccountID(r)
+			if len(subscriptionAccounts) > 0 && !slices.ContainsFunc(subscriptionAccounts, func(account store.ProviderAccount) bool { return account.ID == accountID }) {
+				accountID = subscriptionAccounts[0].ID
+			}
+			data["SubscriptionCodexAccounts"] = subscriptionAccounts
+			data["SubscriptionCodexAccount"] = accountID
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -5292,6 +5327,7 @@ func (h *Handler) buildAnthropicCurrent() map[string]interface{} {
 	if h.store == nil {
 		return response
 	}
+	h.addSubscriptionPlan(response, "anthropic", 0, "")
 
 	if pollError := h.anthropicPollError(); pollError != nil {
 		response["pollError"] = pollError
@@ -8177,6 +8213,7 @@ func (h *Handler) buildCodexCurrent(accountID int64) map[string]interface{} {
 	if latest.PlanType != "" {
 		response["planType"] = latest.PlanType
 	}
+	h.addSubscriptionPlan(response, "codex", accountID, codexPlanLabel(latest.PlanType))
 	if latest.CreditsBalance != nil {
 		response["creditsBalance"] = *latest.CreditsBalance
 	}
@@ -8311,6 +8348,11 @@ func (h *Handler) buildAntigravityCurrent() map[string]interface{} {
 	if latest.PlanName != "" {
 		response["planName"] = latest.PlanName
 	}
+	planName := latest.PlanName
+	if planName == "Pro" {
+		planName = "Google AI Pro"
+	}
+	h.addSubscriptionPlan(response, "antigravity", 0, planName)
 	if latest.PromptCredits > 0 || latest.MonthlyCredits > 0 {
 		response["promptCredits"] = latest.PromptCredits
 		response["monthlyCredits"] = latest.MonthlyCredits

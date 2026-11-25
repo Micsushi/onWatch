@@ -99,8 +99,8 @@ func (s *Store) SubscriptionInputs(ctx context.Context, provider, account string
 		account = "default"
 	}
 	var events []subscription.Event
-	q := `SELECT captured_at,captured_at,model,reasoning_effort,speed_mode,source_path,1,input_tokens,cached_input_tokens,cache_creation_input_tokens,output_tokens,total_tokens,metadata_json,0 FROM api_integration_usage_events WHERE integration_name=? AND account_name=? AND captured_at COLLATE ONWATCH_RFC3339>=? AND captured_at COLLATE ONWATCH_RFC3339<?
- UNION ALL SELECT first_captured_at,last_captured_at,model,reasoning_effort,speed_mode,origin_scope,request_count,input_tokens,cached_input_tokens,cache_creation_input_tokens,output_tokens,total_tokens,'{}',1 FROM api_integration_usage_hourly WHERE integration_name=? AND account_name=? AND first_captured_at COLLATE ONWATCH_RFC3339>=? AND last_captured_at COLLATE ONWATCH_RFC3339<?`
+	q := `SELECT captured_at,captured_at,model,reasoning_effort,speed_mode,source_path,1,input_tokens,cached_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,metadata_json,0 FROM api_integration_usage_events WHERE integration_name=? AND account_name=? AND captured_at COLLATE ONWATCH_RFC3339>=? AND captured_at COLLATE ONWATCH_RFC3339<?
+ UNION ALL SELECT first_captured_at,last_captured_at,model,reasoning_effort,speed_mode,origin_scope,request_count,input_tokens,cached_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,'{}',1 FROM api_integration_usage_hourly WHERE integration_name=? AND account_name=? AND first_captured_at COLLATE ONWATCH_RFC3339>=? AND last_captured_at COLLATE ONWATCH_RFC3339<?`
 	bounds := []any{integration, account, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano)}
 	args := append(append([]any{}, bounds...), bounds...)
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -114,7 +114,7 @@ func (s *Store) SubscriptionInputs(ctx context.Context, provider, account string
 		var at, last, path, metadata string
 		var counts agentusage.TokenCounts
 		var archived int
-		if err = rows.Scan(&at, &last, &e.Model, &e.Effort, &e.Speed, &path, &e.Requests, &counts.InputTokens, &counts.CachedInputTokens, &counts.CacheCreationTokens, &counts.OutputTokens, &counts.TotalTokens, &metadata, &archived); err != nil {
+		if err = rows.Scan(&at, &last, &e.Model, &e.Effort, &e.Speed, &path, &e.Requests, &counts.InputTokens, &counts.CachedInputTokens, &counts.CacheCreationTokens, &counts.OutputTokens, &counts.ReasoningTokens, &counts.TotalTokens, &metadata, &archived); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
@@ -135,6 +135,10 @@ func (s *Store) SubscriptionInputs(ctx context.Context, provider, account string
 		e.Tokens = counts.TotalTokens
 		e.Input = counts.InputTokens + counts.CachedInputTokens + counts.CacheCreationTokens
 		e.Cached = counts.CachedInputTokens
+		e.CacheWrite = counts.CacheCreationTokens
+		if provider == "antigravity" && strings.HasPrefix(e.Model, "gemini-") {
+			counts.OutputTokens += counts.ReasoningTokens
+		}
 		e.Output = counts.OutputTokens
 		var meta struct {
 			SpeedSource string `json:"speed_source"`

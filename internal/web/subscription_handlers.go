@@ -2,13 +2,69 @@ package web
 
 import (
 	"encoding/json"
-	"github.com/onllm-dev/onwatch/v2/internal/subscription"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/onllm-dev/onwatch/v2/internal/store"
+	"github.com/onllm-dev/onwatch/v2/internal/subscription"
 )
+
+func (h *Handler) subscriptionCodexAccounts() []store.ProviderAccount {
+	var accounts []store.ProviderAccount
+	if h.store != nil {
+		var err error
+		accounts, err = h.store.QueryActiveProviderAccounts("codex")
+		if err != nil {
+			return nil
+		}
+	}
+	if len(accounts) == 0 {
+		accounts = []store.ProviderAccount{{ID: DefaultCodexAccountID, Name: "default"}}
+	}
+	visibility := h.providerVisibilitySettings()
+	dashboard := h.providerVisibilityMap()
+	visible := accounts[:0]
+	for _, account := range accounts {
+		if codexAccountTelemetryEnabled(visibility, account.ID) &&
+			h.providerDashboardVisible(fmt.Sprintf("codex:%d", account.ID), dashboard) {
+			visible = append(visible, account)
+		}
+	}
+	return visible
+}
+
+func subscriptionProfileKey(provider string, accountID int64) string {
+	key := "subscription_profile_" + provider
+	if provider == "codex" {
+		key += "_" + strconv.FormatInt(accountID, 10)
+	}
+	return key
+}
+
+func (h *Handler) savedSubscriptionProfile(provider string, accountID int64) subscription.Profile {
+	var profile subscription.Profile
+	if h.store != nil {
+		if saved, err := h.store.GetSetting(subscriptionProfileKey(provider, accountID)); err == nil {
+			_ = json.Unmarshal([]byte(saved), &profile)
+		}
+	}
+	return profile
+}
+
+func (h *Handler) addSubscriptionPlan(response map[string]interface{}, provider string, accountID int64, detectedName string) {
+	profile := h.savedSubscriptionProfile(provider, accountID)
+	name := profile.Name
+	if name == "" {
+		name = detectedName
+	}
+	if name != "" || profile.NextBillingDate != "" {
+		response["subscriptionPlan"] = map[string]string{"name": name, "nextBillingDate": profile.NextBillingDate}
+	}
+}
 
 // SubscriptionValue is a read-only comparison over persisted observations.
 func (h *Handler) SubscriptionValue(w http.ResponseWriter, r *http.Request) {
@@ -49,24 +105,23 @@ func (h *Handler) SubscriptionValue(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 400, "Choose a range of at most 62 days")
 		return
 	}
-	profile := subscription.Profile{}
-	key := "subscription_profile_" + provider
 	accountID := parseCodexAccountID(r)
-	if provider == "codex" {
-		key += "_" + strconv.FormatInt(accountID, 10)
-	}
-	if saved, e := h.store.GetSetting(key); e == nil && saved != "" {
-		_ = json.Unmarshal([]byte(saved), &profile)
-	}
+	profile := h.savedSubscriptionProfile(provider, accountID)
 	if r.Method == http.MethodPut {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048)).Decode(&profile); err != nil || profile.MonthlyUSD < 0 || profile.MonthlyUSD > 100000 || profile.Multiplier < 0 || profile.Multiplier > 10000 || math.IsNaN(profile.MonthlyUSD) || math.IsNaN(profile.Multiplier) || len(profile.Name) > 100 {
 			respondError(w, 400, "Invalid plan profile")
 			return
 		}
 		profile.Name = strings.TrimSpace(profile.Name)
-		if profile.Name == "" && (profile.MonthlyUSD != 0 || profile.Multiplier != 0) {
+		if profile.Name == "" && (profile.MonthlyUSD != 0 || profile.Multiplier != 0 || profile.NextBillingDate != "") {
 			respondError(w, 400, "Enter a plan name")
 			return
+		}
+		if profile.NextBillingDate != "" {
+			if _, err := time.Parse(time.DateOnly, profile.NextBillingDate); err != nil || strings.HasPrefix(profile.NextBillingDate, "0000") {
+				respondError(w, 400, "Enter a valid billing date")
+				return
+			}
 		}
 		profile.Source = "configured monthly USD, before tax"
 	} else if r.Method != http.MethodGet {
@@ -88,7 +143,7 @@ func (h *Handler) SubscriptionValue(w http.ResponseWriter, r *http.Request) {
 			}
 		case "antigravity":
 			if latest, e := h.store.QueryLatestAntigravity(); e == nil && latest != nil && latest.PlanName == "Pro" {
-				profile = subscription.Profile{Name: "Google AI Pro", MonthlyUSD: 20, Multiplier: 1, Source: "Pro meter + published monthly list price; editable"}
+				profile = subscription.Profile{Name: "Google AI Pro", MonthlyUSD: 19.99, Multiplier: 1, Source: "Pro meter + published monthly list price; editable"}
 			}
 		}
 	}
@@ -126,7 +181,7 @@ func (h *Handler) SubscriptionValue(w http.ResponseWriter, r *http.Request) {
 			respondError(w, 400, "Invalid plan profile")
 			return
 		}
-		if err := h.store.SetSetting(key, string(b)); err != nil {
+		if err := h.store.SetSetting(subscriptionProfileKey(provider, accountID), string(b)); err != nil {
 			respondError(w, 500, "Could not save plan")
 			return
 		}
@@ -142,5 +197,5 @@ func (h *Handler) SubscriptionValue(w http.ResponseWriter, r *http.Request) {
 	meterStale := latestMeter != nil && end.Sub(*latestMeter) > 30*time.Minute
 	result.Warnings = append(result.Warnings, "Period value uses the configured current monthly fee and can span historical plan or model changes. Historical allowances with a different plan are not normalized by the current multiplier.")
 	result.Warnings = append(result.Warnings, "Token account '"+account+"' is paired with the selected meter. Legacy records lack a verified account binding; device labels describe source paths, not proof of machine-specific limits.")
-	respondJSON(w, 200, map[string]any{"provider": provider, "start": start, "end": end, "latest_meter_at": latestMeter, "meter_stale": meterStale, "basis": "Current API Standard short-context text rates, checked 2026-09-07. Excludes tools and API speed/context premiums; Codex credits shown separately.", "report": result})
+	respondJSON(w, 200, map[string]any{"provider": provider, "start": start, "end": end, "latest_meter_at": latestMeter, "meter_stale": meterStale, "basis": "Standard short-context text rates. Excludes tools and API speed/context premiums. Codex credits are shown separately.", "report": result})
 }

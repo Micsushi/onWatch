@@ -786,6 +786,9 @@ button, input, select { font-family: inherit; }
   color: var(--accent-teal-text);
 }
 
+.provider-card-title:has(.provider-card-renewal) { flex-wrap: wrap; row-gap: 4px; }
+.provider-card-renewal { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+
 .provider-card-collapse-btn {
   display: inline-flex;
   align-items: center;
@@ -4615,6 +4618,33 @@ select.settings-input {
 .subscription-value, .platform-cost-section, .chart-section { scroll-margin-top: 160px; }
 .subscription-value .table-container { overflow-x: auto; }
 .subscription-value table { min-width: 760px; width: 100%; }
+.subscription-dashboard > .sessions-section { animation: none; opacity: 1; }
+.subscription-dashboard h1 { margin: 0; font-size: 1.5rem; }
+.subscription-comparison-table table { min-width: 540px; }
+.subscription-comparison-plan { display: block; color: var(--text-secondary); font-size: .8rem; font-weight: 400; }
+.subscription-comparison-table a, .subscription-note a { color: var(--accent-teal-text); }
+.subscription-comparison-table:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 3px; }
+.subscription-evidence-heading { margin: 20px 0 10px; font-size: 1rem; }
+.subscription-capacity-chart { height: clamp(290px, 40vw, 420px); }
+.subscription-capacity-table { max-height: 520px; }
+.subscription-capacity-table table { min-width: 890px; }
+.subscription-capacity-table thead { position: sticky; top: 0; z-index: 1; }
+.subscription-capacity-table td:nth-child(7) { width: 28%; font-size: .82rem; }
+.subscription-reset-charts:not([hidden]) { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 16px; margin: 16px 0; }
+.subscription-reset-charts > div { min-width: 0; border: 1px solid var(--border-default); border-radius: 12px; padding: 12px; }
+.subscription-reset-charts h3 { margin: 0; font-size: .95rem; }
+.subscription-reset-charts .subscription-chart { height: 230px; margin-bottom: 0; }
+@media (max-width: 640px) {
+  .subscription-comparison-table table { min-width: 0; table-layout: fixed; }
+  .subscription-comparison-table :is(th, td) { padding-inline: 5px; overflow-wrap: anywhere; }
+  .subscription-comparison-table th { letter-spacing: 0; text-transform: none; }
+  .subscription-observed-table th:nth-child(1) { width: 26%; }
+  .subscription-observed-table th:nth-child(2) { width: 16%; }
+  .subscription-weekly-table th:nth-child(1),
+  .subscription-weekly-table th:nth-child(2) { width: 25%; }
+  #subscription-reset-summary th:first-child { width: 28%; }
+  .subscription-capacity-table table { min-width: 760px; }
+}
 #subscription-warnings { color: var(--text-secondary); font-size: .85rem; padding-left: 20px; }
 #subscription-warnings li { margin-bottom: 8px; }
 @media (max-width: 640px) { .subscription-value { padding: 16px; } .subscription-value .usage-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .subscription-controls { align-items: end; } #subscription-cycle { width: 100%; } }
@@ -4623,7 +4653,15 @@ select.settings-input {
 /* Keep the phone dashboard focused on quota, value and freshness. */
 .dashboard-detail > summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
 .dashboard-detail[open] > summary { margin-bottom: 16px; }
+.antigravity-primary-quotas, .antigravity-quota-details { grid-column: 1 / -1; }
+.antigravity-primary-quotas { display: grid; gap: inherit; }
+#quota-grid-antigravity > .antigravity-primary-quotas {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--layout-card-min)), 1fr));
+}
+.antigravity-quota-details > summary { color: var(--text-secondary); }
+.antigravity-quota-details[open] > summary { margin-bottom: 8px; }
 @media (max-width: 768px) {
+ #quota-grid-antigravity > .antigravity-primary-quotas { grid-template-columns: minmax(0, 1fr); }
  .app-header .provider-tabs { order: 4; flex: 1 0 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
  .app-header .header-controls { margin-left: auto; }
  .app-header .header-actions { order: 5; width: 100%; margin: 0; }

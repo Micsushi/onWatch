@@ -12,7 +12,7 @@
             {{range .Providers}}
             <button class="provider-tab {{if eq . $.CurrentProvider}}active{{end}}"
                     data-provider="{{.}}" role="tab" aria-selected="{{if eq . $.CurrentProvider}}true{{else}}false{{end}}">
-                {{if eq . "synthetic"}}Synthetic{{else if eq . "zai"}}Z.ai{{else if eq . "anthropic"}}Anthropic{{else if eq . "copilot"}}Copilot{{else if eq . "codex"}}Codex{{else if eq . "antigravity"}}Antigravity{{else if eq . "minimax"}}MiniMax{{else if eq . "gemini"}}Gemini{{else if eq . "cursor"}}Cursor{{else if eq . "api-integrations"}}Cost{{else if eq . "both"}}All{{else}}{{.}}{{end}}
+                {{if eq . "synthetic"}}Synthetic{{else if eq . "zai"}}Z.ai{{else if eq . "anthropic"}}Anthropic{{else if eq . "copilot"}}Copilot{{else if eq . "codex"}}Codex{{else if eq . "antigravity"}}Antigravity{{else if eq . "minimax"}}MiniMax{{else if eq . "gemini"}}Gemini{{else if eq . "cursor"}}Cursor{{else if eq . "api-integrations"}}Cost{{else if eq . "both"}}All{{else if eq . "subscription-value"}}Subscription Value{{else}}{{.}}{{end}}
             </button>
             {{end}}
         </div>
@@ -31,6 +31,7 @@
             </button>
             <ul class="codex-profile-menu" id="minimax-profile-menu" role="listbox" aria-label="Select MiniMax account"></ul>
         </div>
+        {{if ne .CurrentProvider "subscription-value"}}
         <div class="header-actions">
             <div class="dashboard-refresh-status" id="dashboard-refresh-status" role="status" aria-live="polite" aria-atomic="true" hidden>
                 <span class="loading-spinner tiny" aria-hidden="true"></span>
@@ -42,10 +43,13 @@
             </div>
         </div>
 
+        {{end}}
         <div class="header-controls">
+            {{if ne .CurrentProvider "subscription-value"}}
             <button class="header-btn" id="refresh-btn" aria-label="Refresh data" title="Refresh now">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </button>
+            {{end}}
             <!-- Notification Center -->
             <div class="notification-center" id="notification-center">
                 <button class="notification-bell" id="notification-bell" aria-label="Notifications" aria-expanded="false" aria-haspopup="true" title="Notifications">
@@ -92,6 +96,9 @@
     </header>
 
     <main id="main-content" class="main-content">
+        {{if eq .CurrentProvider "subscription-value"}}
+        {{template "subscription-value-page" .}}
+        {{else}}
         <div class="welcome-banner">
             <h1 class="welcome-title">Dashboard</h1>
         </div>
@@ -656,46 +663,6 @@
         </details>
         {{end}}
 
-        {{if and (eq .CurrentProvider "both") (or .HasCodex .HasAnthropic .HasAntigravity)}}
-        <section class="sessions-section" id="subscription-navigation" aria-labelledby="subscription-navigation-title">
-            <h2 class="section-title" id="subscription-navigation-title">Subscription Value</h2>
-            <p class="subscription-note">Compare recorded API value, subscription fees, and observed allowances for each provider.</p>
-            <nav class="subscription-controls" aria-label="Subscription value by provider">
-                {{if .HasCodex}}<a href="{{.BasePath}}/?provider=codex#subscription-value">Codex comparison</a>{{end}}
-                {{if .HasAnthropic}}<a href="{{.BasePath}}/?provider=anthropic#subscription-value">Anthropic comparison</a>{{end}}
-                {{if .HasAntigravity}}<a href="{{.BasePath}}/?provider=antigravity#subscription-value">Antigravity comparison</a>{{end}}
-            </nav>
-        </section>
-        {{end}}
-
-        {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}}
-        <section class="sessions-section subscription-value" id="subscription-value" data-provider="{{.CurrentProvider}}">
-            <div class="section-header"><h2>Subscription Value</h2><div class="subscription-controls">
-                <label>Period <select id="subscription-days"><option value="30">Last 30 days</option><option value="7">Last 7 days</option><option value="1">Last 24 hours</option></select></label>
-                <button type="button" class="btn" id="subscription-refresh">Refresh</button>
-            </div></div>
-            <details id="subscription-plan-details"><summary>Plan and comparison settings</summary>
-                <form id="subscription-plan-form" class="subscription-controls">
-                    <label>Plan name <input id="subscription-plan-name" maxlength="100" placeholder="Your plan" required></label>
-                    <label>Monthly USD <input id="subscription-price" type="number" min="0" max="100000" step="0.01" required></label>
-                    <label>Usage multiplier <input id="subscription-multiplier" type="number" min="0" max="10000" step="0.1" required></label>
-                    <button class="btn" type="submit">Save plan</button><button class="btn" type="button" id="subscription-undo" disabled>Undo plan change</button>
-                </form><p id="subscription-plan-source" class="subscription-note"></p>
-            </details>
-            <p id="subscription-status" role="status" class="subscription-note">Loading subscription observations...</p>
-            <div id="subscription-summary" class="usage-summary"></div>
-            <div class="subscription-controls"><label>Observed allowance <select id="subscription-cycle" aria-describedby="subscription-cycle-note"></select></label></div>
-            <p id="subscription-cycle-note" class="subscription-note"></p>
-            <div class="subscription-chart"><canvas id="subscription-chart" role="img" aria-label="Observed API value versus quota consumption" aria-describedby="subscription-cycle-note"></canvas><p id="subscription-chart-empty" hidden>No matched cost and quota observations yet.</p></div>
-            <details><summary>Models, effort and speed</summary><p class="subscription-note">Quota comparisons use the selected allowance, with single-model weekly intervals spanning at least 5 percentage points. Mixed activity stays unattributed. More output per percent can still mean more retries or lower-quality work.</p>
-                <div class="table-container"><table class="data-table"><thead><tr><th>Model / effort / speed</th><th>API value</th><th>Codex credits</th><th>Priced requests</th><th>Cache hit</th><th>Matched quota</th><th>API / 100%</th><th>Output / 1%</th></tr></thead><tbody id="subscription-models"></tbody></table></div>
-            </details>
-            <details><summary>Allowance history</summary><div class="table-container"><table class="data-table"><thead><tr><th>Observed span</th><th>Quota / plan</th><th>Meter movement</th><th>Matched API</th><th>API / 100%</th><th>Evidence</th></tr></thead><tbody id="subscription-cycles"></tbody></table></div></details>
-            <details><summary>Other plans and monthly capacity</summary><p class="subscription-note">Linear scenarios from the selected weekly allowance, using 30/7 weekly allowances per 30 days. Assumes full use and unchanged rules; excludes bonus resets, paid top-ups and promotions. It does not predict another account's entitlement.</p><div class="table-container"><table class="data-table"><thead><tr><th>Scenario</th><th>Monthly fee</th><th>API / weekly 100%</th><th>30-day capacity</th><th>Capacity / fee</th></tr></thead><tbody id="subscription-plans"></tbody></table></div></details>
-            <details><summary>Devices and data quality</summary><div id="subscription-devices"></div><ul id="subscription-warnings"></ul><p id="subscription-basis" class="subscription-note"></p></details>
-        </section>
-        {{end}}
-
         <section class="device-health-section" id="device-health-section" aria-labelledby="device-health-title">
             <header class="section-header">
                 <div>
@@ -1060,6 +1027,7 @@
                 <div class="table-pagination" id="overview-pagination"></div>
             </div>
         </section>
+        {{end}}
         {{end}}
     </main>
 

@@ -89,7 +89,7 @@ func TestSubscriptionRestoresSavedGraphBeforeRefreshing(t *testing.T) {
 		"const CACHE_KEY='onwatch-subscription-value-cache-v1';",
 		"const saved=readCache();",
 		"if(saved){data=saved;render();el('status').textContent+=' Refreshing in the background.';}",
-		"data=next;writeCache(next);render(!!profile);",
+		"data=next;writeCache(next);render(!!profile && !preserveDraft);",
 	} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("subscription graph does not restore persisted data before refresh: missing %q", marker)

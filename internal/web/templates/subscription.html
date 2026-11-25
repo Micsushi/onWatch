@@ -1,0 +1,165 @@
+{{define "subscription-provider-name"}}{{if eq . "anthropic"}}Claude{{else if eq . "codex"}}Codex{{else if eq . "antigravity"}}Antigravity{{end}}{{end}}
+
+{{define "subscription-value-page"}}
+<div class="subscription-dashboard" id="subscription-value" data-provider="{{.SubscriptionProvider}}" data-comparison="true">
+    <section class="sessions-section subscription-value" aria-labelledby="subscription-comparison-title">
+        <div class="section-header">
+            <h1 id="subscription-comparison-title">Subscription Value</h1>
+            <div class="subscription-controls">
+                {{if .SubscriptionCodexAccounts}}
+                <label{{if eq (len .SubscriptionCodexAccounts) 1}} hidden{{end}}><span id="subscription-account-label">Codex account</span><select id="subscription-account" aria-labelledby="subscription-account-label">
+                    {{range .SubscriptionCodexAccounts}}<option value="{{.ID}}"{{if eq .ID $.SubscriptionCodexAccount}} selected{{end}}>{{.Name}}</option>{{end}}
+                </select></label>
+                {{end}}
+                <label><span id="subscription-days-label">Period</span><select id="subscription-days" aria-labelledby="subscription-days-label"><option value="30">Last 30 days</option><option value="7">Last 7 days</option><option value="1">Last 24 hours</option></select></label>
+                <button type="button" class="btn" id="subscription-refresh">Refresh</button>
+            </div>
+        </div>
+        <h2 class="section-title" id="subscription-observed-title">Your usage</h2>
+        <p class="subscription-note" id="subscription-observed-method">API value estimates what your recorded tokens would cost at standard API prices. Output per API dollar measures token volume. Task outcomes are available in the published benchmarks below.</p>
+        <div class="table-container subscription-comparison-table" role="region" aria-labelledby="subscription-observed-title" tabindex="0">
+            <table class="data-table subscription-observed-table" aria-describedby="subscription-observed-method">
+                <thead><tr><th scope="col">Provider and plan</th><th scope="col">Monthly fee</th><th scope="col">Recorded API value</th><th scope="col">API value / fee</th><th scope="col">Output tokens / API $</th></tr></thead>
+                <tbody>
+                    {{range .SubscriptionProviders}}
+                    <tr data-subscription-provider="{{.}}" data-label="{{template "subscription-provider-name" .}}"><th scope="row">{{template "subscription-provider-name" .}}</th><td colspan="4">Loading usage…</td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    {{template "subscription-baseline" .}}
+    {{template "subscription-reset-value" .}}
+    {{template "subscription-external-evidence" .}}
+
+        <section class="sessions-section subscription-value" id="subscription-detail" aria-labelledby="subscription-detail-title">
+            <div class="section-header">
+                <h2 id="subscription-detail-title">Allowance details</h2>
+                <div class="subscription-controls">
+                    <label><span id="subscription-provider-label">Provider</span><select id="subscription-provider" aria-labelledby="subscription-provider-label">
+                        {{range .SubscriptionProviders}}
+                        <option value="{{.}}"{{if eq . $.SubscriptionProvider}} selected{{end}}>{{template "subscription-provider-name" .}}</option>
+                        {{end}}
+                    </select></label>
+                </div>
+            </div>
+            <details id="subscription-plan-details"><summary>Plan and comparison settings</summary>
+                <form id="subscription-plan-form" class="subscription-controls">
+                    <label>Plan name <input id="subscription-plan-name" maxlength="100" placeholder="Your plan" required></label>
+                    <label>Next billing date (optional) <input id="subscription-next-billing-date" type="date"></label>
+                    <label>Monthly USD <input id="subscription-price" type="number" min="0" max="100000" step="0.01" required></label>
+                    <label>Usage multiplier <input id="subscription-multiplier" type="number" min="0" max="10000" step="0.1" required></label>
+                    <button class="btn" type="submit">Save plan</button><button class="btn" type="button" id="subscription-undo" disabled>Undo plan change</button>
+                </form><p id="subscription-plan-source" class="subscription-note"></p>
+            </details>
+            <p id="subscription-status" role="status" class="subscription-note">Loading subscription observations...</p>
+            <div id="subscription-summary" class="usage-summary"></div>
+            <div class="subscription-controls"><label>Observed allowance <select id="subscription-cycle" aria-describedby="subscription-cycle-note"></select></label></div>
+            <p id="subscription-cycle-note" class="subscription-note"></p>
+            <div class="subscription-chart"><canvas id="subscription-chart" role="img" aria-label="Observed API value versus quota consumption" aria-describedby="subscription-cycle-note"></canvas><p id="subscription-chart-empty" hidden>No matched cost and quota observations yet.</p></div>
+            <details><summary>Models, effort and speed</summary><p class="subscription-note">Quota comparisons use the selected allowance, with single-model weekly intervals spanning at least 5 percentage points. Mixed activity stays unattributed. More output per percent can still mean more retries or lower-quality work.</p>
+                <div class="table-container"><table class="data-table"><thead><tr><th>Model / effort / speed</th><th>API value</th><th>Codex credits</th><th>Priced requests</th><th>Cache hit</th><th>Matched quota</th><th>API / 100%</th><th>Output / 1%</th></tr></thead><tbody id="subscription-models"></tbody></table></div>
+            </details>
+            <details><summary>Allowance history</summary><div class="table-container"><table class="data-table"><thead><tr><th>Observed span</th><th>Quota / plan</th><th>Meter movement</th><th>Matched API</th><th>API / 100%</th><th>Evidence</th></tr></thead><tbody id="subscription-cycles"></tbody></table></div></details>
+            <details><summary>Devices and data quality</summary><div id="subscription-devices"></div><ul id="subscription-warnings"></ul><p id="subscription-basis" class="subscription-note"></p></details>
+        </section>
+
+</div>
+{{end}}
+
+{{define "subscription-baseline"}}
+    <section class="sessions-section subscription-value" aria-labelledby="subscription-baseline-title">
+        <div class="section-header">
+            <h2 id="subscription-baseline-title">Monthly value by model and effort</h2>
+            <div class="subscription-controls">
+                <label>Plan tier
+                    <select id="subscription-capacity-tier">
+                        <option value="base">Base paid · about $20</option>
+                        <option value="higher">Higher paid · $200</option>
+                        <option value="current">Current account plans</option>
+                    </select>
+                </label>
+                <label>Provider
+                    <select id="subscription-capacity-provider">
+                        <option value="all">All providers</option><option value="anthropic">Claude</option>
+                        <option value="codex">Codex</option><option value="antigravity">Antigravity</option>
+                    </select>
+                </label>
+                <label>Task benchmark
+                    <select id="subscription-capacity-benchmark">
+                        <option value="subscriptionBench">SubscriptionBench</option>
+                        <option value="deepSWE">DeepSWE v1.1</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+        <p class="subscription-note" id="subscription-baseline-method">Each estimate spends a full 30 days of regular weekly allowance on one model and effort. Solves are expected benchmark passes based on output tokens per attempt, including failed attempts. Shorter limits and your workload can reduce capacity. Model access varies by plan and account.</p>
+        <p class="subscription-note" id="subscription-capacity-status" role="status">Loading model observations…</p>
+        <div class="subscription-chart subscription-capacity-chart" id="subscription-capacity-chart-wrap" hidden>
+            <canvas id="subscription-capacity-chart" role="img" aria-label="Monthly benchmark solves by API dollars per subscription dollar" aria-describedby="subscription-baseline-method"></canvas>
+        </div>
+        <div class="table-container subscription-comparison-table subscription-capacity-table" role="region" aria-labelledby="subscription-baseline-title" tabindex="0">
+            <table class="data-table" aria-describedby="subscription-baseline-method">
+                <thead><tr><th scope="col">Model and effort</th><th scope="col">Plan</th><th scope="col">Input / output tokens</th><th scope="col">API value / 30 days</th><th scope="col">API $ / $1 paid</th><th scope="col">Est. solves / 30 days</th><th scope="col">Evidence</th></tr></thead>
+                <tbody id="subscription-capacity-rows"></tbody>
+            </table>
+        </div>
+        <p class="subscription-note"><a href="https://deepswe.datacurve.ai/">DeepSWE v1.1, Sept 22, 2026</a> · <a href="https://github.com/data-john/SubscriptionBench/blob/bf513a7b42198fba2311cc5fdb35b707f413abcd/site/data/benchmark_data.json">SubscriptionBench, Nov 24, 2026</a> · <a href="https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan">Claude Ultra weekly allowance</a> · <a href="https://antigravity.google/blog/changes-to-antigravity-plans/">Google tier ratios</a></p>
+    </section>
+{{end}}
+
+{{define "subscription-reset-value"}}
+    <section class="sessions-section subscription-value" id="subscription-reset-value" aria-labelledby="subscription-reset-title">
+        <h2 class="section-title" id="subscription-reset-title">Weekly API value with and without early refills</h2>
+        <p class="subscription-note" id="subscription-reset-method">Both charts include normal weekly renewals. The estimate withholds each observed early refill until its original deadline and counts usage that fits in the old allowance. Only priced usage matched to the primary weekly meter is included.</p>
+        <p class="subscription-note" id="subscription-reset-status" role="status">Loading weekly observations…</p>
+        <div class="subscription-reset-charts" id="subscription-reset-charts" hidden>
+            <div>
+                <h3 id="subscription-reset-observed-title">Including observed early refills</h3>
+                <div class="subscription-chart"><canvas id="subscription-reset-observed" role="img" aria-labelledby="subscription-reset-observed-title" aria-describedby="subscription-reset-method subscription-reset-summary"></canvas></div>
+            </div>
+            <div>
+                <h3 id="subscription-reset-standard-title">Without early refills (estimate)</h3>
+                <div class="subscription-chart"><canvas id="subscription-reset-standard" role="img" aria-labelledby="subscription-reset-standard-title" aria-describedby="subscription-reset-method subscription-reset-summary"></canvas></div>
+            </div>
+        </div>
+        <div class="table-container subscription-comparison-table" id="subscription-reset-summary" role="region" aria-labelledby="subscription-reset-title" tabindex="0" hidden>
+            <table class="data-table">
+                <thead><tr><th scope="col">Provider</th><th scope="col">With refills</th><th scope="col">Without refills</th><th scope="col">Early refills</th><th scope="col">Skipped intervals</th></tr></thead>
+                <tbody id="subscription-reset-totals"></tbody>
+            </table>
+        </div>
+    </section>
+{{end}}
+
+{{define "subscription-external-evidence"}}
+    <section class="sessions-section subscription-value" aria-labelledby="subscription-evidence-title">
+        <details><summary id="subscription-evidence-title">More published observations</summary>
+        <h3 class="subscription-evidence-heading" id="subscription-published-quota">API value at a full weekly quota</h3>
+        <div class="table-container subscription-comparison-table" role="region" aria-labelledby="subscription-published-quota" tabindex="0">
+            <table class="data-table subscription-weekly-table">
+                <thead><tr><th scope="col">Plan</th><th scope="col">Estimated weekly API value</th><th scope="col">Evidence</th></tr></thead>
+                <tbody>
+                    <tr><th scope="row">Claude Pro</th><td>$163</td><td><a href="https://wokey.ai/coding-plan-comparison#ranking">Wokey, Nov 23, 2026</a> · Median across 134 accounts</td></tr>
+                    <tr><th scope="row">ChatGPT Pro ($200)</th><td>$1,095</td><td><a href="https://wokey.ai/coding-plan-comparison#ranking">Wokey, Nov 23, 2026</a> · Median across 14 accounts</td></tr>
+                    <tr><th scope="row">Google AI Pro</th><td>About $61</td><td><a href="https://github.com/data-john/SubscriptionBench/blob/bf513a7b42198fba2311cc5fdb35b707f413abcd/site/data/benchmark_data.json">SubscriptionBench, Nov 24, 2026</a> · Gemini 4 Neon Medium, 3 of 4 solved, $2.10 in API value at 3.44% of the weekly pool</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <p class="subscription-note">These estimates scale measured quota use to a full week. Models, caching, and workloads differ across sources.</p>
+        <h3 class="subscription-evidence-heading" id="subscription-published-performance">Cost and performance on the same tasks</h3>
+        <div class="table-container subscription-comparison-table" role="region" aria-labelledby="subscription-published-performance" tabindex="0">
+            <table class="data-table">
+                <thead><tr><th scope="col">Coding tool</th><th scope="col">Solved</th><th scope="col">Median seconds / task</th><th scope="col">API $ / 1,000 solved</th></tr></thead>
+                <tbody>
+                    <tr><th scope="row">Claude Code</th><td>36 / 36</td><td>37</td><td>$41</td></tr>
+                    <tr><th scope="row">Codex</th><td>35 / 36</td><td>39</td><td>$90</td></tr>
+                    <tr><th scope="row">Antigravity CLI</th><td>35 / 36</td><td>48</td><td>$105</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <p class="subscription-note"><a href="https://www.eishanlawrence.com/blog/harness-efficiency-bench-v2">Eishan Lawrence, Nov 21, 2026</a> · 12 small Python tasks repeated 3 times with one DeepSeek model. Dollar estimates use illustrative API rates. The setup measures how each tool handles the same model.</p>
+        </details>
+    </section>
+{{end}}

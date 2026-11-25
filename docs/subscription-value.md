@@ -1,18 +1,43 @@
 # Subscription value
 
-The Claude, Codex and Antigravity dashboards compare recorded API-equivalent activity with observed quota consumption. This is a valuation estimate, not an invoice, cash savings, a quality score or a provider billing formula.
+Open the **Subscription Value** tab to compare Claude, Codex and Antigravity over one period. The provider selector under **Allowance details** shows the quota and model breakdowns. API-equivalent value estimates what recorded tokens would cost at standard API prices. It is not an invoice, cash savings, a quality score or a provider billing formula.
 
 ## Reading the view
+
+The All view and the Subscription Value tab show known plan names and recorded billing dates. In **Allowance details**, select the provider and open **Plan and comparison settings** to enter the date shown in its billing settings. Leave it blank when there is no confirmed date. After the date passes, onWatch shows it as the last recorded renewal until you update it.
+
+- **Output tokens / API dollar:** output token count divided by the recorded API-equivalent value in the same period. It is shown only when every recorded request in the comparison is priced and the total is positive. Task success is not available from the local usage logs.
 
 - **Observed API value:** token vectors in the selected period priced using current API Standard short-context text rates. The period defaults to the last 30 days. It is not automatically the billing month.
 - **Value / subscription fee:** period API value divided by the configured monthly USD fee. $1,000 of recorded value divided by a $200 fee is **5x**, not 5 dollars. Incomplete pricing produces a lower bound.
 - **API / 100% quota:** matched API value divided by observed percentage-point movement, multiplied by 100. A 0% to 100% observation is near-full meter coverage; 38% to 100% covers 62 points and is extrapolated.
 - **Normalized x1:** the per-100% value divided by the configured plan multiplier. This is a normalization assumption, not a measurement of a different plan.
-- **Other plans:** linear x1/x5/x20 scenarios at $20/$100/$200 monthly list prices. Monthly capacity assumes 30/7 weekly allowances, no bonus resets, no unused allowance and unchanged rules. It differs from observed monthly value.
 
 Each allowance is kept separate by quota, plan and reset boundary. A material meter drop also starts a separate observation. Small backwards readings up to five points with the same reset are rejected as stale concurrent counters or corrections; their count is reported. Raw telemetry remains stored. Reset timestamp jitter up to 60 seconds is tolerated. When task telemetry is available, nearby polling observations are excluded to avoid counting a stale poll as a reset. Early resets are observed events; the view does not claim they were redeemed, promotional or banked without external evidence.
 
 Quota at 100% is saturated. Costs after its first observed 100% remain in period totals but cannot be calibrated against further quota movement. Rounded counters need at least five percentage points before an allowance estimate is shown. The displayed rounding range accounts only for one percentage point of endpoint uncertainty, not missing logs or unknown provider policy.
+
+## Comparing early refills
+
+The two charts accumulate priced usage matched to one primary weekly meter per provider. For Antigravity this is the shared Gemini pool. Both charts count scheduled weekly renewals. The observed series counts the full matched value. The estimate withholds an early refill until the previously scheduled deadline and uses remaining percentage points from the prior reading. It prorates the final interval by the fraction that fits, then resumes counting observed usage at the old deadline. The curves share a scale and summarize the selected range by UTC day.
+
+The comparison requires two polls on the same plan and meter, a drop greater than five points and a new deadline more than a minute later than the old one, observed more than a minute before the old deadline. A published reset offer or a saved credit does not establish that an account used it. Meter movement without reliably timed, priced logs consumes quota in the estimate but supplies no dollars. Intervals spanning the old deadline are skipped in both curves, as are unknown-price and archive-overlap intervals. The two totals can agree when there was no confirmed early refill or when all matched usage fit within the original allowance. Outcomes and dollars from different models chosen under tighter limits are outside this estimate.
+
+## Monthly value by model and effort
+
+Each row estimates a 30-day month spent entirely on one model, effort and recorded speed. The tier selector shows base paid plans, $200 plans, or the account's recorded plan. The observed period controls the local sample. New matched usage is picked up on refresh. Available configurations come from the observed models, the reviewed model catalog and the two public sources. Historical models may remain in the evidence.
+
+For a matching plan and weekly meter, sum tokens and their standard API-equivalent dollars across intervals with at least five quota percentage points and one identifiable model, effort and speed. Divide each sum by the total measured points and multiply by 100 × 30/7. Input includes fresh tokens, cache reads and cache writes. Prices use each token type's rate. API dollars per dollar paid divides the projected API value by the plan fee. If multiple weekly meters cover the same configuration, the lowest projected output capacity governs. The estimate assumes regular weekly renewals, full use, and a similar mix of input, output and caching. Shorter or unmeasured limits can reduce it.
+
+Same-tier samples take precedence. Untagged Claude meters use the saved plan, and the row labels that assumption. The [Claude Ultra weekly ratio](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan) is 10× Pro. [Google's published ratio](https://antigravity.google/blog/changes-to-antigravity-plans/) is 20× for the $200 Ultra tier and is applied to the shared Gemini quota only. The [current Codex plan description](https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers) does not supply a numeric weekly factor, so Plus and Pro use separate samples. Public Antigravity Pro observations can provide a fallback for the exact model and effort. A missing quota sample leaves capacity blank.
+
+Expected solves equal projected output tokens divided by mean benchmark output per attempt, multiplied by pass rate. Failed attempts count in both statistics. The chart uses API dollars per subscription dollar on the horizontal axis and expected benchmark solves on the vertical axis. Lines join effort levels of the same provider, model and speed. Switch benchmarks to compare another workload. Each chart uses a single benchmark and has no point for configurations missing the necessary inputs.
+
+Review `internal/web/static/subscription-benchmarks.json` when the published data changes. DeepSWE v1.1 rows contain model, effort, passes, attempts and mean output tokens from the [September 22 leaderboard](https://deepswe.datacurve.ai/). SubscriptionBench rows contain model, effort, pool, percentage points, uncached input, cached input, cache writes, output, API dollars, solves and attempts from the [November 24 dataset](https://github.com/data-john/SubscriptionBench/blob/bf513a7b42198fba2311cc5fdb35b707f413abcd/site/data/benchmark_data.json). Its public Antigravity quota and task estimates are based on small samples. The legacy Argon pool and Codex Free samples were omitted because their limits differ from the paid monthly scenarios.
+
+## Published observations
+
+The tab displays dated, reviewed samples from [Wokey](https://wokey.ai/coding-plan-comparison), [SubscriptionBench](https://data-john.github.io/SubscriptionBench/), and [Eishan Lawrence](https://www.eishanlawrence.com/blog/harness-efficiency-bench-v2). The first two estimate the API value of fully using a weekly quota. The third reports solved tasks, time, and API cost at illustrative rates for the same 12 Python tasks and model. Compare runs within their workload. The public figures never contribute to the local data or its totals. Review newer measurements before updating the dated figures in `internal/web/templates/subscription.html`.
 
 ## Model comparisons
 
@@ -32,6 +57,8 @@ Rates checked 2026-09-07:
 | GPT-5.6 Luna | $0.20 | $0.02 | $0.25 | $1.20 |
 
 Sources: official model pages for [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) and [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna). Other recognized models use the existing onWatch price catalog. Update the dated catalog when verifying new prices. Historical stored costs are preserved; this comparison reprices token vectors consistently.
+
+Standard API rates checked Nov 24, 2026 for the three benchmarked models are $2 input, $0.10 cached input, $2.50 short cache write, and $10 output per million tokens for [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and [Claude Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview). Sonnet's one-hour cache write is $4. [Gemini 4 Hydrogen](https://ai.google.dev/gemini-api/docs/pricing#gemini-4-hydrogen) is $1.50 input, $0.075 cached input, and $7.50 output with implicit caching.
 
 Codex credit estimates use the [published credit rate card](https://learn.chatgpt.com/docs/pricing) independently. Astra Standard is 250/25/1,250 credits per million input/cached/output tokens. Its Codex Fast multiplier is 2.5x, while its API Fast multiplier is 2x. The API comparison deliberately excludes speed and long-context premiums. Cache reads/writes are not added to input twice; reasoning is not added to output twice. Config-derived historical speed is unverified, so affected credit estimates stay incomplete.
 
@@ -57,6 +84,8 @@ This reads quota counters only, retains no transcript content and uses unique ob
 
 No external tracker dependency or implementation was copied into onWatch.
 
+- [CodexBar](https://github.com/steipete/CodexBar/blob/main/docs/claude.md) distinguishes saved reset credits from scheduled windows. Its [burndown example](https://github.com/steipete/CodexBar/blob/main/docs/widgets/burndown-proof.md) compares observations against an explicit baseline.
+- [token-tracker](https://github.com/pepperonas/token-tracker/blob/main/README_EN.md) matches Claude meter movement with observed API costs and labels its forecasts.
 - [NerfTrack](https://github.com/NerfTrack/NerfTrack), inspected at `2209711ee291867d1529eef56800be9fb88ee5fe`: useful reset-aware cost/percentage pairing, explicit speed evidence and confidence checks. GPL-3.0. Its live price refresh can reprice old history, so chart changes are not necessarily quota-policy changes. Single-device logs cannot establish a hardware penalty.
 - [codex-usage](https://github.com/zJay26/codex-usage), inspected at `53bac40a5402c3f9958b0d4504b136630667a593`: useful machine ownership, token normalization, fixed-point estimates and explicit coverage. MIT. Standard API and optional Codex Fast-weighted views answer different questions; neither establishes a universal subscription denominator.
 - [codex-usage-audit](https://github.com/razzededge/codex-usage-audit), inspected at `a3347b75dd598984f600887316a0030dec2d9886`: useful separate credit/API views, context/cache diagnostics and parent/subagent accounting. MIT. A task audit is not a monthly cross-device subscription measurement.

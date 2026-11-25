@@ -9,17 +9,19 @@ import (
 )
 
 type Profile struct {
-	PlanType   string  `json:"planType,omitempty"`
-	Name       string  `json:"name"`
-	MonthlyUSD float64 `json:"monthlyUsd"`
-	Multiplier float64 `json:"multiplier"`
-	Source     string  `json:"source"`
+	PlanType        string  `json:"planType,omitempty"`
+	Name            string  `json:"name"`
+	NextBillingDate string  `json:"nextBillingDate,omitempty"`
+	MonthlyUSD      float64 `json:"monthlyUsd"`
+	Multiplier      float64 `json:"multiplier"`
+	Source          string  `json:"source"`
 }
 type Event struct {
 	At                                      time.Time
 	End                                     time.Time
 	Model, Effort, Speed, Device, Plan      string
 	Tokens, Input, Cached, Output, Requests int
+	CacheWrite                              int
 	Cost, Credits                           float64
 	Priced, CreditsKnown, Archived          bool
 }
@@ -32,9 +34,10 @@ type Meter struct {
 	Source string    `json:"source"`
 }
 type Point struct {
-	At   time.Time `json:"at"`
-	Used float64   `json:"used"`
-	Cost float64   `json:"cost"`
+	At      time.Time `json:"at"`
+	Used    float64   `json:"used"`
+	Cost    float64   `json:"cost"`
+	matched bool
 }
 type Cycle struct {
 	UnmatchedPoints float64   `json:"unmatchedPoints"`
@@ -57,25 +60,34 @@ type Cycle struct {
 	Low             *float64  `json:"low"`
 	High            *float64  `json:"high"`
 	Points          []Point   `json:"points"`
+	earlyRefill     bool
+	priorReset      time.Time
+	priorUsed       float64
 }
 type Model struct {
-	Model           string   `json:"model"`
-	Effort          string   `json:"effort"`
-	Speed           string   `json:"speed"`
-	Cost            float64  `json:"cost"`
-	Credits         float64  `json:"credits"`
-	CreditsUnknown  int      `json:"creditsUnknown"`
-	Requests        int      `json:"requests"`
-	UnknownRequests int      `json:"unknownRequests"`
-	Tokens          int      `json:"tokens"`
-	Input           int      `json:"input"`
-	Cached          int      `json:"cached"`
-	Output          int      `json:"output"`
-	QuotaPoints     float64  `json:"quotaPoints"`
-	MatchedCost     float64  `json:"matchedCost"`
-	MatchedOutput   int      `json:"matchedOutput"`
-	Per100          *float64 `json:"per100"`
-	OutputPerPoint  *float64 `json:"outputPerPoint"`
+	Model            string   `json:"model"`
+	Effort           string   `json:"effort"`
+	Speed            string   `json:"speed"`
+	Cost             float64  `json:"cost"`
+	Credits          float64  `json:"credits"`
+	CreditsUnknown   int      `json:"creditsUnknown"`
+	Requests         int      `json:"requests"`
+	UnknownRequests  int      `json:"unknownRequests"`
+	Tokens           int      `json:"tokens"`
+	Input            int      `json:"input"`
+	Cached           int      `json:"cached"`
+	Output           int      `json:"output"`
+	QuotaPoints      float64  `json:"quotaPoints"`
+	MatchedCost      float64  `json:"matchedCost"`
+	MatchedOutput    int      `json:"matchedOutput"`
+	MatchedInput     int      `json:"matchedInput"`
+	MatchedCached    int      `json:"matchedCached"`
+	MatchedWrites    int      `json:"matchedWrites"`
+	MatchedRequests  int      `json:"matchedRequests"`
+	MatchedIntervals int      `json:"matchedIntervals"`
+	MatchedUnpriced  int      `json:"matchedUnpriced"`
+	Per100           *float64 `json:"per100"`
+	OutputPerPoint   *float64 `json:"outputPerPoint"`
 }
 type Device struct {
 	Name     string  `json:"name"`
@@ -83,17 +95,18 @@ type Device struct {
 	Requests int     `json:"requests"`
 }
 type Report struct {
-	RejectedMeterCorrections int      `json:"rejectedMeterCorrections"`
-	Profile                  Profile  `json:"profile"`
-	Cost                     float64  `json:"cost"`
-	Requests                 int      `json:"requests"`
-	UnknownRequests          int      `json:"unknownRequests"`
-	ArchivedRequests         int      `json:"archivedRequests"`
-	ValueMultiple            *float64 `json:"valueMultiple"`
-	Cycles                   []Cycle  `json:"cycles"`
-	Models                   []Model  `json:"models"`
-	Devices                  []Device `json:"devices"`
-	Warnings                 []string `json:"warnings"`
+	RejectedMeterCorrections int           `json:"rejectedMeterCorrections"`
+	Profile                  Profile       `json:"profile"`
+	Cost                     float64       `json:"cost"`
+	Requests                 int           `json:"requests"`
+	UnknownRequests          int           `json:"unknownRequests"`
+	ArchivedRequests         int           `json:"archivedRequests"`
+	ValueMultiple            *float64      `json:"valueMultiple"`
+	Cycles                   []Cycle       `json:"cycles"`
+	Models                   []Model       `json:"models"`
+	Devices                  []Device      `json:"devices"`
+	Warnings                 []string      `json:"warnings"`
+	WeeklyValue              []WeeklyValue `json:"weeklyValue,omitempty"`
 }
 
 func number(v float64) *float64 {
@@ -200,17 +213,24 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 		}
 		changed := cycle == nil || m.Quota != previous.Quota || m.Plan != previous.Plan || m.Used < previous.Used-0.001 || (!m.Reset.IsZero() && !previous.Reset.IsZero() && math.Abs(m.Reset.Sub(previous.Reset).Seconds()) > 60)
 		if changed {
+			earlyRefill := false
 			if cycle != nil {
 				boundary = "meter correction or reset"
 				if m.Quota != previous.Quota {
 					boundary = "first observation"
+				} else if m.Plan != previous.Plan {
+					boundary = "plan changed"
 				} else if !previous.Reset.IsZero() && !m.At.Before(previous.Reset) {
 					boundary = "scheduled boundary observed"
 				} else if m.Used < previous.Used {
 					boundary = "early reset observed; cause unknown"
+					earlyRefill = m.Source == "poll" && previous.Source == "poll" &&
+						m.At.After(previous.At) && !previous.Reset.IsZero() &&
+						m.At.Before(previous.Reset.Add(-time.Minute)) &&
+						m.Reset.After(previous.Reset.Add(time.Minute)) && previous.Used-m.Used > 5
 				}
 			}
-			r.Cycles = append(r.Cycles, Cycle{Start: m.At, End: m.At, Reset: m.Reset, Quota: m.Quota, Plan: m.Plan, StartUsed: m.Used, EndUsed: m.Used, Boundary: boundary, Points: []Point{{At: m.At, Used: m.Used}}})
+			r.Cycles = append(r.Cycles, Cycle{Start: m.At, End: m.At, Reset: m.Reset, Quota: m.Quota, Plan: m.Plan, StartUsed: m.Used, EndUsed: m.Used, Boundary: boundary, Points: []Point{{At: m.At, Used: m.Used}}, earlyRefill: earlyRefill, priorReset: previous.Reset, priorUsed: previous.Used})
 			cycle = &r.Cycles[len(r.Cycles)-1]
 			anchor = m
 		} else if m.At.After(previous.At) && cycle.EndUsed < 100 {
@@ -222,11 +242,12 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 				unknown := 0
 				only := ""
 				mixed := false
-				outputs := 0
+				outputs, inputs, cached, writes := 0, 0, 0, 0
 				count := 0
 				// An hourly row can start before this interval and still overlap it.
 				// Its total cannot establish where within the hour quota was spent.
-				if archiveEnds[from].After(anchor.At) {
+				archiveOverlap := archiveEnds[from].After(anchor.At)
+				if archiveOverlap {
 					cycle.ArchiveTiming = true
 					mixed = true
 				}
@@ -240,11 +261,15 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 					}
 					if !e.End.IsZero() && e.End.After(m.At) {
 						unknown += e.Requests
+						mixed = true
 						continue
 					}
 					cost += e.Cost
 					count += e.Requests
 					outputs += e.Output
+					inputs += e.Input
+					cached += e.Cached
+					writes += e.CacheWrite
 					if !e.Priced {
 						unknown += e.Requests
 					}
@@ -256,6 +281,7 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 					}
 					if e.Archived {
 						cycle.ArchiveTiming = true
+						archiveOverlap = true
 						mixed = true
 					}
 				}
@@ -267,8 +293,8 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 				cycle.End = m.At
 				cycle.EndUsed = m.Used
 				cycle.Used = m.Used - cycle.StartUsed
-				cycle.Points = append(cycle.Points, Point{At: m.At, Used: m.Used, Cost: cycle.Cost})
-				if (m.Quota == "seven_day" || m.Quota == "weekly" || strings.HasSuffix(m.Quota, ":weekly")) && delta >= 5 && unknown == 0 && count > 0 && !mixed {
+				cycle.Points = append(cycle.Points, Point{At: m.At, Used: m.Used, Cost: cycle.Cost, matched: count > 0 && unknown == 0 && !archiveOverlap})
+				if weeklyModelQuota(m.Quota) && delta >= 5 && count > 0 && !mixed {
 					base := models[only]
 					idx := -1
 					for i, v := range cycle.Models {
@@ -285,6 +311,12 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 					v.QuotaPoints += delta
 					v.MatchedCost += cost
 					v.MatchedOutput += outputs
+					v.MatchedInput += inputs
+					v.MatchedCached += cached
+					v.MatchedWrites += writes
+					v.MatchedRequests += count
+					v.MatchedIntervals++
+					v.MatchedUnpriced += unknown
 				}
 				anchor = m
 			}
@@ -295,7 +327,7 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 		c := &r.Cycles[i]
 		for j := range c.Models {
 			m := &c.Models[j]
-			if m.QuotaPoints >= 5 {
+			if m.QuotaPoints >= 5 && m.MatchedUnpriced == 0 {
 				m.Per100 = number(m.MatchedCost * 100 / m.QuotaPoints)
 				m.OutputPerPoint = number(float64(m.MatchedOutput) / m.QuotaPoints)
 			}
@@ -310,6 +342,7 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 			c.High = number(c.Cost * 100 / math.Max(1, c.Used-1))
 		}
 	}
+	r.WeeklyValue = weeklyResetValue(r.Cycles)
 	r.Cycles = trimEmptyCycleFragments(r.Cycles)
 	for _, m := range models {
 		if m.QuotaPoints >= 5 {
@@ -334,6 +367,10 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 	}
 	r.Warnings = append(r.Warnings, "API-equivalent value is not an invoice or a measure of task quality. Shared web, cloud and other-device activity may consume quota without local token records.", "x1 and other-plan projections assume linear scaling. They are scenarios, not measured entitlements on other plans. Rounding bounds cover meter precision only.")
 	return r
+}
+
+func weeklyModelQuota(quota string) bool {
+	return quota == "seven_day" || quota == "weekly" || quota == "seven_day_sonnet" || quota == "seven_day_opus" || strings.HasSuffix(quota, ":weekly")
 }
 
 // A selected account's poll is authoritative. Task-log telemetry can come from

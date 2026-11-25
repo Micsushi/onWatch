@@ -17,14 +17,11 @@ func TestSubscriptionNavigation_AllView(t *testing.T) {
 		t.Fatalf("status %d", rr.Code)
 	}
 	body := rr.Body.String()
-	for _, provider := range []string{"codex", "anthropic", "antigravity"} {
-		link := `href="/watch/?provider=` + provider + `#subscription-value"`
-		if !strings.Contains(body, link) {
-			t.Errorf("missing comparison link for %s", provider)
-		}
+	if !strings.Contains(body, `data-provider="subscription-value" role="tab"`) {
+		t.Error("missing Subscription Value tab")
 	}
-	if strings.Contains(body, `id="subscription-value"`) {
-		t.Error("all view must not initialize a comparison with unsupported provider both")
+	if strings.Contains(body, `id="subscription-value"`) || strings.Contains(body, `id="subscription-navigation"`) {
+		t.Error("All view must keep subscription content on its own tab")
 	}
 }
 
@@ -34,9 +31,24 @@ func TestSubscriptionNavigation_ProviderView(t *testing.T) {
 	for _, provider := range []string{"codex", "anthropic", "antigravity"} {
 		rr := httptest.NewRecorder()
 		h.Dashboard(rr, httptest.NewRequest(http.MethodGet, "/?provider="+provider, nil))
-		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `id="subscription-value" data-provider="`+provider+`"`) {
-			t.Errorf("missing comparison for %s", provider)
+		body := rr.Body.String()
+		if rr.Code != http.StatusOK || !strings.Contains(body, `data-provider="subscription-value" role="tab"`) || strings.Contains(body, `id="subscription-value"`) {
+			t.Errorf("%s should link to the dedicated tab without rendering the comparison", provider)
 		}
+	}
+	rr := httptest.NewRecorder()
+	h.Dashboard(rr, httptest.NewRequest(http.MethodGet, "/?provider=subscription-value&view=codex", nil))
+	body := rr.Body.String()
+	if rr.Code != http.StatusOK || !strings.Contains(body, `id="subscription-value" data-provider="codex"`) {
+		t.Fatalf("missing dedicated comparison, status %d", rr.Code)
+	}
+	for _, provider := range []string{"anthropic", "codex", "antigravity"} {
+		if !strings.Contains(body, `data-subscription-provider="`+provider+`"`) {
+			t.Errorf("missing comparison row for %s", provider)
+		}
+	}
+	if strings.Contains(body, `id="device-health-section"`) || strings.Contains(body, `id="usage-chart"`) {
+		t.Error("subscription tab rendered unrelated dashboard sections")
 	}
 }
 
@@ -48,7 +60,6 @@ func TestDashboardShowsPrimaryGraphsBeforeSecondaryStatusSections(t *testing.T) 
 		`id="platform-cost-section"`,
 		`<section class="chart-section`,
 		`id="platform-cost-breakdown-section"`,
-		`id="subscription-value"`,
 		`id="device-health-section"`,
 	}
 	previous := -1
