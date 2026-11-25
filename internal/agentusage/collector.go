@@ -15,15 +15,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/onllm-dev/onwatch/v2/internal/ingest"
 )
 
 const (
-	SourceClaude       = "claude"
-	SourceCodex        = "codex"
-	SourceCursorCSV    = "cursor_csv"
-	SourceCursorSQLite = "cursor_sqlite"
-	SourceGemini       = "gemini"
-	SourceAntigravity  = "antigravity"
+	SourceClaude        = "claude"
+	SourceCodex         = "codex"
+	SourceCursorCSV     = "cursor_csv"
+	SourceCursorSQLite  = "cursor_sqlite"
+	SourceGemini        = "gemini"
+	SourceAntigravity   = "antigravity"
+	SourceAntigravityDB = "antigravity_db"
 
 	initialScanWindow  = 6 * time.Hour
 	sourcePathCacheTTL = 30 * time.Second
@@ -58,6 +61,8 @@ type fileState struct {
 	Size    int64
 	ModTime int64
 	Info    os.FileInfo
+	WALSize int64
+	WALTime int64
 }
 
 type sourcePathCacheEntry struct {
@@ -463,6 +468,21 @@ func (c *Collector) collectSource(source Source) ([]UsageEvent, error) {
 					events = append(events, *delta)
 				}
 			}
+		case SourceAntigravityDB:
+			if state.Size == 0 {
+				continue
+			}
+			fileEvents, err := parseAntigravityConversation(path, c.pricing)
+			if err != nil {
+				c.logger.Debug("could not read Antigravity usage database", "error", err)
+				continue
+			}
+			cutoff := c.now().Add(-ingest.MaxLiveObservationAge)
+			for _, event := range fileEvents {
+				if event.Timestamp.After(cutoff) {
+					events = append(events, event)
+				}
+			}
 		default:
 			return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
 		}
@@ -578,11 +598,17 @@ func (c *Collector) currentSourceFileState(path string) (fileState, bool, error)
 		return fileState{}, false, err
 	}
 	state := fileState{Size: info.Size(), ModTime: info.ModTime().UnixNano(), Info: info}
+	if strings.EqualFold(filepath.Ext(path), ".db") {
+		if wal, err := os.Stat(path + "-wal"); err == nil {
+			state.WALSize, state.WALTime = wal.Size(), wal.ModTime().UnixNano()
+		}
+	}
 	previous, ok := c.fileStates[path]
 	if !ok {
 		return state, true, nil
 	}
-	changed := previous.Size != state.Size || previous.ModTime != state.ModTime
+	changed := previous.Size != state.Size || previous.ModTime != state.ModTime ||
+		previous.WALSize != state.WALSize || previous.WALTime != state.WALTime
 	if previous.Info != nil && !os.SameFile(previous.Info, info) {
 		changed = true
 	}
@@ -642,6 +668,10 @@ func expandSourcePaths(path, kind string) ([]string, error) {
 			}
 		case SourceAntigravity:
 			if strings.HasSuffix(strings.ToLower(filepath.Base(candidate)), ".settings.json") {
+				paths = append(paths, candidate)
+			}
+		case SourceAntigravityDB:
+			if ext == ".db" && filepath.Dir(candidate) == path && entry.Type().IsRegular() {
 				paths = append(paths, candidate)
 			}
 		default:
@@ -732,6 +762,9 @@ func DefaultSources(home string) []Source {
 	} else {
 		addDir(SourceAntigravity, filepath.Join(home, ".gemini", "antigravity"), "antigravity", "gemini", true)
 		addDir(SourceAntigravity, filepath.Join(home, ".factory", "sessions"), "antigravity", "gemini", true)
+	}
+	for _, variant := range []string{"antigravity", "antigravity-cli", "antigravity-ide"} {
+		addDir(SourceAntigravityDB, filepath.Join(home, ".gemini", variant, "conversations"), "antigravity", "gemini", true)
 	}
 	if csvPath := strings.TrimSpace(os.Getenv("ONWATCH_CURSOR_USAGE_CSV")); csvPath != "" {
 		if _, err := os.Stat(csvPath); err == nil {

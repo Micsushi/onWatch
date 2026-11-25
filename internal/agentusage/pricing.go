@@ -251,6 +251,11 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_read_input_token_cost": 0.000000175,
 			"cache_creation_input_token_cost": 0.00000175
 		},
+		"gemini-4-neon": {
+			"input_cost_per_token": 0.000003,
+			"cache_read_input_token_cost": 0.00000015,
+			"output_cost_per_token": 0.000015
+		},
 		"google/gemini-2.5-pro": {
 			"input_cost_per_token": 0.00000125,
 			"output_cost_per_token": 0.00001,

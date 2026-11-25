@@ -2,6 +2,16 @@
 
 Track your Antigravity AI model quota usage with onWatch.
 
+The agent usage collector reads the current Antigravity Desktop, IDE and CLI
+SQLite conversation databases from the `conversations` subdirectories of
+`~/.gemini/antigravity`, `~/.gemini/antigravity-ide` and
+`~/.gemini/antigravity-cli`. It reads accounting and timing fields in
+read-only mode. It keeps token counts, model, known effort, and timing.
+Usage without generation or matching step timestamps is skipped, so it
+cannot be assigned to the wrong quota window. The collector still supports
+older cumulative settings logs. See [ccusage's Antigravity guide](https://ccusage.com/guide/antigravity/)
+and [agent-walker's field observations](https://github.com/miiiiiiich/agent-walker/blob/main/docs/agy.md).
+
 ## Central collector account binding
 
 Central collector assignments must explicitly set `antigravity_account_email` to

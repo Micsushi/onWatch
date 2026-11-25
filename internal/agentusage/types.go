@@ -182,6 +182,17 @@ func (e UsageEvent) stableEventKey(ts time.Time, total int) string {
 }
 
 func (e UsageEvent) dedupeKey(ts time.Time, total int) string {
+	if e.Source == "antigravity" && (strings.HasPrefix(e.UsageSignature, "antigravity-generation:") || strings.HasPrefix(e.UsageSignature, "antigravity-row:")) {
+		h := sha256.New()
+		account := strings.TrimSpace(e.Account)
+		if account == "" {
+			account = "default"
+		}
+		writeStableEventPart(h, e.Source)
+		writeStableEventPart(h, account)
+		writeStableEventPart(h, e.UsageSignature)
+		return hex.EncodeToString(h.Sum(nil))
+	}
 	if strings.TrimSpace(e.UsageSignature) != "" {
 		h := sha256.New()
 		writeStableEventPart(h, e.Source)
