@@ -68,6 +68,12 @@ versions and harnesses distinct. The combined forecast uses three suites:
 | [Terminal-Bench 4.1](https://www.tbench.ai/?efforts=all&version=4.1) | The official leaderboard payload supplies successes, trial count and separate output totals. The [metrics code](https://github.com/harbor-framework/terminal-bench/blob/v4.1.0/leaderboard/src/leaderboard/core/metrics.py) retains token spend when a trial is disqualified and assigns it zero credit. The [4.1 release](https://github.com/harbor-framework/terminal-bench/releases/tag/v4.1.0) regrades runs with revised isolated verifiers. This snapshot uses 330 trials per native-harness setting. Astra Max passed 205 of 330 here. |
 | [Ramp SWE-Bench v2.1](https://labs.ramp.com/swebench#leaderboard) | Recomputed from the [official trial CSV](https://labs.ramp.com/swebench/v2/data/v21/results.csv?v=v2.1). Each of the 13 imported native-harness settings had the same 500 evaluated task IDs and complete output counts. Astra High passed 382, Neon High passed 381 and Sonnet High passed 316. The [methodology](https://builders.ramp.com/post/building-llm-judges-to-judge-llms) includes an LLM judge for additional verification on private engineering tasks. Those tasks and judges cannot be independently reproduced from the CSV. |
 
+The [published Opus 5.5 traces](https://github.com/morganlinton/vulcanbench-opus55-traces/tree/f4e0f2f131fcf7c78910633c12192eb53a179a1f)
+distinguish serving models. The VulcanBench rows keep all 23 attempts per
+effort, count mixed-model attempts as unsolved for Opus 5.5 alone, and
+include only Opus 5.5's output tokens. Medium has 20 solo solves and 23
+with fallbacks.
+
 Additional sources reviewed:
 
 - [DeepSWE v1.1](https://deepswe.datacurve.ai/) is available as a standalone comparison. Its [public verifier](https://github.com/datacurve-ai/deep-swe/blob/0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea/tasks/abs-module-cache-flags/tests/test.sh) grades submitted patches in a verifier environment. [Epoch AI](https://epoch.ai/benchmarks/deepswe/review) confirmed false negatives on at least 23 of 113 tasks, so the suite is excluded from the combined projection.

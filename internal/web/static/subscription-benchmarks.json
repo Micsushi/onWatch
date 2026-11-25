@@ -116,6 +116,11 @@
   ["gemini-4-carbon","medium","gemini-weekly",17.69207034792219,988662,9959579,0,197718,9.900923800000001,4,6],
   ["gemini-4-neon","medium","gemini-weekly",3.43977723802839,278051,2530783,0,58988,2.0985904499999997,3,4]],
 "vulcanBench":[
+  ["claude-opus-5-5","low",17,23,29314.521739130436],
+  ["claude-opus-5-5","medium",20,23,39937.52173913043],
+  ["claude-opus-5-5","high",15,23,36875.65217391304],
+  ["claude-opus-5-5","xhigh",15,23,39726.0],
+  ["claude-opus-5-5","max",11,23,53240.086956521736],
   ["gpt-6.2-astra","low",23,23,2656.0434782608695],
   ["gpt-6.2-astra","medium",23,23,3828.086956521739],
   ["gpt-6.2-astra","high",23,23,7445.95652173913],
@@ -151,6 +156,7 @@
   ["gpt-6.1-terra","xhigh",16,23,12930.652173913044],
   ["gpt-6.1-terra","max",23,23,28762.82608695652]],
 "vulcanSources":{
+  "claude-opus-5-5":"https://github.com/morganlinton/vulcanbench-opus55-traces/tree/f4e0f2f131fcf7c78910633c12192eb53a179a1f",
   "gpt-6.2-astra": "https://vulcanbench.com/benchmarks/swe-v4-gpt62-astra-v333.html",
   "gpt-6.2-sol": "https://vulcanbench.com/benchmarks/swe-v4-gpt62-sol-v331.html",
   "gemini-4-neon": "https://vulcanbench.com/benchmarks/swe-v4-gemini4-neon-v332.html",
