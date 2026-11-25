@@ -4632,18 +4632,29 @@ select.settings-input {
 .subscription-capacity details { border-top: 1px solid var(--border-default); margin: 0; }
 .subscription-capacity summary { padding: 12px 0; }
 .subscription-capacity details:last-child:not([open]) summary { padding-bottom: 0; }
-.subscription-evidence-controls { margin: 0 0 12px; }
 .subscription-source-links { display: flex; flex-wrap: wrap; gap: 6px 14px; padding-block: 8px; }
 .subscription-source-links a { color: var(--accent-teal-text); font-size: .85rem; }
-.subscription-capacity-chart { height: clamp(260px, 33vw, 355px); margin: 4px 0 14px; }
+.subscription-capacity-chart { height: clamp(390px, 51vw, 570px); margin: 4px 0 14px; }
+.subscription-chart-corner {
+  position: absolute;
+  inset-block-start: 4px;
+  inset-inline-end: 6px;
+  padding: 2px 9px 3px 4px;
+  border-block-start: 1px solid currentColor;
+  border-inline-end: 1px solid currentColor;
+  color: var(--accent-teal-text);
+  font-size: .75rem;
+  font-weight: 600;
+  pointer-events: none;
+}
 .subscription-chart-coverage { margin-inline-start: 8px; font-size: .8rem; font-weight: 400; color: var(--text-secondary); }
 .subscription-chart-legend:not([hidden]) { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 6px; padding: 0; list-style: none; }
 .subscription-chart-legend li { display: inline-flex; align-items: center; gap: 6px; font-size: .8rem; }
 .subscription-chart-legend li::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--plot-color); }
 .subscription-plot-legend { display: flex; justify-content: space-between; flex-wrap: wrap; column-gap: 16px; }
 .subscription-chart-source-key { --plot-color: var(--text-secondary); color: var(--text-secondary); }
-.subscription-chart-source-key .published::before { border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
-.subscription-chart-source-key .estimated::before { border-radius: 0; transform: rotate(45deg) scale(.8); }
+.subscription-chart-source-key .published::before { background: transparent; border: 1px solid var(--plot-color); }
+.subscription-chart-source-key .estimated::before { opacity: .45; }
 .subscription-capacity-table table { min-width: 0; table-layout: fixed; }
 .subscription-capacity-table thead th:first-child { width: 34%; }
 .subscription-capacity-table thead th:nth-child(2) { width: 18%; }
@@ -4669,6 +4680,7 @@ select.settings-input {
   .subscription-observed-table th:nth-child(1) { width: 26%; }
   .subscription-observed-table th:nth-child(2) { width: 16%; }
   .subscription-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .subscription-filters select { width: 100%; }
   .subscription-filters button { justify-self: end; }
   .subscription-capacity-table thead th:first-child { width: 25%; }
   .subscription-capacity-table thead th:nth-child(2) { width: 20%; }

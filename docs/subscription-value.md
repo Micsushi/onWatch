@@ -30,8 +30,9 @@ For a matching plan and weekly meter, sum tokens and their standard API-equivale
 
 Same-tier samples take precedence. Untagged Claude meters use the saved plan, and the evidence labels that assumption. The [Claude Ultra weekly ratio](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan) is 10× Pro. [Google's published ratios](https://antigravity.google/blog/changes-to-antigravity-plans/) are 5× and 20× and apply here to the shared Gemini quota. The [current Codex plan description](https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers) supplies a tier ordering, so each tier uses independent measurements.
 
-The chart marks local samples, published studies and modeled estimates with
-different symbols. **Evidence** shows each applicable source and compares
+The chart uses one color per provider and a shape for each model. Solid
+markers show local samples, outlined markers show published studies, and
+lighter markers show modeled estimates. **Evidence** compares
 its four-week API dollars and output with the local estimate when both apply
 to the same tier. The two deltas can point in different directions because
 cache reads, fresh input and output have different prices. A one-point
@@ -57,22 +58,37 @@ by the sum of pass probabilities divided by the sum of mean output tokens.
 Failures count in the source averages. The metric describes benchmark tasks.
 The harness, scoring rule, task length and difficulty can differ between suites.
 
-The **Suites** column counts inputs to each estimate. Open **Evidence** to see
-the suite names, passes and mean output per attempt for a row, or select one
-suite to compare the same workload across models. Coverage differs by model and
-effort. Compare rows that use the same suites. onWatch leaves a forecast blank
-when the matching quota or benchmark sample is missing.
+The chart opens on VulcanBench so effort levels have a common workload. Use
+the workload selector for repository fixes on Ramp or terminal workflows on
+Terminal-Bench. The **Pass rate** column is the fraction of attempts that met
+the benchmark's pass rule. Combined averages the pass rates across available
+suites equally. **Evidence** lists the underlying passes, attempts, and mean
+output per attempt. Coverage differs by model and effort.
 
-The chart uses API dollars per subscription dollar on the horizontal axis and
-estimated solves per four weeks on the vertical axis. Its coverage count reflects
-how many visible settings have both estimates. Select a plan, provider, model,
-or suite to focus the plot. Hover or tap a point for its model, effort, quota
-source and suites. Lines group effort levels with the same provider, model,
-speed, quota source and suite mix. Local and
-published quota projections appear as a range when both exist, and as separate
-chart points. The range describes agreement between those sources. **CSV**
-exports the individual estimates, four-week token counts, matched quota points
-and suite names. Raw local observations stay in onWatch's SQLite history.
+The upper-right corner corresponds to higher API-equivalent dollars per
+subscription dollar and more estimated passes in four weeks. Compare those
+directions on the same workload. A fast, cheap model can complete more tasks
+while passing a smaller share of attempts. Use the pass rate and the workload
+together when a failure is expensive or a change needs extensive review.
+
+Lines connect effort levels in order for the same model, speed, and suite
+mix. The line uses one point per effort, favoring same-tier local evidence,
+same-tier published evidence, scaled evidence, and then modeled estimates.
+Dashed segments mark a change in evidence source or scale, or a modeled
+endpoint. Other source observations remain separate points. Hover or tap a
+point for its effort, pass rate, and source. **CSV** includes the pass fraction,
+quota points, four-week estimates, and suites.
+
+### Quality on larger workloads
+
+Haiku 5.5 at Max passed 22 of 23 legacy reconstruction tasks on
+[VulcanBench](https://vulcanbench.com/benchmarks/swe-v4-haiku55-v324.html).
+On [Terminal-Bench 4.1](https://www.tbench.ai/?efforts=all&version=4.1) it
+passed 132 of 330 attempts (40%). Sonnet 5.5 Max passed 211 of 330 (64%) on
+that same Terminal-Bench suite. The success criterion, project context and
+tooling differ between suites. Functional passes measure completion against
+the verifier. Review effort, maintainability, and long-term correctness
+depend on the repository and its acceptance tests.
 
 ## Benchmark audit
 

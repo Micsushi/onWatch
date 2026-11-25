@@ -241,7 +241,8 @@
           solves:outputPerMix > 0 && outTokens > 0 ? outTokens * solvesPerMix / outputPerMix : null,
           perDollar:api != null && plan.fee > 0 ? api / plan.fee : null}];
       });
-      rows.push({...item, provider, plan, estimates, solvesPerOutput:outputPerMix > 0 ? solvesPerMix/outputPerMix : null});
+      const passRate = item.benchmarks.length ? solvesPerMix/item.benchmarks.length : null;
+      rows.push({...item, provider, plan, estimates, passRate, solvesPerOutput:outputPerMix > 0 ? solvesPerMix/outputPerMix : null});
     }
 
     // Forecast missing efforts from a priced workload and a measured budget
@@ -315,6 +316,7 @@
     const modelLabel = row => modelName(row.model) + ' · ' + effortName(row);
     const suiteNames = row => row.benchmarks.map(sample => codingBenchmarks[sample.id].name).join(' + ');
     const whole = n => num(Math.round(n));
+    const passes = n => n == null ? '—' : num(Math.round(n*100)) + '%';
     el('capacity-rows').innerHTML = providers.map(id => {
       const group = rows.filter(row => row.provider === id);
       if (!group.length) return '';
@@ -325,14 +327,14 @@
         group.map((row,index) => `<tr><th scope="row" aria-label="${esc(modelLabel(row))}">${row.model !== group[index-1]?.model ? esc(modelName(row.model)) : ''}</th><td>${esc(effortName(row))}</td>` +
           [range(row.estimates,'perDollar',usd), range(row.estimates,'solves',whole)]
             .map(value=>`<td>${esc(value)}</td>`).join('') +
-          `<td title="${esc(suiteNames(row))}">${row.benchmarks.length || '—'}</td></tr>`).join('');
+          `<td title="${esc(suiteNames(row))}">${passes(row.passRate)}</td></tr>`).join('');
     }).join('');
 
     const status = el('capacity-status');
     capacityExport = rows.flatMap(row => row.estimates.map(estimate => [
       row.provider, row.model, row.plan.name, row.effort, row.speed, quotaSources[estimate.sample.source].name,
       estimate.sample.basis, estimate.sample.points,
-      estimate.inTokens, estimate.outTokens, estimate.api, estimate.perDollar, estimate.solves, suiteNames(row),
+      estimate.inTokens, estimate.outTokens, estimate.api, estimate.perDollar, estimate.solves, row.passRate, suiteNames(row),
     ]));
     el('capacity-export').disabled = !capacityExport.length;
     status.textContent = providers.some(id => !capacityReports.has(id)) || (!benchmarkData && !benchmarkError) ? 'Loading…'
@@ -372,16 +374,22 @@
     capacityChart = null;
     const groups = new Map();
     const plottedByProvider = new Map(providers.map(id => [id,0]));
+    const evidenceRank = estimate => estimate.sample.source === 'estimate' ? 4
+      : (estimate.scale === 1 ? 0 : 2) + (estimate.sample.source === 'local' ? 0 : 1);
     for (const row of rows) {
-      let plotted = false;
-      for (const estimate of row.estimates) {
-        if (!Number.isFinite(estimate.perDollar) || !Number.isFinite(estimate.solves)) continue;
-        const group = [row.provider,row.model,row.speed,estimate.sample.source,suiteNames(row)].join('|');
+      const points = row.estimates.filter(estimate => Number.isFinite(estimate.perDollar) && Number.isFinite(estimate.solves))
+        .sort((a,b)=>evidenceRank(a)-evidenceRank(b));
+      if (!points.length) continue;
+      const suites = suiteNames(row);
+      points.forEach((estimate,index) => {
+        const group = [row.provider,row.model,row.speed,suites,index ? 'alternate' : 'primary'].join('|');
         if (!groups.has(group)) groups.set(group, []);
-        groups.get(group).push({x:estimate.perDollar,y:estimate.solves,effort:effortName(row),basis:estimate.sample.basis});
-        plotted = true;
-      }
-      if (plotted) plottedByProvider.set(row.provider,plottedByProvider.get(row.provider)+1);
+        const sample = estimate.sample;
+        const basis = sample.basis || (sample.source === 'daily' && sample.points <= 2 ? `${sample.points} pp · coarse meter` : '');
+        groups.get(group).push({x:estimate.perDollar,y:estimate.solves,effort:effortName(row),passRate:row.passRate,
+          source:sample.source,basis,scale:estimate.scale});
+      });
+      plottedByProvider.set(row.provider,plottedByProvider.get(row.provider)+1);
     }
     const canPlot = groups.size > 0 && typeof Chart !== 'undefined';
     const plotted = [...plottedByProvider.values()].reduce((sum,count) => sum+count, 0);
@@ -398,6 +406,7 @@
     const theme = getComputedStyle(root);
     const color = theme.getPropertyValue('--text-secondary').trim();
     const grid = theme.getPropertyValue('--border-light').trim();
+    const surface = theme.getPropertyValue('--surface-card').trim();
     const light = document.documentElement.getAttribute('data-theme') === 'light';
     legend.replaceChildren(...[...plottedByProvider].filter(([,count]) => count > 0).map(([id]) => {
       const item = document.createElement('li');
@@ -405,23 +414,48 @@
       item.style.setProperty('--plot-color',resetColors[id][light ? 0 : 1]);
       return item;
     }));
+    const shapes = ['circle','triangle','rectRot','rectRounded','star','rect','crossRot','cross','dash','line'];
+    const modelOrder = new Map(providers.map(id => [id, [...new Set(allRows.filter(row=>row.provider===id && row.estimates.length)
+      .map(row=>row.model))].sort()]));
     const datasets = [...groups.entries()].map(([key,data]) => {
-      const [id,model,speed,source,suites] = key.split('|');
+      const [id,model,speed,suites,series] = key.split('|');
       const shade = resetColors[id][light ? 0 : 1];
+      const pointStyle = shapes[modelOrder.get(id).indexOf(model) % shapes.length];
       return {label:modelName(model), provider:comparisonRows.get(id).dataset.label,
-        source:source === 'local' ? 'Local' : source === 'estimate' ? 'Estimated' : 'Published',
-        sourceLabel:quotaSources[source].name,
-        borderColor:shade, backgroundColor:shade, pointStyle:source === 'local' ? 'circle' : source === 'estimate' ? 'rectRot' : 'triangle',
-        borderDash:source === 'local' ? [] : source === 'estimate' ? [2,4] : [4,4], pointRadius:5, pointHitRadius:10,
-        pointHoverRadius:7, showLine:true, borderWidth:2, data, suites};
+        modelKey:id+'|'+model, borderColor:shade, backgroundColor:shade, pointStyle,
+        pointBackgroundColor:data.map(point=>point.source === 'local' ? shade : point.source === 'estimate' ? shade+'55' : surface),
+        pointBorderColor:shade, pointBorderWidth:1.5, pointRadius:6, pointHitRadius:10, pointHoverRadius:9,
+        showLine:series === 'primary' && data.length>1, borderWidth:1.6,
+        segment:{borderDash:({p0DataIndex,p1DataIndex})=>{
+          const first = data[p0DataIndex], second = data[p1DataIndex];
+          return first.source === second.source && first.source !== 'estimate' && first.scale === second.scale ? [] : [4,4];
+        }},
+        data, suites};
     });
     capacityChart = new Chart(el('capacity-chart'), {
       type:'scatter', data:{datasets},
       options:{responsive:true, maintainAspectRatio:false, animation:false,
-        plugins:{legend:{display:false},tooltip:{callbacks:{
+        layout:{padding:{top:28}},
+        plugins:{legend:{position:'bottom', labels:{color,usePointStyle:true,boxWidth:10,padding:12,
+          generateLabels:chart => {
+            const keys = new Set();
+            return chart.data.datasets.flatMap((set,index) => {
+              if (keys.has(set.modelKey)) return [];
+              keys.add(set.modelKey);
+              return [{text:set.label, pointStyle:set.pointStyle, fillStyle:set.backgroundColor,
+                strokeStyle:set.borderColor, lineWidth:1, datasetIndex:index, fontColor:color, hidden:!chart.isDatasetVisible(index)}];
+            });
+          },
+        }, onClick:(_event,item,{chart}) => {
+          const key = chart.data.datasets[item.datasetIndex].modelKey;
+          chart.data.datasets.forEach((set,index) => {
+            if (set.modelKey === key) chart.setDatasetVisibility(index,item.hidden);
+          });
+          chart.update();
+        }},tooltip:{callbacks:{
           title:([item]) => `${item.dataset.label} · ${item.raw.effort}`,
           label:item => `${usd(item.parsed.x)} per $1 · ${whole(item.parsed.y)} solves per 4 weeks`,
-          afterLabel:item => [`${item.dataset.provider} · ${item.dataset.sourceLabel}`, item.raw.basis, ...item.dataset.suites.split(' + ')].filter(Boolean),
+          afterLabel:item => [`${passes(item.raw.passRate)} passed · ${quotaSources[item.raw.source].name}`, item.raw.basis, ...item.dataset.suites.split(' + ')].filter(Boolean),
         }}},
         scales:{
           x:{beginAtZero:true,grid:{color:grid},title:{display:true,text:'API $ per $1 paid',color},
@@ -446,7 +480,7 @@
     [capacityTier,capacityProvider,capacityModel,el('capacity-benchmark')].forEach(control => control.addEventListener('change',renderCapacity));
     el('capacity-chart-details').addEventListener('toggle',renderCapacity);
     el('capacity-export').addEventListener('click', () => {
-      const header = ['Provider','Model','Plan','Effort','Speed','Quota source','Estimate basis','Quota points','Input tokens / 4 weeks','Output tokens / 4 weeks','API USD / 4 weeks','API USD per USD paid','Estimated solves / 4 weeks','Benchmark'];
+      const header = ['Provider','Model','Plan','Effort','Speed','Quota source','Estimate basis','Quota points','Input tokens / 4 weeks','Output tokens / 4 weeks','API USD / 4 weeks','API USD per USD paid','Estimated solves / 4 weeks','Benchmark pass fraction','Benchmark'];
       const quote = value => {
         const plain = String(value ?? '');
         const safe = typeof value === 'string' && /^[=+\-@\s]/.test(plain) ? "'" + plain : plain;
