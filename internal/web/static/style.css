@@ -4624,12 +4624,36 @@ select.settings-input {
 .subscription-comparison-plan { display: block; color: var(--text-secondary); font-size: .8rem; font-weight: 400; }
 .subscription-comparison-table a, .subscription-note a { color: var(--accent-teal-text); }
 .subscription-comparison-table:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 3px; }
-.subscription-evidence-heading { margin: 20px 0 10px; font-size: 1rem; }
-.subscription-capacity-chart { height: clamp(290px, 40vw, 420px); }
-.subscription-capacity-table { max-height: 520px; }
-.subscription-capacity-table table { min-width: 890px; }
-.subscription-capacity-table thead { position: sticky; top: 0; z-index: 1; }
-.subscription-capacity-table td:nth-child(7) { width: 28%; font-size: .82rem; }
+.subscription-value-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.subscription-capacity .subscription-controls { gap: 8px; }
+.subscription-filters { margin: 16px 0; }
+.subscription-filters select { min-width: 0; }
+.subscription-filters button { margin-inline-start: auto; }
+.subscription-capacity details { border-top: 1px solid var(--border-default); margin: 0; }
+.subscription-capacity summary { padding: 12px 0; }
+.subscription-capacity details:last-child:not([open]) summary { padding-bottom: 0; }
+.subscription-evidence-controls { margin: 0 0 12px; }
+.subscription-source-links { display: flex; flex-wrap: wrap; gap: 6px 14px; padding-block: 8px; }
+.subscription-source-links a { color: var(--accent-teal-text); font-size: .85rem; }
+.subscription-capacity-chart { height: clamp(260px, 33vw, 355px); margin: 4px 0 14px; }
+.subscription-chart-coverage { margin-inline-start: 8px; font-size: .8rem; font-weight: 400; color: var(--text-secondary); }
+.subscription-chart-legend:not([hidden]) { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 6px; padding: 0; list-style: none; }
+.subscription-chart-legend li { display: inline-flex; align-items: center; gap: 6px; font-size: .8rem; }
+.subscription-chart-legend li::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--plot-color); }
+.subscription-capacity-table table { min-width: 0; table-layout: fixed; }
+.subscription-capacity-table thead th:first-child { width: 34%; }
+.subscription-capacity-table thead th:nth-child(2) { width: 18%; }
+.subscription-capacity-table thead th:last-child { width: 12%; }
+.subscription-capacity-table :is(th,td):nth-child(n+3) { text-align: right; }
+.subscription-capacity-table tbody :is(td,th) { padding-block: 8px; }
+.subscription-capacity-table tbody th { background: transparent; color: var(--text-primary); text-transform: none; letter-spacing: 0; }
+.subscription-capacity-table .subscription-provider-row th {
+  border-top: 1px solid var(--border-default);
+  background: var(--surface-card-alt);
+  color: var(--text-primary);
+  padding-block: 10px;
+}
+.subscription-provider-row span { margin-inline-start: 10px; color: var(--text-secondary); font-weight: 400; }
 .subscription-reset-charts:not([hidden]) { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 16px; margin: 16px 0; }
 .subscription-reset-charts > div { min-width: 0; border: 1px solid var(--border-default); border-radius: 12px; padding: 12px; }
 .subscription-reset-charts h3 { margin: 0; font-size: .95rem; }
@@ -4640,10 +4664,15 @@ select.settings-input {
   .subscription-comparison-table th { letter-spacing: 0; text-transform: none; }
   .subscription-observed-table th:nth-child(1) { width: 26%; }
   .subscription-observed-table th:nth-child(2) { width: 16%; }
-  .subscription-weekly-table th:nth-child(1),
-  .subscription-weekly-table th:nth-child(2) { width: 25%; }
+  .subscription-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .subscription-filters button { justify-self: end; }
+  .subscription-capacity-table thead th:first-child { width: 25%; }
+  .subscription-capacity-table thead th:nth-child(2) { width: 20%; }
+  .subscription-capacity-table thead th:nth-child(3) { width: 18%; }
+  .subscription-capacity-table thead th:last-child { width: 15%; }
+  .subscription-capacity-table thead th { padding-inline: 3px; overflow-wrap: normal; }
+  .subscription-capacity-table tbody :is(th,td) { font-size: .8rem; }
   #subscription-reset-summary th:first-child { width: 28%; }
-  .subscription-capacity-table table { min-width: 760px; }
 }
 #subscription-warnings { color: var(--text-secondary); font-size: .85rem; padding-left: 20px; }
 #subscription-warnings li { margin-bottom: 8px; }

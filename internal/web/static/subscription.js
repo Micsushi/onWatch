@@ -51,6 +51,8 @@
   const cells = values => '<tr>'+values.map(value=>`<td>${esc(value)}</td>`).join('')+'</tr>';
   const pricedValue = (cost, requests, unknown) => requests > unknown ? usd(cost)+(unknown?' (partial)':'') : '--';
   const capacityTier = comparison && el('capacity-tier');
+  const capacityProvider = capacityTier && el('capacity-provider');
+  const capacityModel = capacityTier && el('capacity-model');
   const capacityReports = new Map();
   const effortOrder = ['minimal','low','medium','high','xhigh','max','ultra'];
   const standardEfforts = ['low','medium','high','xhigh','max'];
@@ -74,22 +76,31 @@
       {id:'pro', name:'Claude Pro', fee:20}, {id:'ultra', name:'Claude Ultra', fee:200, scale:10},
     ],
     codex: [
-      {id:'plus', name:'ChatGPT Plus', fee:20}, {id:'pro', name:'ChatGPT Pro $200', fee:200},
+      {id:'plus', name:'ChatGPT Plus', fee:20}, {id:'pro', name:'ChatGPT Pro', fee:200},
     ],
     antigravity: [
-      {id:'pro', name:'Google AI Pro', fee:19.99}, {id:'ultra', name:'Google AI Ultra $200', fee:200, scale:20},
+      {id:'pro', name:'Google AI Pro', fee:19.99}, {id:'ultra', name:'Google AI Ultra', fee:200, scale:20},
     ],
   };
-  let capacityChart, benchmarkData, benchmarkError;
+  let capacityChart, benchmarkData, benchmarkError, capacityExport = [];
   const modelID = model => model.toLowerCase().replace(/^((?:gpt|gemini)-\d+)-(\d+)(?=-|$)/, '$1.$2').replace(/-\d{8}$/, '');
   const tokens = n => new Intl.NumberFormat(undefined, {notation:'compact',maximumFractionDigits:2}).format(n);
+  const codingBenchmarks = {
+    vulcanBench: {name:'VulcanBench Frontier v4', url:'https://vulcanbench.com/leaderboard.html'},
+    terminalBench: {name:'Terminal-Bench 4.1', url:'https://www.tbench.ai/?efforts=all&version=4.1'},
+    rampBench: {name:'Ramp SWE-Bench v2.1', url:'https://labs.ramp.com/swebench#leaderboard'},
+    deepSWE: {name:'DeepSWE v1.1', url:'https://deepswe.datacurve.ai/', flagged:true},
+  };
+  const studyURL = 'https://github.com/data-john/SubscriptionBench/blob/bf513a7b42198fba2311cc5fdb35b707f413abcd/site/data/benchmark_data.json';
+  const modelName = model => model.replace(/^gpt/, 'GPT').replace(/^gemini/, 'Gemini').replace(/^claude/, 'Claude')
+    .replace(/-(\d+)-(\d+)(?=-|$)/, '-$1.$2').replaceAll('-', ' ').replace(/\b(astra|sol|sonnet|neon|opus|haiku|hydrogen|fable|terra|luna|carbon|argon|flash)\b/g, word => word[0].toUpperCase() + word.slice(1));
   function modelConfig(model, recordedEffort, speed = '') {
     let id = modelID(model);
     const effortSuffix = id.startsWith('gemini-') && id.match(/-(low|medium|high|xhigh)$/);
     let effort = recordedEffort?.toLowerCase() || effortSuffix?.[1] || '';
     if (effortSuffix) id = id.slice(0, -effortSuffix[0].length);
     if (['extra','extra-high','extra_high','extra high','x-high'].includes(effort)) effort = 'xhigh';
-    return {model:id, effort, speed};
+    return {model:id, effort, speed:speed === 'standard' ? '' : speed};
   }
 
   function capacityPlanID(provider, plan) {
@@ -121,26 +132,21 @@
     const config = (model, effort, speed) => {
       const value = modelConfig(model, effort, speed);
       const key = [value.model,value.effort,value.speed].join('|');
-      if (!configs.has(key)) configs.set(key, {...value, pools:new Map()});
+      if (!configs.has(key)) configs.set(key, {...value, pools:new Map(), benchmarks:[]});
       return configs.get(key);
     };
     const include = model => model.startsWith(provider === 'codex' ? 'gpt-' : provider === 'anthropic' ? 'claude-' : 'gemini-');
-    const benchmarks = new Map();
     for (const [model,efforts] of Object.entries(capacityModels[provider])) {
       for (const effort of efforts) config(model,effort);
     }
-    const addBenchmark = (model, effort, passes, attempts, output) => {
-      const key = [modelID(model),effort].join('|');
-      const sample = benchmarks.get(key) || {passes:0, attempts:0, output:0};
-      sample.passes += passes;
-      sample.attempts += attempts;
-      sample.output += output;
-      benchmarks.set(key, sample);
-    };
-    for (const [model,effort,passes,attempts,meanOutput] of benchmarkData?.deepSWE || []) {
-      if (!include(model)) continue;
-      config(model, effort);
-      if (suite === 'deepSWE') addBenchmark(model, effort, passes, attempts, meanOutput * attempts);
+    for (const [id, source] of Object.entries(codingBenchmarks)) {
+      for (const [model,effort,passes,attempts,meanOutput] of benchmarkData?.[id] || []) {
+        if (!include(model)) continue;
+        const entry = config(model, effort);
+        if ((suite === id || suite === 'all' && !source.flagged) && attempts > 0 && meanOutput > 0) {
+          entry.benchmarks.push({id, passes, attempts, meanOutput});
+        }
+      }
     }
     const addSample = (entry, sample) => {
       const key = [sample.plan,sample.pool,sample.source].join('|');
@@ -164,16 +170,16 @@
       }
     }
     if (provider === 'antigravity') {
-      for (const [model,effort,pool,points,input,cached,writes,output,cost,passes,attempts] of benchmarkData?.subscriptionBench || []) {
+      for (const [model,effort,pool,points,input,cached,writes,output,cost,,attempts] of benchmarkData?.subscriptionBench || []) {
         addSample(config(model,effort), {plan:'pro', pool, source:'study', points, input:input+cached+writes, cached, writes, output, cost, unpriced:0, runs:1, requests:attempts});
-        if (suite === 'subscriptionBench') addBenchmark(model, effort, passes, attempts, output);
       }
     }
 
     const rows = [];
     for (const item of configs.values()) {
-      if (!item.pools.size && !item.speed && [...configs.values()].some(other => other.model === item.model && other.effort === item.effort && other.speed)) continue;
+      if (!item.pools.size && !item.benchmarks.length && !item.speed && [...configs.values()].some(other => other.model === item.model && other.effort === item.effort && other.speed)) continue;
       const eligible = [...item.pools.values()].flatMap(sample => {
+        if (!(sample.points > 0)) return [];
         const googleShared = provider !== 'antigravity' || ['gemini-weekly','antigravity_gemini_pro:weekly'].includes(sample.pool);
         const scale = sample.plan === plan.id && (plan.id || tier === 'current') ? 1
           : sample.plan === base.id && plan.id === higher.id && googleShared ? higher.scale
@@ -181,102 +187,205 @@
           : null;
         return scale ? [{sample, scale}] : [];
       });
-      // Prefer same-tier observations. If caps overlap, use the tightest output limit.
-      const local = eligible.filter(candidate => candidate.scale === 1 && candidate.sample.source === 'local');
-      const sameTier = eligible.filter(candidate => candidate.scale === 1);
-      const candidates = local.length ? local : sameTier.length ? sameTier : eligible;
-      const limiting = candidates.map(({sample,scale}) => ({
-        sample, scale, factor:100 * 30 / 7 * scale / sample.points,
-      })).sort((a,b) => a.sample.output * a.factor - b.sample.output * b.factor)[0];
-      const benchmark = benchmarks.get([item.model,item.effort].join('|'));
-      const monthly = limiting ? {
-        inTokens:limiting.sample.input * limiting.factor,
-        outTokens:limiting.sample.output * limiting.factor,
-        api:limiting.sample.unpriced ? null : limiting.sample.cost * limiting.factor,
-      } : null;
-      const solves = monthly && benchmark?.output > 0 ? monthly.outTokens * benchmark.passes / benchmark.output : null;
-      const perDollar = monthly?.api != null && plan.fee > 0 ? monthly.api / plan.fee : null;
-      rows.push({...item, provider, plan, limiting, benchmark, monthly, solves, perDollar});
+      // One equally weighted attempt from each available suite. Suite size
+      // changes the evidence behind a pass rate, never the workload mix.
+      const outputPerMix = item.benchmarks.reduce((sum, sample) => sum + sample.meanOutput, 0);
+      const solvesPerMix = item.benchmarks.reduce((sum, sample) => sum + sample.passes / sample.attempts, 0);
+      // Find the limiting meter within each source. Keep estimates from independent sources.
+      const estimates = ['local','study'].flatMap(source => {
+        const bySource = eligible.filter(candidate => candidate.sample.source === source);
+        const sameTier = bySource.filter(candidate => candidate.scale === 1);
+        const candidates = sameTier.length ? sameTier : bySource;
+        const limiting = candidates.map(({sample,scale}) => ({
+          sample, scale, factor:100 * 30 / 7 * scale / sample.points,
+        })).sort((a,b) => a.sample.output * a.factor - b.sample.output * b.factor)[0];
+        if (!limiting) return [];
+        const {sample,scale,factor} = limiting;
+        const inTokens = sample.input * factor;
+        const outTokens = sample.output * factor;
+        const api = sample.unpriced ? null : sample.cost * factor;
+        return [{sample, scale, inTokens, outTokens, api,
+          solves:outputPerMix > 0 && outTokens > 0 ? outTokens * solvesPerMix / outputPerMix : null,
+          perDollar:api != null && plan.fee > 0 ? api / plan.fee : null}];
+      });
+      rows.push({...item, provider, plan, estimates});
     }
     return rows;
   }
 
+
   function renderCapacity() {
     if (!capacityTier) return;
-    const providerFilter = el('capacity-provider').value;
+    const key = capacityProvider.value;
+    const providers = key === 'all' ? [...comparisonRows.keys()] : [key];
     const suite = el('capacity-benchmark').value;
-    const providerNames = {anthropic:'Claude', codex:'Codex', antigravity:'Antigravity'};
-    const providers = [...comparisonRows.keys()].filter(provider => providerFilter === 'all' || providerFilter === provider);
-    const rows = providers.flatMap(provider => buildCapacityRows(provider,capacityReports.get(provider),capacityTier.value,suite));
+    const allRows = providers.flatMap(id => buildCapacityRows(id,capacityReports.get(id),capacityTier.value,suite));
+    const ids = ['', '*', ...[...new Set(allRows.map(row => row.model))].sort()];
+    const model = ids.includes(requestedModel) && requestedModel ? requestedModel
+      : ids.includes(capacityModel.value) ? capacityModel.value : '';
+    if (model === requestedModel) requestedModel = '';
+    if (ids.join('|') !== [...capacityModel.options].map(option => option.value).join('|')) {
+      capacityModel.replaceChildren(...ids.map(id => new Option(id === '*' ? 'All models' : id ? modelName(id) : 'Overview', id)));
+    }
+    capacityModel.value = model;
     const order = effort => effortOrder.includes(effort) ? effortOrder.indexOf(effort) : effortOrder.length;
-    rows.sort((a,b) => Number(!!b.monthly) - Number(!!a.monthly) ||
-      a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model) || order(a.effort) - order(b.effort));
-    const compact = value => value == null ? '—' : tokens(value);
-    const money = value => value == null ? '—' : usd(value);
-    el('capacity-rows').innerHTML = rows.map(row => {
-      const {monthly, limiting, benchmark} = row;
-      const details = [];
-      if (limiting) {
-        const {sample,scale} = limiting;
-        const label = sample.source === 'local' ? 'local intervals' : 'published runs';
-        details.push(`${num(sample.runs)} ${label} · ${num(sample.points)} quota points`);
-        if (sample.source === 'local') details.push(`${num(sample.requests)} requests`);
-        details.push(`${tokens(sample.cached)} cached · ${tokens(sample.writes)} cache writes`);
-        if (sample.assumedPlan) details.push('Tier from saved plan');
-        if (scale !== 1) details.push(`${num(scale)}× weekly tier ratio from ${sample.plan.toUpperCase()}`);
-      } else details.push('No matched quota sample for this plan');
-      if (benchmark) details.push(`${num(benchmark.passes)} / ${num(benchmark.attempts)} passes · ${tokens(benchmark.output / benchmark.attempts)} output / attempt`);
-      else details.push('No matching benchmark effort');
-      return `<tr><th scope="row">${esc(row.model)}<span class="subscription-comparison-plan">${esc(providerNames[row.provider])} · ${esc(row.effort || 'effort unrecorded')}${row.speed && row.speed !== 'unknown' ? ' · '+esc(row.speed) : ''}</span></th>` +
-        [row.plan.name, monthly ? `${compact(monthly.inTokens)} / ${compact(monthly.outTokens)}` : '—', money(monthly?.api),
-          money(row.perDollar), row.solves == null ? '—' : num(Math.round(row.solves)), details.join(' · ')]
-          .map(value => `<td>${esc(value)}</td>`).join('') + '</tr>';
+    const modelKey = row => row.provider + '|' + row.model;
+    const pricedModels = new Set(allRows.filter(row => row.estimates.length).map(modelKey));
+    const featured = {codex:'gpt-6.2-astra', anthropic:'claude-sonnet-5-5', antigravity:'gemini-4-neon'};
+    const isFeatured = row => row.model === featured[row.provider];
+    const rows = allRows.filter(row => model === '*' || (model ? row.model === model
+      : row.estimates.length || row.benchmarks.length && (isFeatured(row) || pricedModels.has(modelKey(row)))));
+    rows.sort((a,b) => providers.indexOf(a.provider)-providers.indexOf(b.provider) ||
+      Number(isFeatured(b))-Number(isFeatured(a)) || a.model.localeCompare(b.model) ||
+      order(a.effort)-order(b.effort) || a.speed.localeCompare(b.speed));
+    const effortName = row => {
+      const names = {low:'Low', medium:'Medium', high:'High', xhigh:'Extra High', max:'Max', thinking:'Thinking'};
+      return (names[row.effort] || row.effort || 'Unknown') + (row.speed && row.speed !== 'unknown' ? ' · '+row.speed : '');
+    };
+    const range = (items, metric, format) => {
+      const values = items.map(item => item[metric]).filter(value => value != null);
+      if (!values.length) return '—';
+      const start = format(Math.min(...values));
+      const end = format(Math.max(...values));
+      return start === end ? start : start + '–' + end;
+    };
+    const scopeLabel = row => comparisonRows.get(row.provider).dataset.label;
+    const modelLabel = row => modelName(row.model) + ' · ' + effortName(row);
+    const suiteNames = row => row.benchmarks.map(sample => codingBenchmarks[sample.id].name).join(' + ');
+    const whole = n => num(Math.round(n));
+    el('capacity-rows').innerHTML = providers.map(id => {
+      const group = rows.filter(row => row.provider === id);
+      if (!group.length) return '';
+      const first = group[0];
+      const fee = first.plan.fee > 0 ? usd(first.plan.fee) : '';
+      const heading = [first.plan.name, fee].filter(Boolean).join(' · ');
+      return `<tr class="subscription-provider-row"><th scope="row" colspan="5">${esc(scopeLabel(first))}<span>${esc(heading)}</span></th></tr>` +
+        group.map((row,index) => `<tr><th scope="row" aria-label="${esc(modelLabel(row))}">${row.model !== group[index-1]?.model ? esc(modelName(row.model)) : ''}</th><td>${esc(effortName(row))}</td>` +
+          [range(row.estimates,'perDollar',usd), range(row.estimates,'solves',whole)]
+            .map(value=>`<td>${esc(value)}</td>`).join('') +
+          `<td title="${esc(suiteNames(row))}">${row.benchmarks.length || '—'}</td></tr>`).join('');
     }).join('');
-    const plotted = rows.filter(row => row.perDollar != null && row.solves != null);
+
     const status = el('capacity-status');
-    if (benchmarkError) status.textContent = 'Benchmark data unavailable. Token and API projections can still use local samples.';
-    else if (!benchmarkData || capacityReports.size < comparisonRows.size) status.textContent = 'Loading model observations…';
-    else if (!plotted.length) status.textContent = 'No model and effort has both a priced quota sample for this plan and a result in this benchmark.';
-    else status.textContent = `${plotted.length} model and effort settings can be compared on this benchmark.`;
+    capacityExport = rows.flatMap(row => row.estimates.map(estimate => [
+      row.provider, row.model, row.plan.name, row.effort, row.speed, estimate.sample.source, estimate.sample.points,
+      estimate.inTokens, estimate.outTokens, estimate.api, estimate.perDollar, estimate.solves, suiteNames(row),
+    ]));
+    el('capacity-export').disabled = !capacityExport.length;
+    status.textContent = providers.some(id => !capacityReports.has(id)) || (!benchmarkData && !benchmarkError) ? 'Loading…'
+      : benchmarkError ? 'Benchmark data unavailable'
+      : !rows.some(row => row.estimates.length) ? 'No matching quota sample' : '';
+    status.hidden = !status.textContent;
+    const link = el('capacity-link');
+    const linkSource = (label, url) => {
+      const a = document.createElement('a');
+      a.textContent = label;
+      a.href = url;
+      return a;
+    };
+    link.replaceChildren(...Object.entries(codingBenchmarks).map(([id,source]) => linkSource(source.name,
+      id === 'vulcanBench' && benchmarkData?.vulcanSources?.[model] || source.url)), linkSource('SubscriptionBench',studyURL));
+    el('capacity-scores').innerHTML = rows.flatMap(row => row.benchmarks.map(sample => cells([
+      modelLabel(row), codingBenchmarks[sample.id].name, `${sample.passes} / ${sample.attempts}`, whole(sample.meanOutput),
+    ]))).join('');
+    el('capacity-evidence').innerHTML = rows.flatMap(row => {
+      return row.estimates.map(({sample,scale,api,inTokens,outTokens}) => cells([
+        modelLabel(row),
+        `${sample.source === 'local' ? 'Local' : 'SubscriptionBench'} · ${num(sample.runs)} / ${num(sample.points)} pp${scale !== 1 ? ' · scaled' : ''}${sample.assumedPlan ? ' · saved plan' : ''}`,
+        api == null ? '—' : usd(api), `${tokens(inTokens)} / ${tokens(outTokens)}`,
+      ]));
+    }).join('');
 
     capacityChart?.destroy();
     capacityChart = null;
-    const canPlot = plotted.length && typeof Chart !== 'undefined';
-    el('capacity-chart-wrap').hidden = !canPlot;
-    if (!canPlot) return;
     const groups = new Map();
-    const chartColors = ['#148f84','#c36825','#687ddd','#bb5183','#4180b4','#805fb0','#70862b','#aa7040'];
-    for (const row of plotted) {
-      const key = [row.provider,row.model,row.speed].join('|');
-      if (!groups.has(key)) groups.set(key,[]);
-      groups.get(key).push(row);
+    const plottedByProvider = new Map(providers.map(id => [id,0]));
+    for (const row of rows) {
+      let plotted = false;
+      for (const estimate of row.estimates) {
+        if (!Number.isFinite(estimate.perDollar) || !Number.isFinite(estimate.solves)) continue;
+        const group = [row.provider,row.model,row.speed,estimate.sample.source,suiteNames(row)].join('|');
+        if (!groups.has(group)) groups.set(group, []);
+        groups.get(group).push({x:estimate.perDollar,y:estimate.solves,effort:effortName(row)});
+        plotted = true;
+      }
+      if (plotted) plottedByProvider.set(row.provider,plottedByProvider.get(row.provider)+1);
     }
-    const color = getComputedStyle(root).getPropertyValue('--text-secondary').trim();
-    const datasets = [...groups.values()].map((group,index) => {
-      group.sort((a,b) => order(a.effort)-order(b.effort));
-      return {label:`${providerNames[group[0].provider]} · ${group[0].model}${group[0].speed && group[0].speed !== 'unknown' ? ' · '+group[0].speed : ''}`,
-        borderColor:chartColors[index % chartColors.length], backgroundColor:chartColors[index % chartColors.length],
-        pointStyle:group.map(row => ['circle','rect','triangle','rectRot','crossRot','star','cross'][order(row.effort)] || 'circle'),
-        pointRadius:5, showLine:true, borderWidth:2,
-        data:group.map(row => ({x:row.perDollar,y:row.solves,effort:row.effort,cost:row.monthly.api,tokens:row.monthly.outTokens})),
-      };
+    const canPlot = groups.size > 0 && typeof Chart !== 'undefined';
+    const plotted = [...plottedByProvider.values()].reduce((sum,count) => sum+count, 0);
+    const loading = status.textContent === 'Loading…';
+    el('capacity-coverage').textContent = !loading && rows.length ? `${plotted}/${rows.length} settings plotted` : '';
+    el('capacity-chart-wrap').hidden = !canPlot;
+    const empty = el('capacity-chart-empty');
+    empty.hidden = canPlot || loading;
+    empty.textContent = groups.size ? 'Chart unavailable' : 'No settings have both estimates';
+    const legend = el('capacity-legend');
+    legend.hidden = !canPlot;
+    if (!canPlot || !el('capacity-chart-details').open) return;
+    const theme = getComputedStyle(root);
+    const color = theme.getPropertyValue('--text-secondary').trim();
+    const grid = theme.getPropertyValue('--border-light').trim();
+    const light = document.documentElement.getAttribute('data-theme') === 'light';
+    legend.replaceChildren(...[...plottedByProvider].filter(([,count]) => count > 0).map(([id]) => {
+      const item = document.createElement('li');
+      item.textContent = comparisonRows.get(id).dataset.label;
+      item.style.setProperty('--plot-color',resetColors[id][light ? 0 : 1]);
+      return item;
+    }));
+    const datasets = [...groups.entries()].map(([key,data]) => {
+      const [id,model,speed,source,suites] = key.split('|');
+      const shade = resetColors[id][light ? 0 : 1];
+      return {label:modelName(model), provider:comparisonRows.get(id).dataset.label,
+        source:source === 'local' ? 'Local' : 'Published',
+        borderColor:shade, backgroundColor:shade, pointStyle:source === 'local' ? 'circle' : 'triangle',
+        borderDash:source === 'local' ? [] : [4,4], pointRadius:5, pointHitRadius:10,
+        pointHoverRadius:7, showLine:true, borderWidth:2, data, suites};
     });
     capacityChart = new Chart(el('capacity-chart'), {
       type:'scatter', data:{datasets},
       options:{responsive:true, maintainAspectRatio:false, animation:false,
-        plugins:{legend:{labels:{color,usePointStyle:true,boxWidth:10}},tooltip:{callbacks:{
-          label:item => `${item.dataset.label} · ${item.raw.effort} · ${num(Math.round(item.parsed.y))} solves · ${usd(item.raw.cost)} API value · ${tokens(item.raw.tokens)} output tokens`,
+        plugins:{legend:{display:false},tooltip:{callbacks:{
+          title:([item]) => `${item.dataset.label} · ${item.raw.effort}`,
+          label:item => `${usd(item.parsed.x)} per $1 · ${whole(item.parsed.y)} solves/mo`,
+          afterLabel:item => [`${item.dataset.provider} · ${item.dataset.source}`, ...item.dataset.suites.split(' + ')],
         }}},
         scales:{
-          x:{beginAtZero:true,title:{display:true,text:'API dollars per $1 paid',color},ticks:{color}},
-          y:{beginAtZero:true,title:{display:true,text:'Estimated benchmark solves / 30 days',color},ticks:{color}},
+          x:{beginAtZero:true,grid:{color:grid},title:{display:true,text:'API $ per $1 paid',color},
+            ticks:{color,maxTicksLimit:7,callback:value=>'$'+num(value)}},
+          y:{beginAtZero:true,grid:{color:grid},title:{display:true,text:'Est. solves / month',color},
+            ticks:{color,maxTicksLimit:6,callback:value=>tokens(value)}},
         },
       },
     });
   }
+  const capacityParams = new URLSearchParams(location.search);
+  let requestedModel = modelID(capacityParams.get('model') || '');
   if (capacityTier) {
-    [capacityTier,el('capacity-provider'),el('capacity-benchmark')].forEach(control => control.addEventListener('change',renderCapacity));
-    authFetch(API_BASE + '/static/subscription-benchmarks.json')
+    const requestedProvider = requestedModel.startsWith('gpt-') ? 'codex'
+      : requestedModel.startsWith('claude-') ? 'anthropic'
+      : requestedModel.startsWith('gemini-') ? 'antigravity' : '';
+    if ([...capacityProvider.options].some(option => option.value === requestedProvider)) {
+      capacityProvider.value = requestedProvider;
+    }
+    const tier = capacityParams.get('tier');
+    if (['base','higher','current'].includes(tier)) capacityTier.value = tier;
+    [capacityTier,capacityProvider,capacityModel,el('capacity-benchmark')].forEach(control => control.addEventListener('change',renderCapacity));
+    el('capacity-chart-details').addEventListener('toggle',renderCapacity);
+    el('capacity-export').addEventListener('click', () => {
+      const header = ['Provider','Model','Plan','Effort','Speed','Quota source','Quota points','Monthly input tokens','Monthly output tokens','API USD/month','API USD per USD paid','Estimated solves/month','Benchmark'];
+      const quote = value => {
+        const plain = String(value ?? '');
+        const safe = typeof value === 'string' && /^[=+\-@\s]/.test(plain) ? "'" + plain : plain;
+        return '"' + safe.replaceAll('"', '""') + '"';
+      };
+      const url = URL.createObjectURL(new Blob([[header,...capacityExport].map(row => row.map(quote).join(',')).join('\r\n')], {type:'text/csv;charset=utf-8'}));
+      const download = document.createElement('a');
+      download.href = url;
+      download.download = 'onwatch-subscription-value.csv';
+      download.click();
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    });
+    authFetch(root.dataset.benchmarkUrl)
       .then(response => {if (!response.ok) throw new Error('Benchmark data unavailable'); return response.json();})
       .then(value => {benchmarkData=value;})
       .catch(() => {benchmarkError=true;})
@@ -306,12 +415,9 @@
     }).join('');
     const showCharts = matched.length > 0 && typeof Chart !== 'undefined';
     el('reset-charts').hidden = !showCharts;
-    if (!done) resetStatus.textContent = 'Loading weekly observations…';
-    else if (!series.length) resetStatus.textContent = 'Weekly observations are unavailable. Use Refresh to retry.';
-    else if (!matched.length) resetStatus.textContent = 'No priced usage could be matched to a weekly meter in this period.';
-    else if (!showCharts) resetStatus.textContent = 'Charts are unavailable. See the totals below.';
-    else if (matched.every(item => item.earlyRefills === 0)) resetStatus.textContent = 'The charts match where weekly usage was matched and no early refill was confirmed.';
-    else resetStatus.textContent = 'Cumulative API value by UTC day.';
+    resetStatus.textContent = !done ? 'Loading…' : !series.length ? 'Weekly usage unavailable'
+      : !matched.length ? 'No matched weekly usage' : !showCharts ? 'Charts unavailable' : '';
+    resetStatus.hidden = !resetStatus.textContent;
     if (!showCharts) return;
 
     const light = document.documentElement.getAttribute('data-theme') === 'light';

@@ -4,7 +4,7 @@ Open the **Subscription Value** tab to compare Claude, Codex and Antigravity ove
 
 ## Reading the view
 
-The All view and the Subscription Value tab show known plan names and recorded billing dates. In **Allowance details**, select the provider and open **Plan and comparison settings** to enter the date shown in its billing settings. Leave it blank when there is no confirmed date. After the date passes, onWatch shows it as the last recorded renewal until you update it.
+The All view and the Subscription Value tab show known plan names and recorded billing dates. In **Allowance details**, select the provider and open **Plan settings** to enter the date shown in its billing settings. Leave it blank when there is no confirmed date. After the date passes, onWatch shows it as the last recorded renewal until you update it.
 
 - **Output tokens / API dollar:** output token count divided by the recorded API-equivalent value in the same period. It is shown only when every recorded request in the comparison is priced and the total is positive. Task success is not available from the local usage logs.
 
@@ -25,19 +25,55 @@ The comparison requires two polls on the same plan and meter, a drop greater tha
 
 ## Monthly value by model and effort
 
-Each row estimates a 30-day month spent entirely on one model, effort and recorded speed. The tier selector shows base paid plans, $200 plans, or the account's recorded plan. The observed period controls the local sample. New matched usage is picked up on refresh. Available configurations come from the observed models, the reviewed model catalog and the two public sources. Historical models may remain in the evidence.
+Each row estimates a 30-day month spent entirely on one model, effort and recorded speed. The tier selector shows base paid plans, $200 plans, or the account's recorded plan. The observed period controls the local sample. New matched usage is picked up on refresh. Available configurations come from the observed models, the reviewed model catalog and public benchmark data. Historical models may remain in the evidence.
 
 For a matching plan and weekly meter, sum tokens and their standard API-equivalent dollars across intervals with at least five quota percentage points and one identifiable model, effort and speed. Divide each sum by the total measured points and multiply by 100 × 30/7. Input includes fresh tokens, cache reads and cache writes. Prices use each token type's rate. API dollars per dollar paid divides the projected API value by the plan fee. If multiple weekly meters cover the same configuration, the lowest projected output capacity governs. The estimate assumes regular weekly renewals, full use, and a similar mix of input, output and caching. Shorter or unmeasured limits can reduce it.
 
 Same-tier samples take precedence. Untagged Claude meters use the saved plan, and the row labels that assumption. The [Claude Ultra weekly ratio](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan) is 10× Pro. [Google's published ratio](https://antigravity.google/blog/changes-to-antigravity-plans/) is 20× for the $200 Ultra tier and is applied to the shared Gemini quota only. The [current Codex plan description](https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers) does not supply a numeric weekly factor, so Plus and Pro use separate samples. Public Antigravity Pro observations can provide a fallback for the exact model and effort. A missing quota sample leaves capacity blank.
 
-Expected solves equal projected output tokens divided by mean benchmark output per attempt, multiplied by pass rate. Failed attempts count in both statistics. The chart uses API dollars per subscription dollar on the horizontal axis and expected benchmark solves on the vertical axis. Lines join effort levels of the same provider, model and speed. Switch benchmarks to compare another workload. Each chart uses a single benchmark and has no point for configurations missing the necessary inputs.
+The combined estimate uses an equal mix of attempts from the eligible suites
+available for that exact model and effort. For one attempt on each suite, add
+its pass probability and mean output tokens. Multiply monthly output capacity
+by the sum of pass probabilities divided by the sum of mean output tokens.
+Failures count in the source averages. The metric describes benchmark tasks.
+The harness, scoring rule, task length and difficulty can differ between suites.
 
-Review `internal/web/static/subscription-benchmarks.json` when the published data changes. DeepSWE v1.1 rows contain model, effort, passes, attempts and mean output tokens from the [September 22 leaderboard](https://deepswe.datacurve.ai/). SubscriptionBench rows contain model, effort, pool, percentage points, uncached input, cached input, cache writes, output, API dollars, solves and attempts from the [November 24 dataset](https://github.com/data-john/SubscriptionBench/blob/bf513a7b42198fba2311cc5fdb35b707f413abcd/site/data/benchmark_data.json). Its public Antigravity quota and task estimates are based on small samples. The legacy Argon pool and Codex Free samples were omitted because their limits differ from the paid monthly scenarios.
+The **Suites** column counts inputs to each estimate. Open **Evidence** to see
+the suite names, passes and mean output per attempt for a row, or select one
+suite to compare the same workload across models. Coverage differs by model and
+effort. Compare rows that use the same suites. onWatch leaves a forecast blank
+when the matching quota or benchmark sample is missing.
 
-## Published observations
+The chart uses API dollars per subscription dollar on the horizontal axis and
+estimated solves per month on the vertical axis. Its coverage count reflects
+how many visible settings have both estimates. Select a plan, provider, model,
+or suite to focus the plot. Hover or tap a point for its model, effort, quota
+source and suites. Lines group effort levels with the same provider, model,
+speed, quota source and suite mix. Local and
+published quota projections appear as a range when both exist, and as separate
+chart points. The range describes agreement between those sources. **CSV**
+exports the individual estimates, monthly token counts, matched quota points
+and suite names. Raw local observations stay in onWatch's SQLite history.
 
-The tab displays dated, reviewed samples from [Wokey](https://wokey.ai/coding-plan-comparison), [SubscriptionBench](https://data-john.github.io/SubscriptionBench/), and [Eishan Lawrence](https://www.eishanlawrence.com/blog/harness-efficiency-bench-v2). The first two estimate the API value of fully using a weekly quota. The third reports solved tasks, time, and API cost at illustrative rates for the same 12 Python tasks and model. Compare runs within their workload. The public figures never contribute to the local data or its totals. Review newer measurements before updating the dated figures in `internal/web/templates/subscription.html`.
+## Benchmark audit
+
+The reviewed snapshot lives in `internal/web/static/subscription-benchmarks.json`.
+Benchmark rows store model, effort, passes, attempts and mean output tokens
+per attempt. Use whole evaluated cohorts for passes and tokens. Keep benchmark
+versions and harnesses distinct. The combined forecast uses three suites:
+
+| Suite | Data and review |
+| --- | --- |
+| [VulcanBench Frontier v4](https://vulcanbench.com/leaderboard.html) | Recomputed functional passes and mean output from the published per-run CSV. The [scorer](https://github.com/morganlinton/VulcanBench/blob/d7ca724f11566eb29171ee50b0f2f32ae1b68d57/harness/evaluator/scorer.py) also computes a quality and efficiency score. The forecast uses functional results. [Astra Max](https://vulcanbench.com/benchmarks/swe-v4-gpt62-astra-v333.html) passed all 23 tasks. The [Neon report](https://vulcanbench.com/benchmarks/swe-v4-gemini4-neon-v332.html) logs 40 quota denials that were rerun outside the scored sample. An [earlier Opus audit](https://vulcanbench.com/assets/reports/vulcanbench-opus5-effort-report.pdf) found a harness token cap caused five of six apparent failures. |
+| [Terminal-Bench 4.1](https://www.tbench.ai/?efforts=all&version=4.1) | The official leaderboard payload supplies successes, trial count and separate output totals. The [metrics code](https://github.com/harbor-framework/terminal-bench/blob/v4.1.0/leaderboard/src/leaderboard/core/metrics.py) retains token spend when a trial is disqualified and assigns it zero credit. The [4.1 release](https://github.com/harbor-framework/terminal-bench/releases/tag/v4.1.0) regrades runs with revised isolated verifiers. This snapshot uses 330 trials per native-harness setting. Astra Max passed 205 of 330 here. |
+| [Ramp SWE-Bench v2.1](https://labs.ramp.com/swebench#leaderboard) | Recomputed from the [official trial CSV](https://labs.ramp.com/swebench/v2/data/v21/results.csv?v=v2.1). Each of the 13 imported native-harness settings had the same 500 evaluated task IDs and complete output counts. Astra High passed 382, Neon High passed 381 and Sonnet High passed 316. The [methodology](https://builders.ramp.com/post/building-llm-judges-to-judge-llms) includes an LLM judge for additional verification on private engineering tasks. Those tasks and judges cannot be independently reproduced from the CSV. |
+
+Additional sources reviewed:
+
+- [DeepSWE v1.1](https://deepswe.datacurve.ai/) is available as a standalone comparison. Its [public verifier](https://github.com/datacurve-ai/deep-swe/blob/0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea/tasks/abs-module-cache-flags/tests/test.sh) grades submitted patches in a verifier environment. [Epoch AI](https://epoch.ai/benchmarks/deepswe/review) confirmed false negatives on at least 23 of 113 tasks, so the suite is excluded from the combined projection.
+- [CursorBench](https://cursor.com/cursorbench) uses private Cursor workloads. [SWE-Marathon](https://www.swe-marathon.org/) reports task-weighted pass rates and total tokens, with one task held out. [WorkloadBench](https://workloadbench.brenhq.com/numbers) publishes small samples and its quick suite has a ceiling. [Sherpa prod-bench-1](https://www.sherpalabs.ai/benchmarks/coding) uses private tasks and the leaderboard lacks a reproducible output-token denominator. [Argo-Bench](https://argo-bench.com/) publishes solves and output tokens for a separate enterprise analytics workload. None contribute to the coding forecast.
+- [Artificial Analysis Coding Agent Index](https://artificialanalysis.ai/agents/coding-agents) already incorporates other benchmark workloads. Adding the index would duplicate evidence across suites.
+- [SubscriptionBench](https://github.com/data-john/SubscriptionBench/blob/bf513a7b42198fba2311cc5fdb35b707f413abcd/site/data/benchmark_data.json) contributes matched Antigravity Pro quota observations only. Those rows store model, effort, meter, quota points, input/cache/output counts, API cost and attempt data. [Wokey](https://wokey.ai/coding-plan-comparison#ranking) aggregates a mix of models and efforts and cannot calibrate a single setting.
 
 ## Model comparisons
 
