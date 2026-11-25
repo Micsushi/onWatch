@@ -74,12 +74,15 @@
   const capacityPlans = {
     anthropic: [
       {id:'pro', name:'Claude Pro', fee:20}, {id:'ultra', name:'Claude Ultra', fee:200, scale:10},
+      {id:'max', name:'Claude Max', fee:100},
     ],
     codex: [
       {id:'plus', name:'ChatGPT Plus', fee:20}, {id:'pro', name:'ChatGPT Pro', fee:200},
+      {id:'pro100', name:'ChatGPT Pro 100', fee:100},
     ],
     antigravity: [
       {id:'pro', name:'Google AI Pro', fee:19.99}, {id:'ultra', name:'Google AI Ultra', fee:200, scale:20},
+      {id:'ultra5', name:'Google AI Ultra 5×', fee:99.99, scale:5},
     ],
   };
   let capacityChart, benchmarkData, benchmarkError, capacityExport = [];
@@ -92,6 +95,20 @@
     deepSWE: {name:'DeepSWE v1.1', url:'https://deepswe.datacurve.ai/', flagged:true},
   };
   const studyURL = 'https://github.com/data-john/SubscriptionBench/blob/bf513a7b42198fba2311cc5fdb35b707f413abcd/site/data/benchmark_data.json';
+  const quotaSources = {
+    local: {name:'Local'},
+    study: {name:'SubscriptionBench', url:studyURL},
+    daily: {name:'AI Coding Daily', url:'https://aicodingdaily.com/subscription-usage'},
+    pricing: {name:'Real API Pricing', url:'https://github.com/Fei-Craft/real-api-pricing/blob/332d14ed903c3b7b042bb5a9ec2a3d224757476d/data/research/chatgpt-gpt6luna-plus-round2-2026-09-28.json'},
+    estimate: {name:'Estimated'},
+  };
+  const modelKey = ({model,effort,speed}) => [model,effort,speed].join('|');
+  const standardAstraSol = row => !row.speed && /^gpt-6(?:\.[12])?-(?:astra|sol)$/.test(row.model);
+  const median = values => {
+    const sorted = values.slice().sort((a,b)=>a-b);
+    const middle = (sorted.length-1)/2;
+    return (sorted[Math.floor(middle)] + sorted[Math.ceil(middle)])/2;
+  };
   const modelName = model => model.replace(/^gpt/, 'GPT').replace(/^gemini/, 'Gemini').replace(/^claude/, 'Claude')
     .replace(/-(\d+)-(\d+)(?=-|$)/, '-$1.$2').replaceAll('-', ' ').replace(/\b(astra|sol|sonnet|neon|opus|haiku|hydrogen|fable|terra|luna|carbon|argon|flash)\b/g, word => word[0].toUpperCase() + word.slice(1));
   function modelConfig(model, recordedEffort, speed = '') {
@@ -108,30 +125,36 @@
     if (provider === 'antigravity') {
       if (/^(?:google ai )?pro$/.test(id)) return 'pro';
       if (/^(?:google ai )?ultra(?: \$?200| 20x)$/.test(id)) return 'ultra';
+      if (/^(?:google ai )?ultra(?: \$?100| 5x| 5×)$/.test(id)) return 'ultra5';
       if (id === 'ultra' || id === 'google ai ultra') return 'ultra-unspecified';
     }
     if (provider === 'codex') {
       if (['plus','chatgpt plus'].includes(id)) return 'plus';
       if (['pro','pro 20x','pro $200','chatgpt pro $200'].includes(id)) return 'pro';
+      if (['prolite','pro100','pro 100','pro $100','chatgpt pro 100','chatgpt pro $100'].includes(id)) return 'pro100';
     }
     if (provider === 'anthropic') {
       if (['pro','claude pro'].includes(id)) return 'pro';
       if (['ultra','claude ultra','max 20x'].includes(id)) return 'ultra';
+      if (['max 5x','claude max 5x','claude max','max'].includes(id)) return 'max';
     }
     return id;
   }
 
   function buildCapacityRows(provider, report, tier, suite) {
-    const [base, higher] = capacityPlans[provider];
+    const plans = capacityPlans[provider];
+    const [base,higher,mid] = plans;
     const profile = report?.profile;
     const currentID = capacityPlanID(provider, profile?.planType || profile?.name);
     const plan = tier === 'current'
       ? {id:currentID, name:profile?.name || 'Current plan', fee:profile?.monthlyUsd}
-      : tier === 'base' ? base : higher;
+      : tier === 'base' ? base : tier === 'mid' ? mid : higher;
+    const tierScale = id => id === base.id ? 1 : plans.find(option => option.id === id)?.scale;
     const configs = new Map();
     const config = (model, effort, speed) => {
+      if (provider === 'antigravity' && model.startsWith('gemini-') && speed === 'unknown') speed = '';
       const value = modelConfig(model, effort, speed);
-      const key = [value.model,value.effort,value.speed].join('|');
+      const key = modelKey(value);
       if (!configs.has(key)) configs.set(key, {...value, pools:new Map(), benchmarks:[]});
       return configs.get(key);
     };
@@ -159,7 +182,8 @@
       // Claude snapshots don't carry tier. A manually recorded subscription labels untagged samples.
       const measuredPlan = capacityPlanID(provider, cycle.plan || (provider === 'anthropic' ? profile?.name : ''));
       for (const sample of cycle.models || []) {
-        if (!sample.matchedIntervals) continue;
+        const hasTokens = sample.matchedInput || sample.matchedCached || sample.matchedWrites || sample.matchedOutput;
+        if (!sample.matchedIntervals || !hasTokens) continue;
         addSample(config(sample.model, sample.effort, sample.speed), {
           plan:measuredPlan, pool:cycle.quota, source:'local', points:sample.quotaPoints,
           assumedPlan:!cycle.plan && provider === 'anthropic',
@@ -174,6 +198,17 @@
         addSample(config(model,effort), {plan:'pro', pool, source:'study', points, input:input+cached+writes, cached, writes, output, cost, unpriced:0, runs:1, requests:attempts});
       }
     }
+    for (const [owner,tier,model,effort,points,input,cached,writes,output,cost] of benchmarkData?.codingDailyQuota || []) {
+      if (owner !== provider) continue;
+      addSample(config(model,effort), {plan:tier, pool:'weekly', source:'daily', points, input:input+cached+writes, cached, writes,
+        output, cost, unpriced:0, runs:1, requests:0});
+    }
+    if (provider === 'codex') {
+      for (const [model,effort,points,input,cached,output,cost] of benchmarkData?.pricingQuota || []) {
+        addSample(config(model,effort), {plan:'plus', pool:'weekly', source:'pricing', points,
+          input:input+cached, cached, writes:0, output, cost, unpriced:0, runs:1, requests:0});
+      }
+    }
 
     const rows = [];
     for (const item of configs.values()) {
@@ -182,9 +217,7 @@
         if (!(sample.points > 0)) return [];
         const googleShared = provider !== 'antigravity' || ['gemini-weekly','antigravity_gemini_pro:weekly'].includes(sample.pool);
         const scale = sample.plan === plan.id && (plan.id || tier === 'current') ? 1
-          : sample.plan === base.id && plan.id === higher.id && googleShared ? higher.scale
-          : sample.plan === higher.id && plan.id === base.id && googleShared && higher.scale ? 1 / higher.scale
-          : null;
+          : googleShared ? tierScale(plan.id) / tierScale(sample.plan) : null;
         return scale ? [{sample, scale}] : [];
       });
       // One equally weighted attempt from each available suite. Suite size
@@ -192,12 +225,12 @@
       const outputPerMix = item.benchmarks.reduce((sum, sample) => sum + sample.meanOutput, 0);
       const solvesPerMix = item.benchmarks.reduce((sum, sample) => sum + sample.passes / sample.attempts, 0);
       // Find the limiting meter within each source. Keep estimates from independent sources.
-      const estimates = ['local','study'].flatMap(source => {
+      const estimates = ['local','study','daily','pricing'].flatMap(source => {
         const bySource = eligible.filter(candidate => candidate.sample.source === source);
         const sameTier = bySource.filter(candidate => candidate.scale === 1);
         const candidates = sameTier.length ? sameTier : bySource;
         const limiting = candidates.map(({sample,scale}) => ({
-          sample, scale, factor:100 * 30 / 7 * scale / sample.points,
+          sample, scale, factor:4 * 100 * scale / sample.points,
         })).sort((a,b) => a.sample.output * a.factor - b.sample.output * b.factor)[0];
         if (!limiting) return [];
         const {sample,scale,factor} = limiting;
@@ -208,7 +241,35 @@
           solves:outputPerMix > 0 && outTokens > 0 ? outTokens * solvesPerMix / outputPerMix : null,
           perDollar:api != null && plan.fee > 0 ? api / plan.fee : null}];
       });
-      rows.push({...item, provider, plan, estimates});
+      rows.push({...item, provider, plan, estimates, solvesPerOutput:outputPerMix > 0 ? solvesPerMix/outputPerMix : null});
+    }
+
+    // Forecast missing efforts from a priced workload and a measured budget
+    // for this model. A Codex Astra/Sol budget is a rough fallback, since
+    // their Standard short-context API prices use the same dollars per credit.
+    const workloads = new Map((benchmarkData?.benchmarkProfiles || []).map(([model,effort,input,output,cost]) =>
+      [modelKey(modelConfig(model,effort)), {input,output,cost,label:'VulcanBench workload'}]));
+    for (const usage of report?.models || []) {
+      if (usage.requests > 0 && usage.unknownRequests === 0 && usage.cost > 0 && usage.output > 0) {
+        workloads.set(modelKey(config(usage.model,usage.effort,usage.speed)), {...usage,label:'Recorded workload'});
+      }
+    }
+    const anchors = rows.flatMap(row => row.estimates.filter(v => v.api > 0).map(v => ({row, ...v})));
+    for (const row of rows) {
+      if (row.estimates.length || row.speed) continue;
+      const workload = workloads.get(modelKey(row));
+      if (!(workload?.cost > 0 && workload.output > 0)) continue;
+      const sameModel = anchors.filter(v => v.row.model === row.model && !v.row.speed);
+      const candidates = sameModel.length ? sameModel
+        : provider === 'codex' && ['plus','pro'].includes(plan.id) && standardAstraSol(row) ? anchors.filter(v => standardAstraSol(v.row)) : [];
+      if (!candidates.length) continue;
+      const local = candidates.filter(v => v.sample.source === 'local' && v.scale === 1);
+      const budget = median((local.length ? local : candidates).map(v => v.api));
+      const outTokens = workload.output * budget / workload.cost;
+      row.estimates.push({sample:{source:'estimate', basis:`${sameModel.length ? 'Same model' : 'Astra/Sol proxy'} · ${workload.label}`},
+        scale:1, inTokens:workload.input * budget / workload.cost, outTokens, api:budget,
+        solves:row.solvesPerOutput == null ? null : outTokens*row.solvesPerOutput,
+        perDollar:plan.fee > 0 ? budget/plan.fee : null});
     }
     return rows;
   }
@@ -240,14 +301,15 @@
       order(a.effort)-order(b.effort) || a.speed.localeCompare(b.speed));
     const effortName = row => {
       const names = {low:'Low', medium:'Medium', high:'High', xhigh:'Extra High', max:'Max', thinking:'Thinking'};
-      return (names[row.effort] || row.effort || 'Unknown') + (row.speed && row.speed !== 'unknown' ? ' · '+row.speed : '');
+      const speed = row.speed === 'unknown' ? 'Speed unknown' : row.speed;
+      return (names[row.effort] || row.effort || 'Unknown') + (speed ? ' · '+speed : '');
     };
     const range = (items, metric, format) => {
       const values = items.map(item => item[metric]).filter(value => value != null);
       if (!values.length) return '—';
       const start = format(Math.min(...values));
       const end = format(Math.max(...values));
-      return start === end ? start : start + '–' + end;
+      return (items.some(item => item.sample.source === 'estimate') ? '≈' : '') + (start === end ? start : start + '–' + end);
     };
     const scopeLabel = row => comparisonRows.get(row.provider).dataset.label;
     const modelLabel = row => modelName(row.model) + ' · ' + effortName(row);
@@ -268,7 +330,8 @@
 
     const status = el('capacity-status');
     capacityExport = rows.flatMap(row => row.estimates.map(estimate => [
-      row.provider, row.model, row.plan.name, row.effort, row.speed, estimate.sample.source, estimate.sample.points,
+      row.provider, row.model, row.plan.name, row.effort, row.speed, quotaSources[estimate.sample.source].name,
+      estimate.sample.basis, estimate.sample.points,
       estimate.inTokens, estimate.outTokens, estimate.api, estimate.perDollar, estimate.solves, suiteNames(row),
     ]));
     el('capacity-export').disabled = !capacityExport.length;
@@ -284,16 +347,25 @@
       return a;
     };
     link.replaceChildren(...Object.entries(codingBenchmarks).map(([id,source]) => linkSource(source.name,
-      id === 'vulcanBench' && benchmarkData?.vulcanSources?.[model] || source.url)), linkSource('SubscriptionBench',studyURL));
+      id === 'vulcanBench' && benchmarkData?.vulcanSources?.[model] || source.url)),
+      ...Object.values(quotaSources).filter(source=>source.url).map(source=>linkSource(source.name,source.url)));
     el('capacity-scores').innerHTML = rows.flatMap(row => row.benchmarks.map(sample => cells([
       modelLabel(row), codingBenchmarks[sample.id].name, `${sample.passes} / ${sample.attempts}`, whole(sample.meanOutput),
     ]))).join('');
+    const gap = (value, reference) => {
+      if (value == null || !(reference > 0)) return '—';
+      const pct = Math.round((value/reference-1)*100);
+      return (pct > 0 ? '+' : '')+num(pct)+'%';
+    };
     el('capacity-evidence').innerHTML = rows.flatMap(row => {
-      return row.estimates.map(({sample,scale,api,inTokens,outTokens}) => cells([
-        modelLabel(row),
-        `${sample.source === 'local' ? 'Local' : 'SubscriptionBench'} · ${num(sample.runs)} / ${num(sample.points)} pp${scale !== 1 ? ' · scaled' : ''}${sample.assumedPlan ? ' · saved plan' : ''}`,
-        api == null ? '—' : usd(api), `${tokens(inTokens)} / ${tokens(outTokens)}`,
-      ]));
+      const local = row.estimates.find(item => item.sample.source === 'local' && item.scale === 1);
+      return row.estimates.map(({sample,scale,api,inTokens,outTokens}) => {
+        const source = quotaSources[sample.source].name;
+        const detail = sample.basis || `${num(sample.runs)} / ${num(sample.points)} pp${sample.source === 'daily' && sample.points <= 2 ? ' · coarse meter' : ''}${scale !== 1 ? ' · scaled' : ''}${sample.assumedPlan ? ' · saved plan' : ''}`;
+        const relative = local && sample.source !== 'local' && scale === 1
+          ? `${gap(api,local.api)} / ${gap(outTokens,local.outTokens)}` : '—';
+        return cells([modelLabel(row), `${source} · ${detail}`, api == null ? '—' : usd(api), `${tokens(inTokens)} / ${tokens(outTokens)}`, relative]);
+      });
     }).join('');
 
     capacityChart?.destroy();
@@ -306,7 +378,7 @@
         if (!Number.isFinite(estimate.perDollar) || !Number.isFinite(estimate.solves)) continue;
         const group = [row.provider,row.model,row.speed,estimate.sample.source,suiteNames(row)].join('|');
         if (!groups.has(group)) groups.set(group, []);
-        groups.get(group).push({x:estimate.perDollar,y:estimate.solves,effort:effortName(row)});
+        groups.get(group).push({x:estimate.perDollar,y:estimate.solves,effort:effortName(row),basis:estimate.sample.basis});
         plotted = true;
       }
       if (plotted) plottedByProvider.set(row.provider,plottedByProvider.get(row.provider)+1);
@@ -321,6 +393,7 @@
     empty.textContent = groups.size ? 'Chart unavailable' : 'No settings have both estimates';
     const legend = el('capacity-legend');
     legend.hidden = !canPlot;
+    el('capacity-source-key').hidden = !canPlot;
     if (!canPlot || !el('capacity-chart-details').open) return;
     const theme = getComputedStyle(root);
     const color = theme.getPropertyValue('--text-secondary').trim();
@@ -336,9 +409,10 @@
       const [id,model,speed,source,suites] = key.split('|');
       const shade = resetColors[id][light ? 0 : 1];
       return {label:modelName(model), provider:comparisonRows.get(id).dataset.label,
-        source:source === 'local' ? 'Local' : 'Published',
-        borderColor:shade, backgroundColor:shade, pointStyle:source === 'local' ? 'circle' : 'triangle',
-        borderDash:source === 'local' ? [] : [4,4], pointRadius:5, pointHitRadius:10,
+        source:source === 'local' ? 'Local' : source === 'estimate' ? 'Estimated' : 'Published',
+        sourceLabel:quotaSources[source].name,
+        borderColor:shade, backgroundColor:shade, pointStyle:source === 'local' ? 'circle' : source === 'estimate' ? 'rectRot' : 'triangle',
+        borderDash:source === 'local' ? [] : source === 'estimate' ? [2,4] : [4,4], pointRadius:5, pointHitRadius:10,
         pointHoverRadius:7, showLine:true, borderWidth:2, data, suites};
     });
     capacityChart = new Chart(el('capacity-chart'), {
@@ -346,13 +420,13 @@
       options:{responsive:true, maintainAspectRatio:false, animation:false,
         plugins:{legend:{display:false},tooltip:{callbacks:{
           title:([item]) => `${item.dataset.label} · ${item.raw.effort}`,
-          label:item => `${usd(item.parsed.x)} per $1 · ${whole(item.parsed.y)} solves/mo`,
-          afterLabel:item => [`${item.dataset.provider} · ${item.dataset.source}`, ...item.dataset.suites.split(' + ')],
+          label:item => `${usd(item.parsed.x)} per $1 · ${whole(item.parsed.y)} solves per 4 weeks`,
+          afterLabel:item => [`${item.dataset.provider} · ${item.dataset.sourceLabel}`, item.raw.basis, ...item.dataset.suites.split(' + ')].filter(Boolean),
         }}},
         scales:{
           x:{beginAtZero:true,grid:{color:grid},title:{display:true,text:'API $ per $1 paid',color},
             ticks:{color,maxTicksLimit:7,callback:value=>'$'+num(value)}},
-          y:{beginAtZero:true,grid:{color:grid},title:{display:true,text:'Est. solves / month',color},
+          y:{beginAtZero:true,grid:{color:grid},title:{display:true,text:'Est. solves / 4 weeks',color},
             ticks:{color,maxTicksLimit:6,callback:value=>tokens(value)}},
         },
       },
@@ -368,11 +442,11 @@
       capacityProvider.value = requestedProvider;
     }
     const tier = capacityParams.get('tier');
-    if (['base','higher','current'].includes(tier)) capacityTier.value = tier;
+    if (['base','mid','higher','current'].includes(tier)) capacityTier.value = tier;
     [capacityTier,capacityProvider,capacityModel,el('capacity-benchmark')].forEach(control => control.addEventListener('change',renderCapacity));
     el('capacity-chart-details').addEventListener('toggle',renderCapacity);
     el('capacity-export').addEventListener('click', () => {
-      const header = ['Provider','Model','Plan','Effort','Speed','Quota source','Quota points','Monthly input tokens','Monthly output tokens','API USD/month','API USD per USD paid','Estimated solves/month','Benchmark'];
+      const header = ['Provider','Model','Plan','Effort','Speed','Quota source','Estimate basis','Quota points','Input tokens / 4 weeks','Output tokens / 4 weeks','API USD / 4 weeks','API USD per USD paid','Estimated solves / 4 weeks','Benchmark'];
       const quote = value => {
         const plain = String(value ?? '');
         const safe = typeof value === 'string' && /^[=+\-@\s]/.test(plain) ? "'" + plain : plain;
@@ -465,17 +539,15 @@
     const renewal = plan?.nextBillingDate ? subscriptionRenewalLabel(plan.nextBillingDate) : '';
     const label = `<th scope="row">${esc(row.dataset.label)}${plan?.name ? `<span class="subscription-comparison-plan">${esc(plan.name)}</span>` : ''}${renewal ? `<time class="subscription-comparison-plan" datetime="${esc(plan.nextBillingDate)}">${esc(renewal)}</time>` : ''}</th>`;
     if (!report) {
-      row.innerHTML = `${label}<td colspan="4">${esc(message)}</td>`;
+      row.innerHTML = `${label}<td colspan="3">${esc(message)}</td>`;
       return;
     }
     const output = (report.models || []).reduce((total, model) => total + model.output, 0);
     const outputPerDollar = report.unknownRequests === 0 && report.cost > 0 ? Math.round(output / report.cost) : null;
-    const multiple = report.valueMultiple;
     const fee = plan?.source || plan?.name ? usd(plan.monthlyUsd) + (plan.source?.includes('list price') ? ' (list)' : '') : 'Not set';
     const value = pricedValue(report.cost, report.requests, report.unknownRequests);
     row.innerHTML = label + [
       fee, value === '--' ? 'No priced usage' : value,
-      multiple == null ? '—' : `${num(multiple)}×${report.unknownRequests ? ' (partial)' : ''}`,
       outputPerDollar == null ? '—' : num(outputPerDollar),
     ].map(value => `<td>${esc(value)}</td>`).join('');
   }
@@ -506,7 +578,7 @@
     const r=data.report, cycle=r.cycles[Number(el('cycle').value)];
     const actual=pricedValue(r.cost,r.requests,r.unknownRequests);
     el('models').innerHTML=r.models.length?r.models.map(m=>{const q=(cycle?.models||[]).find(v=>v.model===m.model&&v.effort===m.effort&&v.speed===m.speed);return cells([`${m.model} / ${m.effort||'unknown'} / ${m.speed||'unknown'}`,pricedValue(m.cost,m.requests,m.unknownRequests),provider==='codex'?(m.creditsUnknown===m.requests?'-- (speed unknown)':m.creditsUnknown?`${num(m.credits)} (partial)` :num(m.credits)):'Not applicable',`${num(m.requests-m.unknownRequests)} / ${num(m.requests)}`,m.input?num(m.cached/m.input*100)+'%':'--',q?num(q.quotaPoints)+' pp':'--',usd(q?.per100),num(q?.outputPerPoint)]);}).join(''):'<tr><td colspan="8">No token usage recorded for this provider.</td></tr>';
-    el('summary').innerHTML=metric('Observed API value',actual)+metric('Period value / monthly fee',r.valueMultiple == null?'--':num(r.valueMultiple)+'x'+(r.unknownRequests?' (partial)':''))+metric('API / 100% quota',usd(cycle?.per100))+metric('Normalized x1 / 100%',usd(cycle?.x1));
+    el('summary').innerHTML=metric('Observed API value',actual)+metric('API / 100% quota',usd(cycle?.per100))+metric('Normalized x1 / 100%',usd(cycle?.x1));
     if (!cycle) {
       el('cycle-note').textContent='No quota observations in this range. Cost records alone cannot establish subscription allowance.';
     } else {

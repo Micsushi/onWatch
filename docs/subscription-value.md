@@ -9,7 +9,6 @@ The All view and the Subscription Value tab show known plan names and recorded b
 - **Output tokens / API dollar:** output token count divided by the recorded API-equivalent value in the same period. It is shown only when every recorded request in the comparison is priced and the total is positive. Task success is not available from the local usage logs.
 
 - **Observed API value:** token vectors in the selected period priced using current API Standard short-context text rates. The period defaults to the last 30 days. It is not automatically the billing month.
-- **Value / subscription fee:** period API value divided by the configured monthly USD fee. $1,000 of recorded value divided by a $200 fee is **5x**, not 5 dollars. Incomplete pricing produces a lower bound.
 - **API / 100% quota:** matched API value divided by observed percentage-point movement, multiplied by 100. A 0% to 100% observation is near-full meter coverage; 38% to 100% covers 62 points and is extrapolated.
 - **Normalized x1:** the per-100% value divided by the configured plan multiplier. This is a normalization assumption, not a measurement of a different plan.
 
@@ -23,17 +22,37 @@ The two charts accumulate priced usage matched to one primary weekly meter per p
 
 The comparison requires two polls on the same plan and meter, a drop greater than five points and a new deadline more than a minute later than the old one, observed more than a minute before the old deadline. A published reset offer or a saved credit does not establish that an account used it. Meter movement without reliably timed, priced logs consumes quota in the estimate but supplies no dollars. Intervals spanning the old deadline are skipped in both curves, as are unknown-price and archive-overlap intervals. The two totals can agree when there was no confirmed early refill or when all matched usage fit within the original allowance. Outcomes and dollars from different models chosen under tighter limits are outside this estimate.
 
-## Monthly value by model and effort
+## Four-week value by model and effort
 
-Each row estimates a 30-day month spent entirely on one model, effort and recorded speed. The tier selector shows base paid plans, $200 plans, or the account's recorded plan. The observed period controls the local sample. New matched usage is picked up on refresh. Available configurations come from the observed models, the reviewed model catalog and public benchmark data. Historical models may remain in the evidence.
+Each row estimates four ordinary weekly allowances spent entirely on one model, effort and speed. The tier selector shows the roughly $20, $100, and $200 tiers or the account's recorded plan. The observation period selects local samples. The projection always covers four weeks. Available configurations come from observed use and reviewed public data.
 
-For a matching plan and weekly meter, sum tokens and their standard API-equivalent dollars across intervals with at least five quota percentage points and one identifiable model, effort and speed. Divide each sum by the total measured points and multiply by 100 × 30/7. Input includes fresh tokens, cache reads and cache writes. Prices use each token type's rate. API dollars per dollar paid divides the projected API value by the plan fee. If multiple weekly meters cover the same configuration, the lowest projected output capacity governs. The estimate assumes regular weekly renewals, full use, and a similar mix of input, output and caching. Shorter or unmeasured limits can reduce it.
+For a matching plan and weekly meter, sum tokens and their standard API-equivalent dollars across intervals with at least five quota percentage points and one identifiable model, effort and speed. Divide each sum by the total measured points and multiply by 100 × 4. A 10-point sample scales by 40. Intervals are measured within quota windows, and extra refills never add another allowance to this projection. Input includes fresh tokens, cache reads and cache writes. Prices use each token type's rate. API dollars per dollar paid divides the projected API value by the plan fee. If multiple weekly meters cover the same configuration, the lowest projected output capacity governs. The estimate assumes full use and a similar mix of input, output and caching. Shorter or unmeasured limits can reduce it.
 
-Same-tier samples take precedence. Untagged Claude meters use the saved plan, and the row labels that assumption. The [Claude Ultra weekly ratio](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan) is 10× Pro. [Google's published ratio](https://antigravity.google/blog/changes-to-antigravity-plans/) is 20× for the $200 Ultra tier and is applied to the shared Gemini quota only. The [current Codex plan description](https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers) does not supply a numeric weekly factor, so Plus and Pro use separate samples. Public Antigravity Pro observations can provide a fallback for the exact model and effort. A missing quota sample leaves capacity blank.
+Same-tier samples take precedence. Untagged Claude meters use the saved plan, and the evidence labels that assumption. The [Claude Ultra weekly ratio](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan) is 10× Pro. [Google's published ratios](https://antigravity.google/blog/changes-to-antigravity-plans/) are 5× and 20× and apply here to the shared Gemini quota. The [current Codex plan description](https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers) supplies a tier ordering, so each tier uses independent measurements.
+
+The chart marks local samples, published studies and modeled estimates with
+different symbols. **Evidence** shows each applicable source and compares
+its four-week API dollars and output with the local estimate when both apply
+to the same tier. The two deltas can point in different directions because
+cache reads, fresh input and output have different prices. A one-point
+published meter change is a particularly coarse estimate. The model-specific
+table keeps whole-plan figures such as [Wokey's mixed Codex traffic](https://wokey.ai/codex-usage-limits)
+out of per-effort rows.
+
+When a setting has a priced token profile and no matched quota, the chart can
+estimate it using the median four-week API value from other efforts of the
+same model at Standard speed. It prefers same-tier local measurements. For
+Standard GPT-6 Astra and Sol family settings on Plus or $200 Pro, it can also
+use a same-tier Astra/Sol budget as a proxy. Their Standard API rates are
+proportional to the published credit weights, but the [Codex rate card](https://learn.chatgpt.com/docs/pricing?codex-pricing-speed=ultrafast)
+does not publish the included weekly allowance in credits. These projections
+assume a similar allowance per API dollar. A recorded or VulcanBench token
+profile controls how much of that API value becomes output at the selected
+effort. When either input is missing, the estimate stays unavailable.
 
 The combined estimate uses an equal mix of attempts from the eligible suites
 available for that exact model and effort. For one attempt on each suite, add
-its pass probability and mean output tokens. Multiply monthly output capacity
+its pass probability and mean output tokens. Multiply four-week output capacity
 by the sum of pass probabilities divided by the sum of mean output tokens.
 Failures count in the source averages. The metric describes benchmark tasks.
 The harness, scoring rule, task length and difficulty can differ between suites.
@@ -45,14 +64,14 @@ effort. Compare rows that use the same suites. onWatch leaves a forecast blank
 when the matching quota or benchmark sample is missing.
 
 The chart uses API dollars per subscription dollar on the horizontal axis and
-estimated solves per month on the vertical axis. Its coverage count reflects
+estimated solves per four weeks on the vertical axis. Its coverage count reflects
 how many visible settings have both estimates. Select a plan, provider, model,
 or suite to focus the plot. Hover or tap a point for its model, effort, quota
 source and suites. Lines group effort levels with the same provider, model,
 speed, quota source and suite mix. Local and
 published quota projections appear as a range when both exist, and as separate
 chart points. The range describes agreement between those sources. **CSV**
-exports the individual estimates, monthly token counts, matched quota points
+exports the individual estimates, four-week token counts, matched quota points
 and suite names. Raw local observations stay in onWatch's SQLite history.
 
 ## Benchmark audit
@@ -76,6 +95,8 @@ with fallbacks.
 
 Additional sources reviewed:
 
+- [AI Coding Daily](https://aicodingdaily.com/subscription-usage) supplies November 19 quota deltas, token buckets, and reported API-equivalent dollars for controlled Claude and Codex settings on $20 and $100 plans. Gemini rows report the quota delta without tokens or API dollars. Readings below 1% lack a usable measured delta. Published speed was unspecified. The study's quality scores are rubric totals. The solve forecast uses the coding suites above.
+- [Real API Pricing](https://github.com/Fei-Craft/real-api-pricing/blob/332d14ed903c3b7b042bb5a9ec2a3d224757476d/data/research/chatgpt-gpt6luna-plus-round2-2026-09-28.json) supplies a historical GPT-6 Luna Max Plus observation with a six-point weekly delta and all token buckets. Its four-week estimate of $135 can be compared with roughly $106 from the November 19 controlled sample. The difference is within the rounding range of the two-point November reading.
 - [DeepSWE v1.1](https://deepswe.datacurve.ai/) is available as a standalone comparison. Its [public verifier](https://github.com/datacurve-ai/deep-swe/blob/0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea/tasks/abs-module-cache-flags/tests/test.sh) grades submitted patches in a verifier environment. [Epoch AI](https://epoch.ai/benchmarks/deepswe/review) confirmed false negatives on at least 23 of 113 tasks, so the suite is excluded from the combined projection.
 - [CursorBench](https://cursor.com/cursorbench) uses private Cursor workloads. [SWE-Marathon](https://www.swe-marathon.org/) reports task-weighted pass rates and total tokens, with one task held out. [WorkloadBench](https://workloadbench.brenhq.com/numbers) publishes small samples and its quick suite has a ceiling. [Sherpa prod-bench-1](https://www.sherpalabs.ai/benchmarks/coding) uses private tasks and the leaderboard lacks a reproducible output-token denominator. [Argo-Bench](https://argo-bench.com/) publishes solves and output tokens for a separate enterprise analytics workload. None contribute to the coding forecast.
 - [Artificial Analysis Coding Agent Index](https://artificialanalysis.ai/agents/coding-agents) already incorporates other benchmark workloads. Adding the index would duplicate evidence across suites.

@@ -4640,6 +4640,10 @@ select.settings-input {
 .subscription-chart-legend:not([hidden]) { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 6px; padding: 0; list-style: none; }
 .subscription-chart-legend li { display: inline-flex; align-items: center; gap: 6px; font-size: .8rem; }
 .subscription-chart-legend li::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--plot-color); }
+.subscription-plot-legend { display: flex; justify-content: space-between; flex-wrap: wrap; column-gap: 16px; }
+.subscription-chart-source-key { --plot-color: var(--text-secondary); color: var(--text-secondary); }
+.subscription-chart-source-key .published::before { border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.subscription-chart-source-key .estimated::before { border-radius: 0; transform: rotate(45deg) scale(.8); }
 .subscription-capacity-table table { min-width: 0; table-layout: fixed; }
 .subscription-capacity-table thead th:first-child { width: 34%; }
 .subscription-capacity-table thead th:nth-child(2) { width: 18%; }

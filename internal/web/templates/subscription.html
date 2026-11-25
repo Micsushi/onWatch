@@ -7,10 +7,10 @@
         <summary id="subscription-observed-title">Your usage</summary>
         <div class="table-container subscription-comparison-table" role="region" aria-labelledby="subscription-observed-title" tabindex="0">
             <table class="data-table subscription-observed-table">
-                <thead><tr><th scope="col">Provider and plan</th><th scope="col">Monthly fee</th><th scope="col">Recorded API value</th><th scope="col">API value / fee</th><th scope="col">Output tokens / API $</th></tr></thead>
+                <thead><tr><th scope="col">Provider and plan</th><th scope="col">Monthly fee</th><th scope="col">Recorded API value</th><th scope="col">Output tokens / API $</th></tr></thead>
                 <tbody>
                     {{range .SubscriptionProviders}}
-                    <tr data-subscription-provider="{{.}}" data-label="{{template "subscription-provider-name" .}}"><th scope="row">{{template "subscription-provider-name" .}}</th><td colspan="4">Loading usage…</td></tr>
+                    <tr data-subscription-provider="{{.}}" data-label="{{template "subscription-provider-name" .}}"><th scope="row">{{template "subscription-provider-name" .}}</th><td colspan="3">Loading usage…</td></tr>
                     {{end}}
                 </tbody>
             </table>
@@ -70,6 +70,7 @@
         <div class="subscription-controls subscription-filters">
             <select id="subscription-capacity-tier" aria-label="Plan">
                 <option value="base">Base paid (~$20)</option>
+                <option value="mid">Mid-tier (~$100)</option>
                 <option value="higher">Higher paid ($200)</option>
                 <option value="current">Your plans</option>
             </select>
@@ -85,15 +86,20 @@
         <div class="subscription-note" id="subscription-capacity-status" role="status">Loading…</div>
         <details id="subscription-capacity-chart-details" open>
             <summary>Value vs. solves <span id="subscription-capacity-coverage" class="subscription-chart-coverage"></span></summary>
-            <ul id="subscription-capacity-legend" class="subscription-chart-legend" aria-label="Chart providers" hidden></ul>
+            <div class="subscription-plot-legend">
+                <ul id="subscription-capacity-legend" class="subscription-chart-legend" aria-label="Chart providers" hidden></ul>
+                <ul id="subscription-capacity-source-key" class="subscription-chart-legend subscription-chart-source-key" aria-label="Chart evidence" hidden>
+                    <li>Local</li><li class="published">Published</li><li class="estimated">Estimated</li>
+                </ul>
+            </div>
             <div class="subscription-chart subscription-capacity-chart" id="subscription-capacity-chart-wrap" hidden>
-                <canvas id="subscription-capacity-chart" role="img" aria-label="Monthly benchmark solves by API dollars per subscription dollar. Values are also in the table below."></canvas>
+                <canvas id="subscription-capacity-chart" role="img" aria-label="Four-week benchmark solves by API dollars per subscription dollar. Values are also in the table below."></canvas>
             </div>
             <div class="subscription-note" id="subscription-capacity-chart-empty" hidden></div>
         </details>
-        <div class="table-container subscription-comparison-table subscription-capacity-table" role="region" aria-label="Monthly estimates" tabindex="0">
+        <div class="table-container subscription-comparison-table subscription-capacity-table" role="region" aria-label="Four-week estimates" tabindex="0">
             <table class="data-table">
-                <thead><tr><th scope="col">Model</th><th scope="col">Effort</th><th scope="col">API $ / $1</th><th scope="col">Est. solves/mo</th><th scope="col" title="Number of benchmarks in the estimate">Suites</th></tr></thead>
+                <thead><tr><th scope="col">Model</th><th scope="col">Effort</th><th scope="col">API $ / $1</th><th scope="col">Solves / 4 wk</th><th scope="col" title="Number of benchmarks in the estimate">Suites</th></tr></thead>
                 <tbody id="subscription-capacity-rows"></tbody>
             </table>
         </div>
@@ -114,7 +120,7 @@
                 <tbody id="subscription-capacity-scores"></tbody>
             </table></div>
             <div class="table-container"><table class="data-table">
-                <thead><tr><th scope="col">Model · Effort</th><th scope="col">Quota source · Samples / Points</th><th scope="col">API $/mo</th><th scope="col">Input / Output per mo</th></tr></thead>
+                <thead><tr><th scope="col">Model · Effort</th><th scope="col">Quota source · Samples / Points</th><th scope="col">API $ / 4 wk</th><th scope="col">Input / Output per 4 wk</th><th scope="col">API $ / output vs local</th></tr></thead>
                 <tbody id="subscription-capacity-evidence"></tbody>
             </table></div>
         </details>
