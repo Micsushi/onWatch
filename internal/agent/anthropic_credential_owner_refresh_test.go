@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +17,39 @@ import (
 	"github.com/onllm-dev/onwatch/v2/internal/store"
 	"github.com/onllm-dev/onwatch/v2/internal/tracker"
 )
+
+func TestAnthropicAgent_AuthenticationFailureNamesCorrectLogin(t *testing.T) {
+	for _, isolated := range []bool{false, true} {
+		t.Run(fmt.Sprint(isolated), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+			defer server.Close()
+			str, err := store.New(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer str.Close()
+			logger := slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))
+			a := NewAnthropicAgent(api.NewAnthropicClient("revoked", logger, api.WithAnthropicBaseURL(server.URL)), str, nil, time.Minute, logger, nil)
+			a.SetTokenRefresh(func() string { return "revoked" })
+			if isolated {
+				a.SetCredentialOwnerProfile(`C:\profiles\onwatch`)
+				a.SetCredentialOwnerRefresh(func(context.Context) error { t.Fatal("valid unexpired token triggered renewal"); return nil })
+			}
+			a.poll(context.Background())
+			msg := pollErrorMessage(t, str)
+			if isolated {
+				if !strings.Contains(msg, `C:\profiles\onwatch`) || !strings.Contains(msg, "/login") {
+					t.Fatalf("wrong dedicated login: %s", msg)
+				}
+			} else if !strings.Contains(msg, "claude auth login") {
+				t.Fatalf("wrong shared login: %s", msg)
+			}
+			if strings.Contains(msg, "restart onWatch") || strings.Contains(msg, "'claude auth'") {
+				t.Fatalf("unactionable instruction: %s", msg)
+			}
+		})
+	}
+}
 
 func TestAnthropicAgent_ExpiredOwnerRefreshFailureClearsTokenAndSkipsAPI(t *testing.T) {
 	var apiCalls atomic.Int32

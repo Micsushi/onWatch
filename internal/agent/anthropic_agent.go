@@ -326,7 +326,7 @@ func (a *AnthropicAgent) refreshViaCredentialOwner(ctx context.Context, creds *a
 }
 
 // credentialOwnerSignedOutMessage explains the only action that actually fixes a
-// signed-out isolated profile. 'claude auth' does not exist and re-authenticating
+// signed-out isolated profile. Re-authenticating
 // the default profile would not help, so name the profile that needs the login.
 func (a *AnthropicAgent) credentialOwnerSignedOutMessage() string {
 	profile := "the isolated Claude profile"
@@ -339,14 +339,21 @@ func (a *AnthropicAgent) credentialOwnerSignedOutMessage() string {
 }
 
 // credentialOwnerLoginInstruction spells out the only command that restores the
-// isolated profile. 'claude auth' does not exist, and logging into the default
+// isolated profile. Logging into the default
 // profile would not help, so name the profile that needs the login.
 func (a *AnthropicAgent) credentialOwnerLoginInstruction() string {
 	if a.credentialOwnerDir == "" {
-		return "Run 'claude' with CLAUDE_CONFIG_DIR set to the isolated profile, sign in with /login, then restart onWatch."
+		return "Run 'claude' with CLAUDE_CONFIG_DIR set to the isolated profile, and sign in with /login. onWatch resumes polling automatically."
 	}
 	return "Run 'claude' with CLAUDE_CONFIG_DIR=" + a.credentialOwnerDir +
-		", sign in with /login, then restart onWatch."
+		", and sign in with /login. onWatch resumes polling automatically."
+}
+
+func (a *AnthropicAgent) loginInstruction() string {
+	if a.ownerRefresh != nil || a.credentialOwnerDir != "" {
+		return a.credentialOwnerLoginInstruction()
+	}
+	return "Run 'claude auth login' using the same Claude profile as onWatch. Polling resumes automatically after sign-in."
 }
 
 // missingCredentialsMessage explains the fix for the mode onWatch is actually
@@ -565,7 +572,7 @@ func (a *AnthropicAgent) proactiveRefresh(ctx context.Context, creds *api.Anthro
 			a.lastFailedToken = a.lastToken
 			a.logger.Error("Proactive OAuth refresh - invalid_grant, polling PAUSED",
 				"error", err,
-				"action", "Re-authenticate with 'claude auth' to resume polling")
+				"action", a.loginInstruction())
 		} else {
 			a.logger.Error("Proactive OAuth refresh failed", "error", err)
 		}
@@ -778,7 +785,7 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 		// Only log periodically to avoid spamming logs
 		if !wasAuthPaused {
 			reportFailure("authentication",
-				"Claude authentication is paused. Re-authenticate with 'claude auth' to resume polling.")
+				"Claude authentication is paused. "+a.loginInstruction())
 		}
 		return
 	}
@@ -888,7 +895,7 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 							a.lastFailedToken = a.lastToken
 							a.logger.Error("OAuth refresh token invalid (invalid_grant) - polling PAUSED",
 								"error", refreshErr,
-								"action", "Re-authenticate with 'claude auth' to resume polling")
+								"action", a.loginInstruction())
 						} else {
 							// Transient OAuth error - apply mild backoff
 							a.rateLimitFailCount++
@@ -908,7 +915,7 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 						}
 						if errors.Is(refreshErr, api.ErrOAuthInvalidGrant) {
 							reportFailure("authentication",
-								"Claude refresh credentials are invalid. Re-authenticate with 'claude auth' to resume polling.")
+								"Claude refresh credentials are invalid. "+a.loginInstruction())
 						} else {
 							reportFailure("rate_limit",
 								"Claude quota polling is rate limited and token refresh did not restore access.")
@@ -949,7 +956,7 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 								"Claude quota polling remains rate limited after token refresh.")
 						} else if isAuthError(err) {
 							reportFailure("authentication",
-								"Claude authentication failed after token refresh. Re-authenticate with 'claude auth' to resume polling.")
+								"Claude authentication failed after token refresh. "+a.loginInstruction())
 						} else {
 							reportFailure("provider_request",
 								"Claude quotas could not be fetched. Check connectivity and provider availability.")
@@ -1004,10 +1011,10 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 							a.lastFailedToken = retryToken
 							a.logger.Error("Anthropic polling PAUSED due to repeated auth failures",
 								"failure_count", a.authFailCount,
-								"action", "Re-authenticate with 'claude auth' to resume polling")
+								"action", a.loginInstruction())
 						}
 						reportFailure("authentication",
-							"Claude authentication failed. Re-authenticate with 'claude auth' if the problem continues.")
+							"Claude authentication failed. "+a.loginInstruction())
 					} else {
 						a.logger.Error("Anthropic retry failed with non-auth error", "error", err)
 						reportFailure("provider_request",
@@ -1020,14 +1027,14 @@ func (a *AnthropicAgent) poll(ctx context.Context) {
 			} else {
 				a.logger.Error("No Anthropic token available after re-read")
 				reportFailure("missing_credentials",
-					"No Claude credentials are available. Re-authenticate with 'claude auth' to resume polling.")
+					"No Claude credentials are available. "+a.loginInstruction())
 				return
 			}
 		} else {
 			a.logger.Error("Failed to fetch Anthropic quotas", "error", err)
 			if isAuthError(err) {
 				reportFailure("authentication",
-					"Claude authentication failed. Re-authenticate with 'claude auth' to resume polling.")
+					"Claude authentication failed. "+a.loginInstruction())
 			} else {
 				reportFailure("provider_request",
 					"Claude quotas could not be fetched. Check connectivity and provider availability.")
