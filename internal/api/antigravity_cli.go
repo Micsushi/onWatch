@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ type agySession struct {
 	pty         pty.Pty
 	cmd         *pty.Cmd
 	conn        *AntigravityConnection
+	csrfToken   string
 	closeLaunch func()
 	done        chan struct{}
 }
@@ -73,9 +75,12 @@ func NewAntigravityCLIRunner(logger *slog.Logger) *AntigravityCLIRunner {
 		logger = slog.Default()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	client := NewAntigravityClient(logger)
+	// Keep the session token on the owned CLI endpoint.
+	client.httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &AntigravityCLIRunner{
 		logger:     logger.With("component", "antigravity-cli"),
-		client:     NewAntigravityClient(logger),
+		client:     client,
 		warmTTL:    agyDefaultWarmTTL,
 		rootCtx:    ctx,
 		rootCancel: cancel,
@@ -142,8 +147,8 @@ func (r *AntigravityCLIRunner) Fetch(ctx context.Context) (*AntigravitySnapshot,
 		return nil, err
 	}
 
-	base := r.sess.conn.BaseURL
-	summary, status, err := r.post(ctx, base, agyQuotaSummaryRPC)
+	conn := r.sess.conn
+	summary, status, err := r.post(ctx, conn, agyQuotaSummaryRPC)
 	if err != nil || status != http.StatusOK {
 		r.recordFailureLocked()
 		if err == nil {
@@ -165,7 +170,7 @@ func (r *AntigravityCLIRunner) Fetch(ctx context.Context) (*AntigravitySnapshot,
 	}
 
 	// Identity/plan are best-effort; the quota summary already succeeded.
-	if statusBody, st, serr := r.post(ctx, base, agyUserStatusRPC); serr == nil && st == http.StatusOK {
+	if statusBody, st, serr := r.post(ctx, conn, agyUserStatusRPC); serr == nil && st == http.StatusOK {
 		if us, perr := ParseAntigravityResponse(statusBody); perr == nil && us.UserStatus != nil {
 			snap.Email = us.UserStatus.Email
 			if us.UserStatus.PlanStatus != nil {
@@ -223,7 +228,8 @@ func (r *AntigravityCLIRunner) launch(binPath string) (*agySession, error) {
 		return nil, fmt.Errorf("antigravity cli: open pty: %w", err)
 	}
 	// Own cancellation: go-pty v0.2.3 races its Windows context waiter with Wait.
-	cmd := p.Command(binPath)
+	token := rand.Text()
+	cmd := p.Command(binPath, "--csrf_token", token)
 	configureAgyLaunch(cmd)
 	if home, err := os.UserHomeDir(); err == nil {
 		cmd.Dir = filepath.Join(home, ".onwatch", "agy-quota")
@@ -249,7 +255,7 @@ func (r *AntigravityCLIRunner) launch(binPath string) (*agySession, error) {
 	// Drain PTY output so the process is not blocked on a full buffer.
 	go func() { _, _ = io.Copy(io.Discard, p) }()
 	r.logger.Debug("launched managed agy", "pid", cmd.Process.Pid, "path", binPath)
-	return &agySession{pty: p, cmd: cmd, closeLaunch: closeLaunch, done: done}, nil
+	return &agySession{pty: p, cmd: cmd, csrfToken: token, closeLaunch: closeLaunch, done: done}, nil
 }
 
 // awaitReady polls until the quota endpoint parses, since a fresh agy can bind
@@ -257,27 +263,62 @@ func (r *AntigravityCLIRunner) launch(binPath string) (*agySession, error) {
 func (r *AntigravityCLIRunner) awaitReady(ctx context.Context, sess *agySession) (*AntigravityConnection, error) {
 	deadline := time.Now().Add(agyReadinessTimeout)
 	pid := sess.cmd.Process.Pid
+	unauthorized := false
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		ports, err := r.client.discoverPorts(ctx, pid)
-		if err == nil && len(ports) > 0 {
-			if conn, _ := r.client.probeForConnectAPI(ctx, ports, ""); conn != nil {
-				if body, status, perr := r.post(ctx, conn.BaseURL, agyQuotaSummaryRPC); perr == nil && status == http.StatusOK {
-					if _, err := parseAgyQuotaSummary(body); err == nil {
-						return conn, nil
-					}
-				}
+		if err == nil {
+			conn, denied := r.probeQuota(ctx, ports, sess.csrfToken)
+			if conn != nil {
+				return conn, nil
 			}
+			unauthorized = unauthorized || denied
 		}
 		select {
 		case <-ctx.Done():
+			if unauthorized && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, fmt.Errorf("antigravity cli: quota service returned HTTP 401: %w", ctx.Err())
+			}
 			return nil, ctx.Err()
+		case <-sess.done:
+			return nil, fmt.Errorf("antigravity cli: process exited before quota service became ready")
 		case <-time.After(agyReadinessPoll):
 		}
 	}
+	if unauthorized {
+		return nil, fmt.Errorf("antigravity cli: quota service returned HTTP 401: %w", ErrAgyNotReady)
+	}
 	return nil, ErrAgyNotReady
+}
+
+// Some CLI versions do not serve the IDE's GetUnleashData discovery route.
+func (r *AntigravityCLIRunner) probeQuota(ctx context.Context, ports []int, token string) (*AntigravityConnection, bool) {
+	unauthorized := false
+	for _, port := range ports {
+		for _, protocol := range []string{"https", "http"} {
+			conn := &AntigravityConnection{
+				BaseURL:   fmt.Sprintf("%s://127.0.0.1:%d", protocol, port),
+				CSRFToken: token,
+				Port:      port,
+				Protocol:  protocol,
+			}
+			probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+			body, status, err := r.post(probeCtx, conn, agyQuotaSummaryRPC)
+			cancel()
+			if err != nil {
+				continue
+			}
+			unauthorized = unauthorized || status == http.StatusUnauthorized
+			if status == http.StatusOK {
+				if _, err := parseAgyQuotaSummary(body); err == nil {
+					return conn, unauthorized
+				}
+			}
+		}
+	}
+	return nil, unauthorized
 }
 
 // sessionHealthy returns true if the current session still serves quota data.
@@ -287,19 +328,19 @@ func (r *AntigravityCLIRunner) sessionHealthy(ctx context.Context) bool {
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_, status, err := r.post(checkCtx, r.sess.conn.BaseURL, agyQuotaSummaryRPC)
+	_, status, err := r.post(checkCtx, r.sess.conn, agyQuotaSummaryRPC)
 	return err == nil && status == http.StatusOK
 }
 
-// post issues a Connect-RPC POST against the agy language server. No CSRF token
-// is required for the CLI's server.
-func (r *AntigravityCLIRunner) post(ctx context.Context, baseURL, rpcPath string) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+rpcPath, strings.NewReader(agyMetadataBody))
+// post uses the session token configured when this runner launched agy.
+func (r *AntigravityCLIRunner) post(ctx context.Context, conn *AntigravityConnection, rpcPath string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, conn.BaseURL+rpcPath, strings.NewReader(agyMetadataBody))
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Connect-Protocol-Version", "1")
+	req.Header.Set("X-Codeium-Csrf-Token", conn.CSRFToken)
 
 	resp, err := r.client.httpClient.Do(req)
 	if err != nil {
