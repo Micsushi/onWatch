@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -56,6 +57,9 @@ func TestQuietWeeklyPolicyBoundariesAndRestart(t *testing.T) {
 	engine.Check(base)
 	if got := len(capture.snapshot()); got != 1 {
 		t.Fatalf("restart/account/concurrency dedupe: got %d", got)
+	}
+	if message := capture.snapshot()[0]; !strings.Contains(message, "Resets in 3d 12h.") || strings.Contains(message, "halfway") || strings.Contains(message, "only underusage") {
+		t.Fatalf("weekly reminder should contain concise reset timing: %s", message)
 	}
 	base.Provider = "anthropic"
 	engine.Check(base)

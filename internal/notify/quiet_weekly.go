@@ -52,7 +52,7 @@ func (e *NotificationEngine) checkQuietWeekly(status QuotaStatus) {
 		e.logger.Error("cannot save weekly notification checkpoint", "provider", provider)
 		return
 	}
-	subject := fmt.Sprintf("[%s] weekly halfway check: %.0f%% used", paceDiscordProvider(provider), status.Utilization)
-	body := fmt.Sprintf("Weekly usage is below 50%% at the halfway point.\nUsage: %.1f%%\nNext reset: %s\nThis is the only underusage alert for this provider this week.", status.Utilization, status.ResetsAt.UTC().Format(time.RFC3339))
+	subject := fmt.Sprintf("%s: %.0f%% used this week", titleCase(paceDiscordProvider(provider)), status.Utilization)
+	body := "Resets in " + formatPaceResetDuration(status.ResetsAt.Sub(now)) + "."
 	e.sendViaChannels(mailer, push, discord, cfg.Channels, subject, body, "provider", provider, "type", "weekly_underuse")
 }
