@@ -6412,7 +6412,7 @@ function updateChartTheme() {
   }
 }
 
-function applyProviderHistoryPayload(provider, range, data, apiIntegrationsHistoryData = null, historyWindow = null) {
+function applyProviderHistoryPayload(provider, range, data, historyWindow = null) {
   if (provider === 'api-integrations') {
     State.apiIntegrationsHistory = data;
     State.apiIntegrationsHistoryWindow = historyWindow ? { ...historyWindow, range } : null;
@@ -6421,14 +6421,7 @@ function applyProviderHistoryPayload(provider, range, data, apiIntegrationsHisto
     return;
   }
 
-  if (apiIntegrationsHistoryData) {
-    State.apiIntegrationsHistory = apiIntegrationsHistoryData;
-  }
-
   if (provider === 'both') {
-    if (apiIntegrationsHistoryData) {
-      data.apiIntegrations = apiIntegrationsHistoryData;
-    }
     State.allProvidersHistory = data;
     renderAllProvidersView();
     return;
@@ -6645,7 +6638,7 @@ function applyUsageGraphJob(job, payload, options = {}) {
   if (!usageGraphJobIsSelected(job)) return;
   if (payload.usesArchivedData) noteArchivedHistorySelection(job.range);
   if (job.provider === 'api-integrations' || job.provider === 'both') {
-    applyProviderHistoryPayload(job.provider, job.range, payload.data, payload.apiIntegrationsHistory || null, {
+    applyProviderHistoryPayload(job.provider, job.range, payload.data, {
       windowStart: payload.windowStart || job.windowStart,
       windowEnd: payload.windowEnd || job.windowEnd,
     });
@@ -6678,7 +6671,6 @@ function applyUsageGraphJob(job, payload, options = {}) {
 
 async function runUsageGraphRefreshJob(job, signal) {
   let data;
-  let apiIntegrationsHistory = null;
   let usesArchivedData = false;
   if (job.provider === 'api-integrations') {
     const response = await authFetch(`${API_BASE}/api/api-integrations/history?${job.query}`, { signal });
@@ -6692,49 +6684,6 @@ async function runUsageGraphRefreshJob(job, signal) {
     usesArchivedData = response.headers.get('X-OnWatch-Archived-Data') === 'true';
     data = await response.json();
 
-    if (job.provider === 'both') {
-      const cachedCostHistory = State.apiIntegrationsVisibility?.dashboard !== false
-        ? getStaleProviderHistory(job.provider, job.range, job.selectionKey, job.accountKey)?.apiIntegrationsHistory || null
-        : null;
-      const primaryPayload = {
-        data,
-        apiIntegrationsHistory: cachedCostHistory,
-        chartDatasets: null,
-        quotaAccounts: true,
-        usesArchivedData,
-        windowStart: job.windowStart,
-        windowEnd: job.windowEnd,
-      };
-      setCachedProviderData('history', job.provider, job.selectionKey, primaryPayload, job.accountKey);
-      applyUsageGraphJob(job, primaryPayload);
-
-      if (State.apiIntegrationsVisibility?.dashboard !== false) {
-        try {
-          const apiResponse = await authFetch(`${API_BASE}/api/api-integrations/history?${job.query}`, { signal });
-          if (apiResponse.ok) {
-            usesArchivedData = usesArchivedData || apiResponse.headers.get('X-OnWatch-Archived-Data') === 'true';
-            apiIntegrationsHistory = await apiResponse.json();
-          }
-        } catch (error) {
-          if (signal.aborted) return;
-          // API integrations are optional in the combined view.
-        }
-      }
-      if (signal.aborted || !apiIntegrationsHistory) return;
-
-      const combinedPayload = {
-        data,
-        apiIntegrationsHistory,
-        chartDatasets: null,
-        quotaAccounts: true,
-        usesArchivedData,
-        windowStart: job.windowStart,
-        windowEnd: job.windowEnd,
-      };
-      setCachedProviderData('history', job.provider, job.selectionKey, combinedPayload, job.accountKey);
-      applyUsageGraphJob(job, combinedPayload);
-      return;
-    }
   }
   if (signal.aborted) return;
 
@@ -6743,7 +6692,7 @@ async function runUsageGraphRefreshJob(job, signal) {
     : buildProviderHistoryDatasets(job.provider, job.range, data);
   const payload = {
     data,
-    apiIntegrationsHistory,
+    quotaAccounts: job.provider === 'both',
     chartDatasets,
     usesArchivedData,
     windowStart: job.windowStart,

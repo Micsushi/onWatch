@@ -1154,61 +1154,31 @@ if (formatChartAxisNumber(2500) !== '2,500') {
 	}
 }
 
-func TestCombinedHistoryRendersPrimaryBeforeOptionalCostHistory(t *testing.T) {
+func TestCombinedQuotaHistoryDoesNotFetchUnusedCostHistory(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
 	refresh := dashboardJavaScriptBetween(t, source, "async function runUsageGraphRefreshJob(", "function createUsageGraphRefreshJob(")
-	script := fmt.Sprintf(`
-const API_BASE = '/api';
-const State = { apiIntegrationsVisibility: { dashboard: true } };
-const signal = { aborted: false };
-const job = {
-  provider: 'both',
-  accountKey: '',
-  selectionKey: 'chart:7d',
-  range: '7d',
-  query: 'range=7d',
-};
+	runDashboardNodeTest(t, fmt.Sprintf(`
+const assert = require('node:assert/strict');
+const API_BASE = '';
+const requests = [];
 const applications = [];
-let resolveCostHistory;
-const costHistoryResponse = new Promise(resolve => { resolveCostHistory = resolve; });
-function response(data) {
-  return {
-    ok: true,
-    headers: { get() { return null; } },
-    async json() { return data; },
-  };
-}
-let requestCount = 0;
-async function authFetch() {
-  requestCount += 1;
-  if (requestCount === 1) return response({ primary: true });
-  return costHistoryResponse;
-}
 function providerParamFor() { return 'provider=both'; }
-function getStaleProviderHistory() { return { apiIntegrationsHistory: { cached: true } }; }
+async function authFetch(url) {
+  requests.push(url);
+  return {ok:true, headers:{get:()=>null}, json: async () => ({primary:true})};
+}
 function setCachedProviderData() {}
-function applyUsageGraphJob(_job, payload) { applications.push(payload); }
-function buildProviderHistoryDatasets() { throw new Error('both view does not build a line chart'); }
+function applyUsageGraphJob(_job,payload) { applications.push(payload); }
 %s
 (async () => {
-  const run = runUsageGraphRefreshJob(job, signal);
-  await new Promise(resolve => setImmediate(resolve));
-  if (applications.length !== 1 || !applications[0].apiIntegrationsHistory.cached) {
-    throw new Error('primary provider history must render with cached cost history before its refresh resolves');
-  }
-  resolveCostHistory(response({ cost: true }));
-  await run;
-  if (applications.length !== 2 || !applications[1].apiIntegrationsHistory.cost) {
-    throw new Error('cost history must enrich the combined view when it arrives');
-  }
-})().catch(error => {
-  console.error(error);
-  process.exitCode = 1;
-});
-`, refresh)
-
-	runDashboardNodeTest(t, script)
+  await runUsageGraphRefreshJob({provider:'both', range:'all', query:'range=all'}, {aborted:false});
+  assert.deepEqual(requests, ['/api/history?range=all&provider=both&quotaAccounts=1']);
+  assert.equal(applications.length, 1);
+  assert.deepEqual(applications[0].data, {primary:true});
+  assert.equal(applications[0].quotaAccounts, true);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+`, refresh))
 }
 
 func TestChartRenderGuardBehavior(t *testing.T) {
