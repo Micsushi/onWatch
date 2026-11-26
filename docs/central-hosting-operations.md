@@ -153,7 +153,7 @@ Verify history, settings, devices, receipts, revocations, ownership, export, and
 
 ## Graph and freshness behavior
 
-Graphs use the timestamps of recorded observations. Quota history leaves gaps after the larger of three expected intervals or one chart bucket and shows observed resets as drops. The cumulative token and cost charts use solid steps between recorded totals. Their per-period charts use dotted lines between measured periods when intervening values are missing. Both modes keep the original points and totals. Delayed and stale collectors are shown next to the graph.
+Graphs use the timestamps of recorded observations. Quota history leaves gaps after the larger of three expected intervals or one chart bucket and shows observed resets as drops. The cumulative token and cost charts connect recorded totals directly with solid straight lines. Their per-period charts use dotted lines between measured periods when intervening values are missing. Both modes keep the original points and totals. Delayed and stale collectors are shown next to the graph.
 
 Codex and Antigravity cards show the age of their last successful quota snapshot
 and mark it stale after 30 minutes. The last measured percentage remains visible;

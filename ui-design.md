@@ -26,10 +26,10 @@ dashboard.
   animation. Cached and refreshed payloads may arrive close together, so range
   changes must not interpolate from the old graph or restart an animation.
 - Preserve observed usage points and timestamps through client rendering. Quota
-  graphs leave collection gaps blank. Cumulative token and cost graphs carry the
-  last recorded total forward with a solid step between recorded points. Their
-  per-period views use labeled dotted connectors between measured periods across
-  gaps. Keep missing measurements out of the data and tooltips in both modes.
+  graphs leave collection gaps blank. Cumulative token and cost graphs connect
+  recorded points directly with solid straight lines. Their per-period views
+  use labeled dotted connectors between measured periods across gaps. Keep
+  missing measurements out of the data and tooltips in both modes.
 - When collection gaps split a dense usage series, remove area fill and point
   markers, and explain that blank spans mean no samples were collected.
 - Per-period usage keeps unobserved buckets unknown, never assigns usage across

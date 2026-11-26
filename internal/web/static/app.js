@@ -8296,7 +8296,6 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
       backgroundColor: metricColor,
       ...graphLineStyle(periodMode),
       spanGaps: true,
-      stepped: periodMode ? false : 'before',
       segment: periodMode ? {
         borderDash: ({ p0, p1 }) => p0.skip || p1.skip ? [2, 4] : undefined,
       } : undefined,
