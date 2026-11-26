@@ -174,7 +174,7 @@ Open **http://localhost:9211** and log in with your `.env` credentials.
 
 Each quota card shows: usage vs. limit with progress bar, live countdown to reset, status badge (healthy/warning/danger/critical), and consumption rate with projected usage.
 
-**Time-series chart** -- Chart.js area chart showing all quotas as % of limit. Time ranges: 1h, 6h, 24h, 7d, 30d.
+**Time-series chart** -- Chart.js area chart showing all quotas as % of limit. Time ranges: 1h, 6h, 12h, 24h, 7d, 30d, all time, or custom dates.
 
 **API Integrations chart** -- Dedicated telemetry view for custom API-driven scripts. Switch between tokens per request, request counts, accumulated token use, and cost where available.
 

@@ -193,9 +193,11 @@ const State = {
   codexPlanType: '',
   codexQuotaNames: [],
   allProvidersCurrent: null,
+  allProviderAccountSelections: {},
   allProvidersCurrentLoaded: false,
   allProvidersInsights: null,
   allProvidersHistory: null,
+  allProvidersHistoryWindow: null,
   providerVisibility: {},
   providerSettings: {},
   menubarCapabilities: null,
@@ -212,6 +214,7 @@ const State = {
   overviewRequestSeq: 0,
   apiIntegrationsCurrent: null,
   apiIntegrationsHistory: null,
+  apiIntegrationsHistoryWindow: null,
   platformCostBucketHistory: null,
   apiIntegrationsHealth: null,
   apiIntegrationsCurrentCacheTs: 0,
@@ -413,7 +416,7 @@ function getStaleProviderHistory(provider, range, selectionKey, accountOverride)
 }
 
 function pruneLegacyPresetHistoryEntries(cache) {
-  const legacyPresetPattern = /:chart:(?:1h|6h|24h|7d|30d|all):/;
+  const legacyPresetPattern = /:chart:(?:1h|6h|12h|24h|7d|30d|all):/;
   Object.keys(cache).forEach((key) => {
     if (key.startsWith('history:') && legacyPresetPattern.test(key)) {
       delete cache[key];
@@ -905,7 +908,7 @@ function platformCostPayloadRequestKey(provider, range, scope = 'platformCost') 
   return `${provider || ''}:${rangeKey}`;
 }
 
-async function fetchPlatformCostPayload(provider, range, signal, scope = 'platformCost', queryOverride = '') {
+async function fetchPlatformCostPayload(provider, range, signal, scope = 'platformCost', queryOverride = '', onHistory) {
   range = normalizePlatformCostRange(range);
   const requestKey = platformCostPayloadRequestKey(provider, range, scope);
   const existing = State.platformCostPayloadInflight[requestKey];
@@ -914,21 +917,26 @@ async function fetchPlatformCostPayload(provider, range, signal, scope = 'platfo
   const request = (async () => {
     const integration = platformCostIntegrationNames[provider] || '';
     const query = queryOverride || platformCostHistoryRequestQuery(range, scope);
-    const requests = [
-      authFetch(`${API_BASE}/api/api-integrations/sessions?${query}&integration=${encodeURIComponent(integration)}&includeSessions=false`, { signal }),
-      authFetch(`${API_BASE}/api/api-integrations/history?${query}&integration=${encodeURIComponent(integration)}`, { signal }),
-    ];
-    const [sessionRes, bucketRes] = await Promise.all(requests);
-    if (!sessionRes.ok && !bucketRes.ok) {
+    const sessions = authFetch(`${API_BASE}/api/api-integrations/sessions?${query}&integration=${encodeURIComponent(integration)}&includeSessions=false`, { signal });
+    const history = authFetch(`${API_BASE}/api/api-integrations/history?${query}&integration=${encodeURIComponent(integration)}`, { signal }).then(async response => {
+      if (!response.ok) return null;
+      const payload = {
+        apiHistory: await response.json(),
+        usesArchivedData: response.headers.get('X-OnWatch-Archived-Data') === 'true',
+      };
+      if (!signal.aborted) onHistory?.(payload);
+      return payload;
+    });
+    const [sessionRes, bucketPayload] = await Promise.all([sessions, history]);
+    if (!sessionRes.ok && !bucketPayload) {
       throw new Error('Failed to fetch cost history');
     }
     let sessionHistory = {};
     let sessionTotals = {};
     let sessionModels = {};
-    let apiHistory = null;
-    let usesArchivedData = false;
+    let usesArchivedData = Boolean(bucketPayload?.usesArchivedData);
     if (sessionRes.ok) {
-      usesArchivedData = sessionRes.headers.get('X-OnWatch-Archived-Data') === 'true';
+      usesArchivedData = usesArchivedData || sessionRes.headers.get('X-OnWatch-Archived-Data') === 'true';
       const sessionData = await sessionRes.json();
       sessionTotals = sessionData && typeof sessionData === 'object' ? (sessionData._totals || {}) : {};
       sessionModels = sessionData && typeof sessionData === 'object' ? (sessionData._models || {}) : {};
@@ -938,11 +946,7 @@ async function fetchPlatformCostPayload(provider, range, signal, scope = 'platfo
       }
       sessionHistory = sessionData || {};
     }
-    if (bucketRes && bucketRes.ok) {
-      usesArchivedData = usesArchivedData || bucketRes.headers.get('X-OnWatch-Archived-Data') === 'true';
-      apiHistory = await bucketRes.json();
-    }
-    return { sessionHistory, sessionTotals, sessionModels, apiHistory, usesArchivedData };
+    return { sessionHistory, sessionTotals, sessionModels, apiHistory: bucketPayload?.apiHistory || null, usesArchivedData };
   })();
 
   State.platformCostPayloadInflight[requestKey] = request;
@@ -1050,6 +1054,7 @@ function initDashboardAccountPicker() {
   const description = applied.map(input => input.dataset.label).join(', ');
   summary.textContent = params.get('account') === 'provider' ? 'Accounts'
     : applied.length === 1 ? applied[0].dataset.label : applied.length + ' accounts';
+  summary.title = description;
   summary.setAttribute('aria-label', 'Choose accounts' + (description && params.get('account') !== 'provider' ? '. Showing ' + description : ''));
   const apply = document.getElementById('dashboard-account-apply');
   form.addEventListener('change', () => { apply.disabled = !options.some(input => input.checked); });
@@ -1116,7 +1121,6 @@ function renderAccountReadings(panel, provider, current) {
 
 function initDashboardAccountOverview(overview) {
   const provider = getCurrentProvider();
-  const range = document.getElementById('dashboard-account-range');
   const panels = [...overview.querySelectorAll('[data-account]')];
   const history = new Map();
   const refreshBtn = document.getElementById('refresh-btn');
@@ -1126,20 +1130,34 @@ function initDashboardAccountOverview(overview) {
     const canvas = plot.querySelector('canvas');
     const status = panel.querySelector('[data-account-history]');
     if (typeof Chart !== 'undefined') Chart.getChart(canvas)?.destroy();
-    const datasets = buildProviderHistoryDatasets(provider, result.range, result.payload).filter(dataset => datasetsHaveFiniteValue([dataset]));
+    const source = buildProviderHistoryDatasets(provider, result.range, result.payload);
+    const periodMode = isPeriodGraphMode(State.graphMode);
+    const datasets = applyGraphModeToDatasets(source, result.range, State.graphMode, result.start, result.end)
+      .filter(dataset => datasetsHaveFiniteValue([dataset]));
     for (const dataset of datasets) {
-      if (dataset.data.filter(point => point.y != null).length <= 3) dataset.pointRadius = 3;
+      if (!periodMode && dataset.data.filter(point => point.y != null).length <= 3) dataset.pointRadius = 3;
     }
     plot.hidden = !datasets.length || typeof Chart === 'undefined';
-    status.textContent = !datasets.length ? 'No quota observations in this range.'
+    status.textContent = !datasets.length
+      ? (periodMode && datasetsHaveFiniteValue(source)
+        ? 'This range needs two consecutive readings to show usage change.'
+        : 'No quota observations in this range.')
       : typeof Chart === 'undefined' ? 'Chart unavailable.'
-      : datasets.some(dataset => dataset.data.some(point => point.y == null)) ? 'Blank spans mean no readings were collected.' : '';
+      : datasets.some(dataset => dataset.data.some(point => point.y == null))
+        ? (periodMode ? 'Blank periods lack enough readings to calculate usage change.' : 'Blank spans mean no readings were collected.')
+        : '';
     status.hidden = !status.textContent;
     if (plot.hidden) return;
-    const options = buildChartOptions(getThemeColors(), computeYMax(datasets), result.range);
-    options.scales.x.min = Date.parse(result.start);
-    options.scales.x.max = Date.parse(result.end);
-    options.scales.y.title = { display: true, text: 'Quota used (%)', color: getThemeColors().text };
+    const options = buildChartOptions(getThemeColors(), computeYMax(datasets, null, { cap: !periodMode }), result.range, State.graphMode);
+    if (result.range !== 'all') {
+      options.scales.x.min = Date.parse(result.start);
+      options.scales.x.max = Date.parse(result.end);
+    }
+    options.scales.y.title = {
+      display: true,
+      text: periodMode ? 'Observed quota increase (pp)' : 'Quota used (%)',
+      color: getThemeColors().text,
+    };
     new Chart(canvas, { type: 'line', data: { datasets }, options });
   };
   const load = async () => {
@@ -1147,7 +1165,7 @@ function initDashboardAccountOverview(overview) {
     controller = new AbortController();
     const request = controller;
     const timeout = window.setTimeout(() => request.abort(), DASHBOARD_FOREGROUND_FETCH_TIMEOUT_MS);
-    const selected = range.value;
+    const selected = selectedChartRange();
     const period = historyRequestWindow(selected, 'chart');
     const bounds = new URLSearchParams(period);
     setDashboardRefreshState(true, 'Updating account readings…');
@@ -1185,7 +1203,8 @@ function initDashboardAccountOverview(overview) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
   refreshBtn?.addEventListener('click', load);
-  range.addEventListener('change', load);
+  setupGraphHistoryRangeControls(load);
+  setupChartModeSelector(() => history.forEach((result, panel) => draw(panel, result)));
   new MutationObserver(() => history.forEach((result, panel) => draw(panel, result)))
     .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   setInterval(() => { if (!document.hidden) load(); }, REFRESH_INTERVAL);
@@ -1216,117 +1235,25 @@ function saveMiniMaxAccount(account) {
 
 async function loadMiniMaxAccounts() {
   try {
-    const res = await authFetch(`${API_BASE}/api/minimax/accounts`);
+    const res = await authFetch(API_BASE + '/api/minimax/accounts');
     if (!res.ok) return;
     const data = await res.json();
-    if (data.accounts && data.accounts.length > 0) {
-      const activeAccounts = data.accounts.filter(a => !a.deletedAt);
-      State.minimaxAccounts = activeAccounts;
-      populateMiniMaxAccountTabs();
-      updateMiniMaxAccountTabsVisibility();
-    }
-  } catch (e) {
-    // silent
-  }
-}
+    const accounts = (data.accounts || []).filter(account => !account.deletedAt);
+    State.minimaxAccounts = accounts;
+    if (!accounts.length) return;
+    if (!accounts.some(account => account.id === State.minimaxAccount)) saveMiniMaxAccount(accounts[0].id);
 
-function populateMiniMaxAccountTabs() {
-  const dropdown = document.getElementById('minimax-profile-dropdown');
-  const menu = document.getElementById('minimax-profile-menu');
-  if (!dropdown || !menu) return;
-
-  if (!State.minimaxAccounts || State.minimaxAccounts.length <= 1) {
-    dropdown.style.display = 'none';
-    return;
-  }
-
-  menu.innerHTML = '';
-
-  for (const account of State.minimaxAccounts) {
-    const li = document.createElement('li');
-    li.className = 'codex-profile-item' + (account.id === State.minimaxAccount ? ' active' : '');
-    li.dataset.accountId = account.id;
-    li.textContent = account.name;
-    li.setAttribute('role', 'option');
-    li.setAttribute('aria-selected', account.id === State.minimaxAccount ? 'true' : 'false');
-    li.addEventListener('click', () => {
-      switchMiniMaxAccount(account.id);
-      closeMiniMaxAccountDropdown();
+    const select = document.getElementById('minimax-profile-select');
+    if (!select || accounts.length < 2) return;
+    select.replaceChildren(...accounts.map(account => new Option(account.name, account.id)));
+    select.value = State.minimaxAccount;
+    select.hidden = false;
+    select.addEventListener('change', () => {
+      if (State.chart) setUsageChartRefreshMessage('Showing the previous account while history loads.');
+      saveMiniMaxAccount(Number(select.value));
+      refreshAll();
     });
-    menu.appendChild(li);
-  }
-
-  if (!State.minimaxAccounts.find(a => a.id === State.minimaxAccount)) {
-    State.minimaxAccount = State.minimaxAccounts[0].id;
-    saveMiniMaxAccount(State.minimaxAccount);
-    updateMiniMaxAccountTabsActive();
-  }
-
-  updateMiniMaxAccountTabsActive();
-}
-
-function switchMiniMaxAccount(accountId) {
-  if (State.minimaxAccount === accountId) return;
-  if (State.chart) setUsageChartRefreshMessage('Showing the previous account while history loads.');
-  State.minimaxAccount = accountId;
-  saveMiniMaxAccount(accountId);
-  updateMiniMaxAccountTabsActive();
-  refreshAll();
-}
-
-function updateMiniMaxAccountTabsActive() {
-  const label = document.getElementById('minimax-profile-label');
-  const menu = document.getElementById('minimax-profile-menu');
-  if (!menu) return;
-
-  const active = State.minimaxAccounts && State.minimaxAccounts.find(a => a.id === State.minimaxAccount);
-  if (label && active) {
-    label.textContent = active.name;
-  }
-
-  menu.querySelectorAll('.codex-profile-item').forEach(item => {
-    const isActive = parseInt(item.dataset.accountId, 10) === State.minimaxAccount;
-    item.classList.toggle('active', isActive);
-    item.setAttribute('aria-selected', isActive ? 'true' : 'false');
-  });
-}
-
-function closeMiniMaxAccountDropdown() {
-  const trigger = document.getElementById('minimax-profile-trigger');
-  const menu = document.getElementById('minimax-profile-menu');
-  if (trigger) trigger.setAttribute('aria-expanded', 'false');
-  if (menu) menu.classList.remove('open');
-}
-
-function updateMiniMaxAccountTabsVisibility() {
-  const dropdown = document.getElementById('minimax-profile-dropdown');
-  if (!dropdown) return;
-
-  const provider = getCurrentProvider();
-  const show = provider === 'minimax' && State.minimaxAccounts && State.minimaxAccounts.length > 1;
-  dropdown.style.display = show ? '' : 'none';
-}
-
-function initMiniMaxAccountTabs() {
-  const trigger = document.getElementById('minimax-profile-trigger');
-  const menu = document.getElementById('minimax-profile-menu');
-  if (!trigger || !menu) return;
-
-  trigger.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const isOpen = menu.classList.toggle('open');
-    trigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('#minimax-profile-dropdown')) {
-      closeMiniMaxAccountDropdown();
-    }
-  });
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeMiniMaxAccountDropdown();
-  });
+  } catch (_) { /* The dashboard can still use its default account. */ }
 }
 
 function minimaxAccountParam() {
@@ -1508,12 +1435,12 @@ function isPeriodGraphMode(mode) {
 
 function normalizeChartRange(range) {
   const value = String(range || '').trim().toLowerCase();
-  return ['1h', '6h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : DEFAULT_CHART_RANGE;
+  return ['1h', '6h', '12h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : DEFAULT_CHART_RANGE;
 }
 
 function normalizeStoredChartRange(range) {
   const value = String(range || '').trim().toLowerCase();
-  return ['1h', '6h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : null;
+  return ['1h', '6h', '12h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : null;
 }
 
 function scopedRangeStorageKey(baseKey, provider = getCurrentProvider()) {
@@ -1674,6 +1601,7 @@ function presetHistoryWindow(range, now = new Date()) {
   const durations = {
     '1h': hour,
     '6h': 6 * hour,
+    '12h': 12 * hour,
     '24h': 24 * hour,
     '7d': 7 * 24 * hour,
     '30d': 30 * 24 * hour,
@@ -2528,12 +2456,9 @@ function openAnthropicModal(quotaName, providerOverride) {
       </div>
       ${sourceKpi}
     </div>
-    <h3 class="modal-section-title">Usage History</h3>
-    <div class="modal-chart-container">
-      <canvas id="modal-chart"></canvas>
-    </div>
+    ${modalChartMarkup()}
     <h3 class="modal-section-title">Recent Cycles</h3>
-    <div class="table-wrapper">
+    <div class="table-wrapper" role="region" aria-label="Recent cycles" tabindex="0">
       <table class="data-table" id="modal-cycles-table">
         <thead><tr><th>Cycle</th><th>Duration</th><th>Peak %</th><th>Total %</th></tr></thead>
         <tbody id="modal-cycles-tbody"><tr><td colspan="4" class="empty-state">Loading...</td></tr></tbody>
@@ -2550,84 +2475,143 @@ function openAnthropicModal(quotaName, providerOverride) {
   loadAnthropicModalCycles(quotaName);
 }
 
+function modalChartMarkup() {
+  return `<section class="modal-chart" aria-labelledby="modal-chart-title">
+    <h3 class="modal-section-title" id="modal-chart-title">Quota history</h3>
+    <p id="modal-chart-status" class="modal-chart-status empty-state" role="status" hidden></p>
+    <p id="modal-chart-summary" class="sr-only"></p>
+    <div class="modal-chart-container" hidden>
+      <canvas id="modal-chart" role="img" aria-labelledby="modal-title modal-chart-title" aria-describedby="modal-chart-summary"></canvas>
+    </div>
+  </section>`;
+}
+
 function setModalChartStatus(canvas, message) {
   if (!canvas?.isConnected || document.getElementById('detail-modal')?.hidden) return false;
-  let status = canvas.parentElement.querySelector('.modal-chart-status');
-  if (!status) {
-    status = document.createElement('p');
-    status.className = 'modal-chart-status empty-state';
-    status.setAttribute('role', 'status');
-    canvas.parentElement.appendChild(status);
-  }
+  const status = document.getElementById('modal-chart-status');
   status.textContent = message;
   status.hidden = !message;
-  canvas.hidden = Boolean(message);
+  canvas.parentElement.hidden = Boolean(message);
   return true;
 }
 
-async function loadAnthropicModalChart(quotaName) {
-  const ctx = document.getElementById('modal-chart');
-  if (!ctx || typeof Chart === 'undefined') return;
-  if (State.modalChart) { State.modalChart.destroy(); State.modalChart = null; }
+function modalQuotaSeries(records, readValue, color) {
+  return {
+    color,
+    points: Array.isArray(records)
+      ? records.map(record => ({ x: record.capturedAt, y: readValue(record) }))
+      : [],
+  };
+}
 
-  setModalChartStatus(ctx, 'Loading quota history...');
+async function loadQuotaModalChart(provider, readSeries) {
+  const canvas = document.getElementById('modal-chart');
+  if (!canvas) return;
+  if (State.modalChart) {
+    State.modalChart.destroy();
+    State.modalChart = null;
+  }
+  if (typeof Chart === 'undefined') {
+    setModalChartStatus(canvas, 'Charts are unavailable. Reload the dashboard to retry.');
+    return;
+  }
+  setModalChartStatus(canvas, 'Loading quota history…');
 
-  const range = State.currentRange || DEFAULT_CHART_RANGE;
-  const rangeKey = range.toLowerCase();
-  const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
-
+  const range = selectedChartRange();
+  const query = historyRequestQuery(range);
+  const account = provider === 'codex' ? codexAccountParam() : '';
   try {
-    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=anthropic`);
+    const res = await authFetch(`${API_BASE}/api/history?${query}&provider=${provider}${account}`);
     if (!res.ok) throw new Error('Quota history unavailable');
     const data = await res.json();
-    if (document.getElementById('modal-chart') !== ctx || !setModalChartStatus(ctx, '')) return;
-    if (!Array.isArray(data) || data.length === 0) {setModalChartStatus(ctx, 'No quota history in this range.');return;}
+    if (!canvas.isConnected || document.getElementById('detail-modal')?.hidden) return;
 
+    const { color, points } = readSeries(data);
+    const processed = processCappedDataWithGaps(points, range);
+    const observed = processed.data.filter(point => Number.isFinite(point.y));
+    if (observed.length === 0) {
+      setModalChartStatus(canvas, 'No observations for this quota in the selected range.');
+      return;
+    }
+
+    const params = new URLSearchParams(query);
+    const bounds = range === 'all' ? {} : {
+      min: Date.parse(params.get('start')),
+      max: Date.parse(params.get('end')),
+    };
+    const span = bounds.max - bounds.min || observed.at(-1).x - observed[0].x;
+    const unit = span > 48 * 3600000 ? 'day' : span > 2 * 3600000 ? 'hour' : 'minute';
     const colors = getThemeColors();
-    const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] ?? null }));
-    const processed = processCappedDataWithGaps(rawData, range);
-    const yMax = computeYMax([{ data: processed.data }]);
+    const peak = observed.reduce((max, point) => Math.max(max, point.y), 0);
+    const latest = observed.at(-1);
+    document.getElementById('modal-chart-summary').textContent =
+      `${observed.length} readings. Peak ${peak.toFixed(1)}%. Latest ${latest.y.toFixed(1)}% on ${formatDateTime(latest.x.toISOString())}.`;
+    setModalChartStatus(canvas, '');
 
-    State.modalChart = new Chart(ctx, {
+    State.modalChart = new Chart(canvas, {
       type: 'line',
       data: {
-        datasets: [(() => { const c = anthropicChartColorMap[quotaName] || { border: '#D97706', bg: 'rgba(217, 119, 6, 0.08)' }; return {
-          label: anthropicDisplayNames[quotaName] || quotaName,
+        datasets: [{
           data: processed.data,
-          borderColor: c.border,
-          backgroundColor: c.bg,
-          fill: processed.gapSegments.size === 0,
+          borderColor: color,
           tension: 0,
           borderWidth: 2.5,
-          pointRadius: processed.pointRadii,
+          pointRadius: observed.length === 1 ? 3 : processed.pointRadii,
           pointHoverRadius: 5,
+          fill: false,
           spanGaps: false,
-          segment: getSegmentStyle(processed.gapSegments, c.border)
-        }; })()]
+          segment: getSegmentStyle(processed.gapSegments, color),
+        }],
       },
       options: {
-        responsive: true, maintainAspectRatio: false,
+        responsive: true,
+        maintainAspectRatio: false,
         animation: false,
         plugins: {
           legend: { display: false },
-          tooltip: { backgroundColor: colors.surfaceContainer, titleColor: colors.onSurface, bodyColor: colors.text, borderColor: colors.outline, borderWidth: 1, callbacks: { label: c => `${c.parsed.y.toFixed(1)}%` } }
+          tooltip: {
+            backgroundColor: colors.surfaceContainer, titleColor: colors.onSurface,
+            bodyColor: colors.text, borderColor: colors.outline, borderWidth: 1,
+            callbacks: {
+              title: items => items.length ? formatDateTime(new Date(items[0].parsed.x).toISOString()) : '',
+              label: item => `${item.parsed.y.toFixed(1)}% used`,
+            },
+          },
         },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick } },
-          y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
-        }
-      }
+          x: {
+            ...bounds,
+            type: 'time', time: { unit },
+            grid: { display: false },
+            ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 12, callback: chartTimeTick },
+          },
+          y: {
+            min: 0, max: computeYMax([{ data: observed }]),
+            grid: { color: colors.grid },
+            ticks: { color: colors.text, callback: value => `${value}%` },
+          },
+        },
+      },
     });
-  } catch (err) {setModalChartStatus(ctx, 'Could not load quota history. Close and reopen details to retry.');}
+  } catch {
+    setModalChartStatus(canvas, 'Could not load quota history. Close and reopen details to retry.');
+  }
 }
 
+function loadAnthropicModalChart(quotaName) {
+  const color = anthropicChartColorMap[quotaName]?.border || '#D97706';
+  return loadQuotaModalChart('anthropic', records => modalQuotaSeries(records, record => record[quotaName], color));
+}
+
+
 async function loadAnthropicModalCycles(quotaName) {
+  const tbody = document.getElementById('modal-cycles-tbody');
+  if (!tbody) return;
   try {
     const res = await authFetch(`${API_BASE}/api/cycles?type=${quotaName}&provider=anthropic`);
     if (!res.ok) return;
     const cycles = await res.json();
-    const tbody = document.getElementById('modal-cycles-tbody');
-    if (!tbody) return;
+    if (!tbody.isConnected || document.getElementById('detail-modal')?.hidden) return;
     const recent = cycles.slice(0, 5);
     if (recent.length === 0) {
       tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No cycles yet.</td></tr>';
@@ -2952,9 +2936,7 @@ function openCopilotModal(quotaName, providerOverride) {
         <span class="modal-stat-value">${data.timeUntilResetSeconds > 0 ? formatDuration(data.timeUntilResetSeconds) : '--'}</span>
       </div>
     </div>
-    <div class="modal-chart-container">
-      <canvas id="modal-chart" height="200"></canvas>
-    </div>
+    ${modalChartMarkup()}
     <h4 class="modal-section-title">Recent Cycles</h4>
     <table class="modal-cycles-table">
       <thead><tr><th>Cycle</th><th>Duration</th><th>Peak Used</th><th>Total Delta</th></tr></thead>
@@ -2970,83 +2952,21 @@ function openCopilotModal(quotaName, providerOverride) {
   loadCopilotModalCycles(quotaName);
 }
 
-async function loadCopilotModalChart(quotaName) {
-  const canvas = document.getElementById('modal-chart');
-  if (!canvas || typeof Chart === 'undefined') return;
-  setModalChartStatus(canvas, 'Loading quota history...');
-  const range = State.currentRange || DEFAULT_CHART_RANGE;
-  const rangeKey = range.toLowerCase();
-  const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
-  try {
-    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=copilot`);
-    if (!res.ok) throw new Error('Quota history unavailable');
-    const history = await res.json();
-    if (document.getElementById('modal-chart') !== canvas || !setModalChartStatus(canvas, '')) return;
-    if (!history || history.length === 0) {setModalChartStatus(canvas, 'No quota history in this range.');return;}
-
-    // Extract data points for this quota
-    const data = history.filter(h => {
-      if (!h.quotas) return false;
-      return h.quotas.some(q => q.name === quotaName);
-    }).map(h => {
-      const q = h.quotas.find(q => q.name === quotaName);
-      return { capturedAt: h.capturedAt, usagePercent: q ? q.usagePercent : 0 };
-    });
-
-    if (data.length === 0) {setModalChartStatus(canvas, 'No quota history in this range.');return;}
-    const ctx = canvas.getContext('2d');
-
-    // Clean up existing chart if any
-    if (State.modalChart) {
-      State.modalChart.destroy();
-      State.modalChart = null;
-    }
-
-    const colors = getThemeColors();
-    const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d.usagePercent }));
-    const processed = processCappedDataWithGaps(rawData, range);
-    const yMax = computeYMax([{ data: processed.data }]);
-
-    State.modalChart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        datasets: [(() => { const c = copilotChartColorMap[quotaName] || { border: '#6e40c9', bg: 'rgba(110, 64, 201, 0.08)' }; return {
-          label: copilotDisplayNames[quotaName] || quotaName,
-          data: processed.data,
-          borderColor: c.border,
-          backgroundColor: c.bg,
-          fill: processed.gapSegments.size === 0,
-          tension: 0,
-          borderWidth: 2.5,
-          pointRadius: processed.pointRadii,
-          pointHoverRadius: 5,
-          spanGaps: false,
-          segment: getSegmentStyle(processed.gapSegments, c.border)
-        }; })()]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        animation: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { backgroundColor: colors.surfaceContainer, titleColor: colors.onSurface, bodyColor: colors.text, borderColor: colors.outline, borderWidth: 1, callbacks: { label: c => `${c.parsed.y.toFixed(1)}%` } }
-        },
-        scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick } },
-          y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
-        }
-      }
-    });
-  } catch (err) {setModalChartStatus(canvas, 'Could not load quota history. Close and reopen details to retry.');}
+function loadCopilotModalChart(quotaName) {
+  const color = copilotChartColorMap[quotaName]?.border || '#6e40c9';
+  return loadQuotaModalChart('copilot', records => modalQuotaSeries(records, record =>
+    record.quotas?.find(quota => quota.name === quotaName)?.usagePercent, color));
 }
 
+
 async function loadCopilotModalCycles(quotaName) {
+  const tbody = document.getElementById('modal-cycles-tbody');
+  if (!tbody) return;
   try {
     const res = await authFetch(`${API_BASE}/api/cycles?type=${quotaName}&provider=copilot`);
     if (!res.ok) return;
     const cycles = await res.json();
-    const tbody = document.getElementById('modal-cycles-tbody');
-    if (!tbody) return;
+    if (!tbody.isConnected || document.getElementById('detail-modal')?.hidden) return;
     const recent = cycles.slice(0, 5);
     if (recent.length === 0) {
       tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No cycles yet.</td></tr>';
@@ -3486,7 +3406,7 @@ function renderOpenRouterCard(credits, containerId) {
   const limitStr = hasLimit ? '$' + credits.limit.toFixed(4) : 'Unlimited';
   const remainStr = credits.remaining != null ? '$' + credits.remaining.toFixed(4) : '--';
 
-  container.innerHTML = `<article class="quota-card openrouter-card" data-quota="credits" data-provider="openrouter" style="animation-delay: 0ms">
+  container.innerHTML = `<article id="card-openrouter-credits" class="quota-card openrouter-card" data-quota="credits" data-provider="openrouter" style="animation-delay: 0ms">
     <header class="card-header">
       <div class="quota-title-block">
         <h2 class="quota-title">
@@ -3506,6 +3426,7 @@ function renderOpenRouterCard(credits, containerId) {
         <div class="progress-fill" id="progress-openrouter-credits" style="width: ${usagePct}%" data-status="${status}"></div>
       </div>
     </div>
+    <div id="freshness-openrouter-credits" class="card-freshness"></div>
     <footer class="card-footer">
       <span class="status-badge" id="status-openrouter-credits" data-status="${status}">
         <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
@@ -3514,9 +3435,17 @@ function renderOpenRouterCard(credits, containerId) {
       <span class="reset-time" id="reset-openrouter-credits">${hasLimit ? 'Remaining: ' + remainStr : ''}</span>
     </footer>
   </article>`;
+  updateOpenRouterFreshness(credits);
+}
+
+function updateOpenRouterFreshness(credits) {
+  const freshness = document.getElementById('freshness-openrouter-credits');
+  if (freshness) freshness.hidden = credits.ageSeconds == null;
+  updateQuotaFreshness('card-openrouter-credits', 'freshness-openrouter-credits', credits);
 }
 
 function updateOpenRouterCard(credits) {
+  updateOpenRouterFreshness(credits);
   const key = 'openrouter-credits';
   const prev = State.currentQuotas[key];
   State.currentQuotas[key] = {
@@ -3571,8 +3500,9 @@ function getQuotaStatus(percent) {
 
 // Antigravity quota detail modal
 function openAntigravityModal(groupKey, providerOverride) {
-  const key = `antigravity-${groupKey}`;
-  const data = State.currentQuotas[key];
+  const isGemini = providerOverride === 'gemini';
+  const provider = isGemini ? 'gemini' : 'antigravity';
+  const data = State.currentQuotas[`${provider}-${groupKey}`];
   if (!data) return;
 
   const modal = document.getElementById('detail-modal');
@@ -3623,91 +3553,48 @@ function openAntigravityModal(groupKey, providerOverride) {
         <span class="modal-stat-value">${data.timeUntilResetSeconds > 0 ? formatDuration(data.timeUntilResetSeconds) : '--'}</span>
       </div>
     </div>
-    <div class="modal-chart-container">
-      <canvas id="modal-chart" height="200"></canvas>
-    </div>
+    ${modalChartMarkup()}
     ${windowRows}
-    <h4 class="modal-section-title">Recent Cycles</h4>
+    ${isGemini ? '' : `<h4 class="modal-section-title">Recent Cycles</h4>
     <table class="modal-cycles-table">
       <thead><tr><th>Cycle</th><th>Duration</th><th>Peak Used</th><th>Total Delta</th></tr></thead>
       <tbody id="modal-cycles-tbody"><tr><td colspan="4">Loading...</td></tr></tbody>
-    </table>
+    </table>`}
   `;
 
   if (modal.hidden) State.modalReturnFocus = document.activeElement;
   modal.hidden = false;
   modal.querySelector('.modal-close')?.focus();
 
-  loadAntigravityModalChart(groupKey);
-  loadAntigravityModalCycles(groupKey);
+  if (isGemini) {
+    loadQuotaModalChart(provider, records => modalQuotaSeries(records, record => record[groupKey], '#6e40c9'));
+  } else {
+    loadAntigravityModalChart(groupKey, data.windowKind || State.antigravityQuotaWindow);
+    loadAntigravityModalCycles(groupKey);
+  }
 }
 
-async function loadAntigravityModalChart(groupKey) {
-  const canvas = document.getElementById('modal-chart');
-  if (!canvas || typeof Chart === 'undefined') return;
-  setModalChartStatus(canvas, 'Loading quota history...');
-  const range = State.currentRange || DEFAULT_CHART_RANGE;
-  const rangeKey = range.toLowerCase();
-  const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
-  const colors = getThemeColors();
-  try {
-    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=antigravity`);
-    if (!res.ok) throw new Error('Quota history unavailable');
-    const data = await res.json();
-    if (document.getElementById('modal-chart') !== canvas || !setModalChartStatus(canvas, '')) return;
-    const ctx = canvas.getContext('2d');
-
-    // Filter to the selected logical quota group dataset
-    const windowKind = State.currentQuotas[`antigravity-${groupKey}`]?.windowKind || State.antigravityQuotaWindow;
-    const candidates = (data.datasets || []).filter(ds => ds.modelId === groupKey || ds.modelId.startsWith(groupKey+':'));
-    const modelDataset = candidates.find(ds => ds.windowKind === windowKind) || candidates[0];
-    if (!modelDataset) {setModalChartStatus(canvas, 'No quota history in this range.');return;}
-
-    if (State.modalChart) State.modalChart.destroy();
-
-    const labels = data.labels || [];
-    const rawData = (modelDataset.data || []).map((y, i) => ({ x: new Date(labels[i]), y }));
-    const processed = processCappedDataWithGaps(rawData, range);
-    const borderColor = modelDataset.borderColor || '#6e40c9';
-
-    State.modalChart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        datasets: [{
-          label: modelDataset.label || groupKey,
-          data: processed.data,
-          borderColor: borderColor,
-          backgroundColor: 'rgba(110, 64, 201, 0.1)',
-          tension: 0,
-          borderWidth: 2.5,
-          pointRadius: processed.pointRadii,
-          pointHoverRadius: 5,
-          fill: false,
-          spanGaps: false,
-          segment: getSegmentStyle(processed.gapSegments, borderColor)
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick }, title: { display: true, text: 'Time' } },
-          y: { beginAtZero: true, max: computeYMax([{ data: processed.data }]), title: { display: true, text: 'Quota used (%)' } }
-        }
-      }
-    });
-  } catch (err) {setModalChartStatus(canvas, 'Could not load quota history. Close and reopen details to retry.');}
+function loadAntigravityModalChart(groupKey, windowKind) {
+  return loadQuotaModalChart('antigravity', data => {
+    const candidates = (data.datasets || []).filter(series =>
+      series.modelId === groupKey || series.modelId?.startsWith(groupKey + ':'));
+    const series = windowKind ? candidates.find(series => series.windowKind === windowKind) : candidates[0];
+    return {
+      color: series?.borderColor || '#6e40c9',
+      points: (series?.data || []).map((y, i) => ({ x: data.labels?.[i], y })),
+    };
+  });
 }
+
 
 async function loadAntigravityModalCycles(groupKey) {
+  const tbody = document.getElementById('modal-cycles-tbody');
+  if (!tbody) return;
   try {
     const res = await authFetch(`${API_BASE}/api/cycle-overview?groupBy=${groupKey}&provider=antigravity`);
     if (!res.ok) return;
     const data = await res.json();
-    const tbody = document.getElementById('modal-cycles-tbody');
-    if (!tbody || !data.cycles) return;
+    if (!tbody.isConnected || document.getElementById('detail-modal')?.hidden || !data.cycles) return;
 
     if (data.cycles.length === 0) {
       tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No cycles recorded yet</td></tr>';
@@ -3989,12 +3876,9 @@ function openCodexModal(quotaName, providerOverride) {
         <div class="modal-kpi-label">Until Reset</div>
       </div>
     </div>
-    <h3 class="modal-section-title">Usage History</h3>
-    <div class="modal-chart-container">
-      <canvas id="modal-chart"></canvas>
-    </div>
+    ${modalChartMarkup()}
     <h3 class="modal-section-title">Recent Cycles</h3>
-    <div class="table-wrapper">
+    <div class="table-wrapper" role="region" aria-label="Recent cycles" tabindex="0">
       <table class="data-table" id="modal-cycles-table">
         <thead><tr><th>Cycle</th><th>Duration</th><th>Peak %</th><th>Total %</th></tr></thead>
         <tbody id="modal-cycles-tbody"><tr><td colspan="4" class="empty-state">Loading...</td></tr></tbody>
@@ -4010,69 +3894,20 @@ function openCodexModal(quotaName, providerOverride) {
   loadCodexModalCycles(quotaName);
 }
 
-async function loadCodexModalChart(quotaName) {
-  const ctx = document.getElementById('modal-chart');
-  if (!ctx || typeof Chart === 'undefined') return;
-  if (State.modalChart) { State.modalChart.destroy(); State.modalChart = null; }
-
-  setModalChartStatus(ctx, 'Loading quota history...');
-
-  const range = State.currentRange || DEFAULT_CHART_RANGE;
-  const rangeKey = range.toLowerCase();
-  const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
-
-  try {
-    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=codex${codexAccountParam()}`);
-    if (!res.ok) throw new Error('Quota history unavailable');
-    const data = await res.json();
-    if (document.getElementById('modal-chart') !== ctx || !setModalChartStatus(ctx, '')) return;
-    if (!Array.isArray(data) || data.length === 0) {setModalChartStatus(ctx, 'No quota history in this range.');return;}
-
-    const colors = getThemeColors();
-    const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] ?? null }));
-    const processed = processCappedDataWithGaps(rawData, range);
-    const yMax = maxVal <= 0 ? 10 : maxVal < 5 ? 10 : Math.min(Math.max(Math.ceil((maxVal * 1.2) / 5) * 5, 10), 100);
-
-    State.modalChart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        datasets: [(() => { const c = codexChartColorMap[quotaName] || { border: '#0EA5E9', bg: 'rgba(14, 165, 233, 0.08)' }; return {
-          label: codexDisplayNames[quotaName] || quotaName,
-          data: processed.data,
-          borderColor: c.border,
-          backgroundColor: c.bg,
-          fill: processed.gapSegments.size === 0,
-          tension: 0,
-          borderWidth: 2.5,
-          pointRadius: processed.pointRadii,
-          pointHoverRadius: 5,
-          spanGaps: false,
-          segment: getSegmentStyle(processed.gapSegments, c.border)
-        }; })()]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        animation: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { backgroundColor: colors.surfaceContainer, titleColor: colors.onSurface, bodyColor: colors.text, borderColor: colors.outline, borderWidth: 1, callbacks: { label: c => `${c.parsed.y.toFixed(1)}%` } }
-        },
-        scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick } },
-          y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
-        }
-      }
-    });
-  } catch (err) {setModalChartStatus(ctx, 'Could not load quota history. Close and reopen details to retry.');}
+function loadCodexModalChart(quotaName) {
+  const color = codexChartColorMap[quotaName]?.border || '#0EA5E9';
+  return loadQuotaModalChart('codex', records => modalQuotaSeries(records, record => record[quotaName], color));
 }
 
+
 async function loadCodexModalCycles(quotaName) {
+  const tbody = document.getElementById('modal-cycles-tbody');
+  if (!tbody) return;
   try {
     const res = await authFetch(`${API_BASE}/api/cycles?type=${quotaName}&provider=codex${codexAccountParam()}`);
     if (!res.ok) return;
     const cycles = await res.json();
-    const tbody = document.getElementById('modal-cycles-tbody');
-    if (!tbody) return;
+    if (!tbody.isConnected || document.getElementById('detail-modal')?.hidden) return;
     const recent = cycles.slice(0, 5);
     if (recent.length === 0) {
       tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No cycles yet.</td></tr>';
@@ -5202,12 +5037,20 @@ function renderAPIIntegrationsInsights() {
   let secondHalfTokens = 0;
   let busiestRecentIntegration = null;
   let busiestRecentTokens = -1;
+  const historyWindow = State.apiIntegrationsHistoryWindow;
+  const selectedEnd = Date.parse(historyWindow?.windowEnd || '');
+  const selectedStart = selectedChartRange() === 'all'
+    ? Object.values(history).reduce((first, rows) => rows.reduce((time, row) => {
+      const captured = Date.parse(row.firstCapturedAt || row.capturedAt);
+      return Number.isFinite(captured) ? Math.min(time, captured) : time;
+    }, first), Infinity)
+    : Date.parse(historyWindow?.windowStart || '');
+  const midpoint = selectedStart + (selectedEnd - selectedStart) / 2;
   Object.entries(history).forEach(([integrationName, rows]) => {
     const typedRows = Array.isArray(rows) ? rows : [];
     if (typedRows.length === 0) return;
-    const halfIndex = Math.ceil(typedRows.length / 2);
     let integrationRecentTokens = 0;
-    typedRows.forEach((row, index) => {
+    typedRows.forEach((row) => {
       const value = Number(row.totalTokens || 0);
       const inputValue = Number(row.inputTokens || row.promptTokens || 0);
       const outputValue = Number(row.outputTokens || row.completionTokens || 0);
@@ -5217,7 +5060,7 @@ function renderAPIIntegrationsInsights() {
       recentOutputTokens += outputValue;
       recentRequestCount += requestValue;
       integrationRecentTokens += value;
-      if (index < halfIndex) {
+      if (Date.parse(row.lastCapturedAt || row.capturedAt) < midpoint) {
         firstHalfTokens += value;
       } else {
         secondHalfTokens += value;
@@ -5234,7 +5077,8 @@ function renderAPIIntegrationsInsights() {
   ));
   const avgTokensPerCall = totals.requestCount > 0 ? totals.totalTokens / totals.requestCount : 0;
   const trendDelta = secondHalfTokens - firstHalfTokens;
-  const trendPct = firstHalfTokens > 0 ? (trendDelta / firstHalfTokens) * 100 : 0;
+  const trendPct = firstHalfTokens > 0 ? (trendDelta / firstHalfTokens) * 100 : null;
+  const trendValue = trendPct == null ? (trendDelta > 0 ? 'New usage' : '--') : `${trendDelta >= 0 ? '+' : '-'}${Math.abs(trendPct).toFixed(1)}%`;
   const recentAvgTokensPerCall = recentRequestCount > 0 ? recentWindowTokens / recentRequestCount : 0;
 
   allTimeEl.innerHTML = [
@@ -5262,7 +5106,7 @@ function renderAPIIntegrationsInsights() {
     { label: 'Input Tokens in Range', value: formatNumber(recentInputTokens), sublabel: 'Prompt-side tokens in the selected range' },
     { label: 'Output Tokens in Range', value: formatNumber(recentOutputTokens), sublabel: 'Completion-side tokens in the selected range' },
     { label: 'API Calls in Range', value: formatNumber(recentRequestCount), sublabel: 'Recorded requests in the selected chart range' },
-    { label: 'Usage Change vs Earlier Half', value: `${trendDelta >= 0 ? '+' : '-'}${Math.abs(trendPct).toFixed(1)}%`, sublabel: `Compared with the earlier half of the visible window (${trendDelta >= 0 ? 'up' : 'down'} ${formatNumber(Math.abs(trendDelta))} tokens)` },
+    { label: 'Usage Change vs Earlier Half', value: trendValue, sublabel: `Compared with the earlier half of the visible window (${trendDelta >= 0 ? 'up' : 'down'} ${formatNumber(Math.abs(trendDelta))} tokens)` },
     { label: 'Average Tokens per Request in Range', value: recentAvgTokensPerCall > 0 ? formatNumber(recentAvgTokensPerCall.toFixed(1)) : '0.0', sublabel: 'Average request size inside the visible window' },
     { label: 'Busiest Integration in Range', value: busiestRecentIntegration ? escapeHTML(busiestRecentIntegration) : '--', sublabel: busiestRecentTokens > 0 ? `${formatNumber(busiestRecentTokens)} tokens in the selected range` : 'Waiting for more recent activity' },
   ].map((stat) => `
@@ -5560,6 +5404,7 @@ function chartRangeUsageLabel(range) {
   const labels = {
     '1h': 'past 1 hour',
     '6h': 'past 6 hours',
+    '12h': 'past 12 hours',
     '24h': 'past 24 hours',
     '7d': 'past 7 days',
     '15d': 'past 15 days',
@@ -5662,6 +5507,7 @@ function graphRangeDurationMs(
   const durations = {
     '1h': hour,
     '6h': 6 * hour,
+    '12h': 12 * hour,
     '24h': 24 * hour,
     '7d': 7 * 24 * hour,
     '15d': 15 * 24 * hour,
@@ -5852,21 +5698,40 @@ function aggregateDatasetForBuckets(
 ) {
   const strategy = dataset._barStrategy || 'delta';
   const preserveMissingCoverage = dataset._barStrategy == null;
-  const points = (dataset.data || [])
-    .filter(point => point && point.x != null && point.y != null && Number.isFinite(Number(point.y)))
-    .map(point => ({ x: point.x instanceof Date ? point.x : new Date(point.x), y: Number(point.y), weight: point.weight ?? 1 }))
+  const points = (dataset._periodData || dataset.data || [])
+    .filter(point => point && point.x != null
+      && (point.y == null ? preserveMissingCoverage : Number.isFinite(Number(point.y))))
+    .map(point => ({
+      x: point.x instanceof Date ? point.x : new Date(point.x),
+      y: point.y == null ? null : Number(point.y),
+      weight: point.weight ?? 1,
+    }))
     .filter(point => !Number.isNaN(point.x.getTime()))
     .sort((a, b) => a.x.getTime() - b.x.getTime());
-  const intervalMs = graphBucketIntervalMs(range, mode, points, windowStart, windowEnd);
-  const continuityWindowMs = Math.max(intervalMs, getPollIntervalMs() * 2.5);
-  const buckets = new Map(graphBucketRange(range, points, mode, windowStart, windowEnd)
+  const preferredInterval = graphBucketIntervalMs(range, mode, points, windowStart, windowEnd);
+  const serverInterval = dataset._serverBucketMs || 0;
+  const intervalMs = serverInterval > 0
+    ? Math.ceil(preferredInterval / serverInterval) * serverInterval
+    : preferredInterval;
+  const selectedStart = range !== 'all' && serverInterval > 0 ? Date.parse(windowStart) : NaN;
+  const continuityWindowMs = Math.max(intervalMs, getPollIntervalMs() * 3);
+  const buckets = new Map(graphBucketRange(range, points, mode, windowStart, windowEnd, intervalMs)
     .map(bucket => [bucket._bucketKey || bucket.periodStart.toISOString(), bucket]));
-  let previous = strategy === 'delta' && Number.isFinite(Number(dataset._deltaBaseline))
+  let previous = strategy === 'delta' && dataset._deltaBaseline != null && Number.isFinite(Number(dataset._deltaBaseline))
     ? Number(dataset._deltaBaseline)
     : null;
   let previousTime = null;
+  const visibleStart = !preserveMissingCoverage || range === 'all' ? NaN : Date.parse(windowStart);
+  const visibleEnd = !preserveMissingCoverage || range === 'all' ? NaN : Date.parse(windowEnd);
   points.forEach((point) => {
-    const bucketStart = graphBucketStart(point.x, range, mode, intervalMs);
+    if (point.x >= visibleEnd) return;
+    if (preserveMissingCoverage && (point.y == null || point.x < visibleStart)) {
+      previous = point.y;
+      previousTime = point.x.getTime();
+      return;
+    }
+    const x = Number.isFinite(selectedStart) ? new Date(Math.max(point.x.getTime(), selectedStart)) : point.x;
+    const bucketStart = graphBucketStart(x, range, mode, intervalMs);
     if (!bucketStart) return;
     let value = point.y;
     let valueIsKnown = true;
@@ -5898,7 +5763,7 @@ function aggregateDatasetForBuckets(
     .sort((a, b) => a.x.getTime() - b.x.getTime())
     .map((bucket) => {
       let value = bucket.y;
-      if (preserveMissingCoverage && Number(bucket.knownCount || 0) === 0) {
+      if ((preserveMissingCoverage || dataset._periodData) && Number(bucket.knownCount || 0) === 0) {
         value = null;
       } else if (strategy === 'average' && bucket.count > 0) {
         value = bucket.y / bucket.count;
@@ -5968,6 +5833,10 @@ function applyGraphModeToDatasets(
       segment: undefined,
     };
   });
+}
+
+function formatChartReading(value) {
+  return value.toLocaleString('en-US', { maximumFractionDigits: 6 });
 }
 
 function formatUsagePercent(value) {
@@ -6150,13 +6019,15 @@ function applyChartGraphMode(chart, range, mode = State.graphMode, bounds = usag
   }
 }
 
-function renderUsageCoverageNote(datasets) {
+function renderUsageCoverageNote(datasets, mode = State.graphMode) {
   const note = document.getElementById('usage-chart-coverage-note');
   if (!note) return;
   const hasCollectionGap = (datasets || []).some(dataset => (dataset.data || [])
-    .some(point => point?._collectionGap));
+    .some(point => point?.y === null));
   note.hidden = !hasCollectionGap;
-  note.textContent = hasCollectionGap ? 'Blank spans mean no samples were collected.' : '';
+  note.textContent = hasCollectionGap
+    ? (isPeriodGraphMode(mode) ? 'Blank periods lack enough readings to calculate usage change.' : 'Blank spans mean no samples were collected.')
+    : '';
 }
 
 function renderUsageAccessibleSummary(datasets, range, mode = State.graphMode) {
@@ -6185,7 +6056,7 @@ function renderUsageAccessibleSummary(datasets, range, mode = State.graphMode) {
       + `${formatValue(Math.min(...values))} minimum, ${formatValue(Math.max(...values))} maximum`;
   }).filter(Boolean);
   const gapCount = (datasets || []).reduce((total, dataset) => total
-    + (dataset.data || []).filter(point => point?._collectionGap).length, 0);
+    + (dataset.data || []).filter(point => point?.y === null).length, 0);
   const resetCount = (datasets || []).reduce((total, dataset) => total
     + (dataset.data || []).filter(point => point?.resetObserved).length, 0);
   const modeLabel = isPeriodGraphMode(mode) ? 'per period' : 'cumulative';
@@ -6265,10 +6136,15 @@ function setMainChartDatasets(datasets, range, options = {}) {
       return;
     }
     if (isAntigravity) renderAntigravityUsageSummary([], mode);
-    else renderUsageSummary([], range, mode);
+    else if (getCurrentProvider() !== 'both') renderUsageSummary([], range, mode);
     renderUsageCoverageNote([]);
     renderUsageAccessibleSummary([], range, mode);
-    setChartEmptyState('usage-chart', true, options.emptyMessage || noUsageMessage(range));
+    const insufficientReadings = isPeriodGraphMode(mode) && datasetsHaveFiniteValue(datasets);
+    setChartEmptyState('usage-chart', true, insufficientReadings
+      ? 'This range needs two consecutive readings to show usage change.'
+      : options.emptyMessage || (getCurrentProvider() === 'openrouter'
+        ? 'No credit-limit percentages are available in this range.'
+        : noUsageMessage(range)));
     updateChartWhenChanged('mainChartRenderSignature', {
       provider: getCurrentProvider(),
       range,
@@ -6288,10 +6164,10 @@ function setMainChartDatasets(datasets, range, options = {}) {
     return;
   }
   setChartEmptyState('usage-chart', false);
-  renderUsageCoverageNote(datasets);
+  renderUsageCoverageNote(chartDatasets, mode);
   const summaryDatasets = isPeriodGraphMode(mode) ? chartDatasets : datasets;
   if (isAntigravity) renderAntigravityUsageSummary(summaryDatasets, mode);
-  else if (getCurrentProvider() !== 'api-integrations') renderUsageSummary(summaryDatasets, range, mode);
+  else if (!['api-integrations', 'both'].includes(getCurrentProvider())) renderUsageSummary(summaryDatasets, range, mode);
   renderUsageAccessibleSummary(chartDatasets, range, mode);
   const nextYMax = computeYMax(chartDatasets, null, { cap });
   const xBounds = options.xBounds || usageChartTimeBounds(range);
@@ -6315,7 +6191,7 @@ function setMainChartDatasets(datasets, range, options = {}) {
     State.chartYMax = nextYMax;
     State.chart.options.scales.y.max = State.chartYMax;
     State.chart.options.scales.y.title.text = renderState.metric
-      ? apiIntegrationsMetricTitle[renderState.metric]
+      ? apiIntegrationsMetricTitle[renderState.metric][isPeriodGraphMode(mode) ? 1 : 0]
       : isPeriodGraphMode(mode) ? 'Observed quota increase (pp)' : 'Quota used (%)';
     State.chart.update('none');
   });
@@ -6332,9 +6208,11 @@ function setMainChartDatasets(datasets, range, options = {}) {
 }
 
 function initChart() {
-  if (getCurrentProvider() === 'both') return; // Both mode uses dual charts
   const ctx = document.getElementById('usage-chart');
   if (!ctx || typeof Chart === 'undefined') return;
+  if (getCurrentProvider() === 'both') {
+    document.getElementById('all-providers-container')?.addEventListener('dashboard-accounts-changed', renderAllQuotaHistory);
+  }
 
   Chart.register(crosshairPlugin);
 
@@ -6343,7 +6221,7 @@ function initChart() {
   // Map dataset indices to quota types for visibility toggle
   const provider = getCurrentProvider();
   let defaultDatasets;
-  if (provider === 'api-integrations') {
+  if (provider === 'api-integrations' || provider === 'both') {
     defaultDatasets = [];
   } else if (provider === 'antigravity') {
     defaultDatasets = []; // Antigravity datasets are dynamic - populated when history data arrives
@@ -6447,7 +6325,7 @@ function initChart() {
                 return `${ctx.dataset.label}: ${formatNumber(Number(ctx.parsed.y || 0))}`;
               }
               const unit = isPeriodGraphMode(State.graphMode) ? ' percentage points' : '%';
-              return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}${unit}`;
+              return `${ctx.dataset.label}: ${formatChartReading(ctx.parsed.y)}${unit}`;
             }
           }
         }
@@ -6497,6 +6375,7 @@ function updateChartTheme() {
     // Re-render both-mode provider cards so Chart.js picks up updated theme tokens.
     if (State.allProvidersCurrent || State.allProvidersInsights || State.allProvidersHistory) {
       renderAllProvidersView();
+      renderAllQuotaHistory();
     } else {
       fetchHistory();
     }
@@ -6533,9 +6412,10 @@ function updateChartTheme() {
   }
 }
 
-function applyProviderHistoryPayload(provider, range, data, apiIntegrationsHistoryData = null) {
+function applyProviderHistoryPayload(provider, range, data, apiIntegrationsHistoryData = null, historyWindow = null) {
   if (provider === 'api-integrations') {
     State.apiIntegrationsHistory = data;
+    State.apiIntegrationsHistoryWindow = historyWindow ? { ...historyWindow, range } : null;
     renderAPIIntegrationsChart(range);
     renderAPIIntegrationsInsights();
     return;
@@ -6564,10 +6444,9 @@ function renderPlatformCostChartForSelectedRange(provider = getCurrentProvider()
 }
 
 function usageLineDataset(label, hiddenKey, rawData, color, range) {
-  const { data, gapSegments, pointRadii } = processDataWithGaps(rawData, range);
+  const { data, gapSegments, pointRadii } = processCappedDataWithGaps(rawData, range);
   const border = color?.border || color || '#0D9488';
   const background = color?.bg || `${border}15`;
-  const hideDensePoints = rawData.length > 100;
   return {
     label,
     data,
@@ -6575,7 +6454,7 @@ function usageLineDataset(label, hiddenKey, rawData, color, range) {
     backgroundColor: background,
     ...graphLineStyle(false),
     fill: gapSegments.size === 0,
-    pointRadius: hideDensePoints ? pointRadii.map(() => 0) : pointRadii,
+    pointRadius: pointRadii,
     hidden: State.hiddenQuotas.has(hiddenKey),
     segment: getSegmentStyle(gapSegments, border),
   };
@@ -6612,7 +6491,6 @@ function buildProviderHistoryDatasets(provider, range, data) {
       ),
       _antigravityWindow: dataset.windowKind || 'unknown',
       fill: false,
-      pointRadius: 0,
       pointHoverRadius: 4,
       borderWidth: 2,
       tension: 0,
@@ -6684,6 +6562,73 @@ function buildProviderHistoryDatasets(provider, range, data) {
   ));
 }
 
+function buildAllQuotaHistoryDatasets(data, range, selections) {
+  const datasets = [];
+  const providers = ['anthropic', 'codex', 'antigravity', 'minimax', 'gemini', 'copilot', 'cursor', 'openrouter', 'synthetic', 'zai'];
+  const colors = ['#14B8A6', '#6366F1', '#F59E0B', '#EC4899', '#38BDF8', '#A855F7', '#22C55E', '#F87171'];
+  const append = (provider, payload, accountName = '') => {
+    const title = [bothProviderNames[provider] || 'OpenRouter', accountName].filter(Boolean).join(' · ');
+    for (const dataset of buildProviderHistoryDatasets(provider, range, payload)) {
+      if (!datasetsHaveFiniteValue([dataset])) continue;
+      const color = colors[datasets.length % colors.length];
+      datasets.push({
+        ...dataset,
+        label: title + ' · ' + dataset.label,
+        borderColor: color,
+        backgroundColor: color,
+        fill: false,
+        hidden: false,
+        segment: undefined,
+      });
+    }
+  };
+  for (const provider of providers) {
+    const accounts = data[provider + 'Accounts'];
+    const selected = selections[provider];
+    if (Array.isArray(accounts)) {
+      for (const account of accounts) {
+        if (selected && !selected.includes(String(account.accountId))) continue;
+        if (account.history) append(provider, account.history, account.accountName);
+      }
+      continue;
+    }
+    if (selected || !data[provider]) continue;
+    const rows = data[provider];
+    if (provider === 'antigravity' || provider === 'copilot') {
+      const names = provider === 'copilot' ? copilotDisplayNames : {};
+      const colorMap = provider === 'copilot' ? copilotChartColorMap : antigravityChartColorMap;
+      const series = buildFlatUsageDatasets(rows, range, provider, names, colorMap, copilotChartColorFallback);
+      // Combined history uses flat rows for these legacy provider-wide responses.
+      for (const dataset of series) {
+        if (!datasetsHaveFiniteValue([dataset])) continue;
+        datasets.push({ ...dataset, label: bothProviderNames[provider] + ' · ' + dataset.label, hidden: false, fill: false });
+      }
+    } else {
+      append(provider, rows);
+    }
+  }
+  return datasets;
+}
+
+function renderAllQuotaHistory() {
+  const window = State.allProvidersHistoryWindow;
+  if (!window || !State.allProvidersHistory) return;
+  if (!State.chart) initChart();
+  const min = Date.parse(window.start);
+  const max = Date.parse(window.end);
+  setMainChartDatasets(
+    buildAllQuotaHistoryDatasets(State.allProvidersHistory, window.range, State.allProviderAccountSelections || {}),
+    window.range,
+    {
+      windowStart: window.start,
+      windowEnd: window.end,
+      xBounds: window.range !== 'all' && Number.isFinite(min) && min < max ? { min, max } : null,
+      preserveExistingOnEmpty: false,
+      emptyMessage: 'No quota observations for the selected providers and accounts.',
+    },
+  );
+}
+
 function usageGraphAccountKey(provider) {
   if (provider === 'codex') return `codex:${State.codexAccount || 1}`;
   if (provider === 'minimax') return `minimax:${State.minimaxAccount || ''}`;
@@ -6700,7 +6645,18 @@ function applyUsageGraphJob(job, payload, options = {}) {
   if (!usageGraphJobIsSelected(job)) return;
   if (payload.usesArchivedData) noteArchivedHistorySelection(job.range);
   if (job.provider === 'api-integrations' || job.provider === 'both') {
-    applyProviderHistoryPayload(job.provider, job.range, payload.data, payload.apiIntegrationsHistory || null);
+    applyProviderHistoryPayload(job.provider, job.range, payload.data, payload.apiIntegrationsHistory || null, {
+      windowStart: payload.windowStart || job.windowStart,
+      windowEnd: payload.windowEnd || job.windowEnd,
+    });
+    if (job.provider === 'both') {
+      State.allProvidersHistoryWindow = {
+        range: job.range,
+        start: payload.windowStart || job.windowStart,
+        end: payload.windowEnd || job.windowEnd,
+      };
+      renderAllQuotaHistory();
+    }
   } else {
     if (!State.chart) initChart();
     const windowStart = payload.windowStart || job.windowStart;
@@ -6708,7 +6664,7 @@ function applyUsageGraphJob(job, payload, options = {}) {
     const min = Date.parse(windowStart || '');
     const max = Date.parse(windowEnd || '');
     setMainChartDatasets(payload.chartDatasets || [], job.range, {
-      preserveExistingOnEmpty: true,
+      preserveExistingOnEmpty: Boolean(options.stale),
       xBounds: Number.isFinite(min) && Number.isFinite(max) && min < max && job.range !== 'all' ? { min, max } : null,
       windowStart,
       windowEnd,
@@ -6730,7 +6686,8 @@ async function runUsageGraphRefreshJob(job, signal) {
     usesArchivedData = response.headers.get('X-OnWatch-Archived-Data') === 'true';
     data = await response.json();
   } else {
-    const response = await authFetch(`${API_BASE}/api/history?${job.query}&${providerParamFor(job.provider, job.accountKey)}`, { signal });
+    const accounts = job.provider === 'both' ? '&quotaAccounts=1' : '';
+    const response = await authFetch(`${API_BASE}/api/history?${job.query}&${providerParamFor(job.provider, job.accountKey)}${accounts}`, { signal });
     if (!response.ok) throw new Error('Failed to fetch history');
     usesArchivedData = response.headers.get('X-OnWatch-Archived-Data') === 'true';
     data = await response.json();
@@ -6743,6 +6700,7 @@ async function runUsageGraphRefreshJob(job, signal) {
         data,
         apiIntegrationsHistory: cachedCostHistory,
         chartDatasets: null,
+        quotaAccounts: true,
         usesArchivedData,
         windowStart: job.windowStart,
         windowEnd: job.windowEnd,
@@ -6768,6 +6726,7 @@ async function runUsageGraphRefreshJob(job, signal) {
         data,
         apiIntegrationsHistory,
         chartDatasets: null,
+        quotaAccounts: true,
         usesArchivedData,
         windowStart: job.windowStart,
         windowEnd: job.windowEnd,
@@ -6836,7 +6795,7 @@ async function fetchHistory(range, options = {}) {
       cached,
       { stale: Boolean(options.force || !freshCached), ts: cached.ts },
     );
-    if (!options.force && freshCached) {
+    if (!options.force && freshCached && (provider !== 'both' || cached.quotaAccounts)) {
       return;
     }
   }
@@ -6859,6 +6818,7 @@ const bothProviderNames = {
   minimax: 'MiniMax',
   gemini: 'Gemini',
   cursor: 'Cursor',
+  openrouter: 'OpenRouter',
   'api-integrations': 'Cost',
 };
 
@@ -7145,6 +7105,8 @@ function buildAllProviderEntries() {
         const historyPayload = historyAccounts.find(acc => String(acc.accountId || '') === String(accountID));
         entries.push({
           provider: 'codex',
+          accountID,
+          accountName,
           cardKey,
           title: `Codex - Account: ${accountName}`,
           badge: account.subscriptionPlan?.name || toTitleCase(account.planType || ''),
@@ -7155,6 +7117,22 @@ function buildAllProviderEntries() {
           historyRows: Array.isArray(historyPayload?.history)
             ? historyPayload.history
             : (Array.isArray(history.codex) ? history.codex : []),
+        });
+      });
+      return;
+    }
+
+    if (provider === 'antigravity' && current.antigravityAccounts?.length > 1) {
+      if (!isProviderTelemetryEnabled(provider)) return;
+      current.antigravityAccounts.forEach(account => {
+        entries.push({
+          provider,
+          accountID: account.accountId,
+          accountName: account.accountName,
+          cardKey: sanitizeProviderCardKey('antigravity-' + account.accountId),
+          title: 'Antigravity · ' + account.accountName,
+          badge: account.planName || '',
+          quotas: normalizeBothQuotas(provider, account),
         });
       });
       return;
@@ -7196,6 +7174,8 @@ function buildAllProviderEntries() {
         const historyPayload = historyAccounts.find(acc => String(acc.accountId || '') === String(accountID));
         entries.push({
           provider: 'minimax',
+          accountID,
+          accountName,
           cardKey,
           title: `MiniMax - ${accountName}`,
           badge: '',
@@ -8226,7 +8206,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
       displayFormats: { second: 'HH:mm:ss', minute: 'HH:mm', hour: 'MMM d, HH:mm', day: 'MMM d' },
     }
     : platformCostTimeScale(range);
-  const hasUsageInRange = rows.some(row => Number(row.totalCostUsd || 0) > 0
+  const hasUsageInRange = rows.some(row => row.totalCostUsd != null
     || Number(row.totalTokens || 0) > 0
     || Number(row.requestCount || 0) > 0);
   const emptyCostMessage = rows.length === 0 && hasPlatformCostUsage(rangeTotals)
@@ -8236,11 +8216,12 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     : noUsageMessage(range);
   const hasPeriodCostPoints = periodMode
     && pointSeriesHaveUsage(bucketed.cost, bucketed.tokens);
+  const plottedPoints = showTokens
+    ? (periodMode ? bucketed.tokens : cumulative.tokens)
+    : (periodMode ? bucketed.cost : cumulative.cost);
   if (subtitle) {
     subtitle.textContent = hasUsageInRange || hasPeriodCostPoints
-      ? (periodMode
-        ? `${formatNumber(bucketed.tokens.filter(point => point.y != null).length)} recorded periods`
-        : `${formatNumber(cumulative.tokens.filter(point => point.y != null).length)} recorded samples`)
+      ? `${formatNumber(plottedPoints.filter(point => point.y != null).length)} recorded ${periodMode ? 'periods' : 'samples'}`
       : (provider === 'antigravity' ? 'No token records' : emptyCostMessage);
   }
   setPlatformCostChartLoading(false);
@@ -8272,9 +8253,6 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   Chart.register(crosshairPlugin);
   const colors = getThemeColors();
   const chartType = 'line';
-  const plottedPoints = showTokens
-    ? (periodMode ? bucketed.tokens : cumulative.tokens)
-    : (rangeTotals?.cost == null ? [] : (periodMode ? bucketed.cost : cumulative.cost));
   renderPlatformCostAccessibleSummary(showTokens ? [] : plottedPoints, showTokens ? plottedPoints : [], range, graphMode);
   if (!plottedPoints.some(point => point.y != null && Number.isFinite(Number(point.y)))) {
     setChartEmptyState('platform-cost-chart', true, showTokens ? noUsageMessage(range)
@@ -8285,7 +8263,10 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     const first = plottedPoints.findIndex(point => point.y != null);
     const last = plottedPoints.findLastIndex(point => point.y != null);
     gapNote.hidden = !plottedPoints.some((point, index) => index > first && index < last && point.y == null);
-    if (!gapNote.hidden) gapNote.textContent = 'Dotted lines bridge periods with no recorded values.';
+    if (!gapNote.hidden) {
+      gapNote.textContent = showTokens ? 'Blank periods have no recorded token usage.'
+        : 'Blank periods have no recorded priced cost.';
+    }
   }
   const metricColor = showTokens ? '#38BDF8' : '#14B8A6';
   const formatMetric = showTokens ? formatNumber : formatCurrencyUSD;
@@ -8312,10 +8293,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
       borderColor: metricColor,
       backgroundColor: metricColor,
       ...graphLineStyle(periodMode),
-      spanGaps: true,
-      segment: periodMode ? {
-        borderDash: ({ p0, p1 }) => p0.skip || p1.skip ? [2, 4] : undefined,
-      } : undefined,
+      spanGaps: !periodMode,
       fill: false,
     }],
   };
@@ -8390,23 +8368,25 @@ function bindPlatformCostRangeControls(range) {
 
 function normalizePlatformCostRange(range) {
   const value = String(range || '').trim().toLowerCase();
-  return ['1h', '6h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : DEFAULT_CHART_RANGE;
+  return ['1h', '6h', '12h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : DEFAULT_CHART_RANGE;
 }
 
 function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || '6h') {
-  let cost = 0;
+  let cost = null;
   let tokens = 0;
   const costPoints = [];
   const tokenPoints = [];
   [...rows]
     .filter(row => row && row.capturedAt)
-    .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
+    .sort((a, b) => Date.parse(a.lastCapturedAt || a.capturedAt) - Date.parse(b.lastCapturedAt || b.capturedAt))
     .forEach((row) => {
       if (row.cumulativeCostUsd !== undefined || row.cumulativeTotalTokens !== undefined) {
-        cost = Number(row.cumulativeCostUsd ?? cost);
+        if (row.totalCostUsd != null || row.cumulativeCostUsd > 0) {
+          cost = Number(row.cumulativeCostUsd ?? cost);
+        }
         tokens = Number(row.cumulativeTotalTokens ?? tokens);
       } else {
-        cost += Number(row.totalCostUsd || 0);
+        if (row.totalCostUsd != null) cost = Number(cost || 0) + Number(row.totalCostUsd);
         tokens += Number(row.totalTokens || 0);
       }
       const x = new Date(row.lastCapturedAt || row.capturedAt);
@@ -8490,7 +8470,11 @@ function processCappedDataWithGaps(dataPoints, range = '6h') {
   // The history endpoint has already sampled the requested window. Preserve
   // every observation it returned, including brief peaks and reset transitions.
   const processed = processDataWithGaps(normalized, range);
-  if (normalized.length > 100) processed.pointRadii = 0;
+  if (normalized.length > 100) {
+    processed.pointRadii = processed.data.map((point, index, points) => (
+      point.y != null && points[index - 1]?.y == null && points[index + 1]?.y == null ? 2 : 0
+    ));
+  }
   return processed;
 }
 
@@ -8536,8 +8520,8 @@ function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h'
       const key = bucketStart.toISOString();
       const bucket = buckets.get(key) || {
         x: new Date(bucketStart.getTime() + intervalMs / 2),
-        cost: 0,
-        tokens: 0,
+        cost: null,
+        tokens: null,
         periodStart: bucketStart,
         periodEnd: new Date(bucketStart.getTime() + intervalMs),
       };
@@ -8558,6 +8542,7 @@ function platformCostRangeStartTime(range) {
   const durations = {
     '1h': 60 * 60 * 1000,
     '6h': 6 * 60 * 60 * 1000,
+    '12h': 12 * 60 * 60 * 1000,
     '24h': 24 * 60 * 60 * 1000,
     '7d': 7 * 24 * 60 * 60 * 1000,
     '30d': 30 * 24 * 60 * 60 * 1000,
@@ -8574,7 +8559,7 @@ function platformCostChartTimeBounds(range) {
 }
 
 function platformCostRangeLabel(range) {
-  const labels = { '1h': '1h', '6h': '6h', '24h': '24h', '7d': '7d', '30d': '30d', all: 'All', custom: 'Custom' };
+  const labels = { '1h': '1h', '6h': '6h', '12h': '12h', '24h': '24h', '7d': '7d', '30d': '30d', all: 'All', custom: 'Custom' };
   return labels[range] || labels[DEFAULT_CHART_RANGE] || '7d';
 }
 
@@ -8661,8 +8646,6 @@ function hasPlatformCostUsage(totals) {
 }
 
 function getPlatformCostRangeTotals(provider, range, rows) {
-  const entry = getPlatformCostEntry(provider);
-  if (!entry) return null;
   const integration = platformCostIntegrationNames[provider] || '';
   const selectedRange = normalizePlatformCostRange(range);
   const hasLoadedSelectedRange = State.platformCostHistoryRange === selectedRange
@@ -8682,7 +8665,8 @@ function getPlatformCostRangeTotals(provider, range, rows) {
       lastSeen: rangeTotals.lastCapturedAt || null,
     };
   }
-  if (selectedRange === 'all') {
+  const entry = getPlatformCostEntry(provider);
+  if (selectedRange === 'all' && entry && !rows?.length) {
     return {
       cost: entry.totalCostUsd == null ? null : Number(entry.totalCostUsd),
       unpricedTokens: null,
@@ -8718,7 +8702,18 @@ function platformCostJobIsSelected(job) {
 }
 
 async function runPlatformCostRefreshJob(job, signal) {
-  const payload = await fetchPlatformCostPayload(job.provider, job.range, signal, job.scope, job.query);
+  const showHistory = history => {
+    if (job.scope !== 'platformCost' || !platformCostJobIsSelected(job)) return;
+    const showingSelectedRange = State.platformCostHistoryRange === job.range
+      && (job.range !== 'custom' || (State.platformCostHistoryWindowStart === job.windowStart
+        && State.platformCostHistoryWindowEnd === job.windowEnd));
+    if (showingSelectedRange) return;
+    applyPlatformCostHistoryPayload(job.range, {
+      ...history, windowStart: job.windowStart, windowEnd: job.windowEnd,
+    });
+    renderPlatformCostChart(job.provider, job.range);
+  };
+  const payload = await fetchPlatformCostPayload(job.provider, job.range, signal, job.scope, job.query, showHistory);
   if (signal.aborted) return;
   payload.windowStart = job.windowStart;
   payload.windowEnd = job.windowEnd;
@@ -8906,42 +8901,43 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
     }
     // Current lifetime totals include activity after a historical window.
     // Accumulate only the selected period instead of moving future usage into it.
-    const accumulatedBaseline = 0;
-    const costBaseline = 0;
     const color = apiIntegrationsChartColorFallback[colorIndex++ % apiIntegrationsChartColorFallback.length];
-    let runningTotal = accumulatedBaseline;
-    let runningCost = costBaseline;
-    const rawData = [...rows].sort((a,b)=>Date.parse(a.capturedAt)-Date.parse(b.capturedAt)).map((row) => {
-      let value = 0;
-      if (metric === 'tokenPerCall') {
-        const requestCount = Number(row.requestCount || 0);
-        value = requestCount > 0 ? Number(row.totalTokens || 0) / requestCount : 0;
-      } else if (metric === 'accumulatedTokens') {
-        runningTotal += Number(row.totalTokens || 0);
-        value = runningTotal;
-      } else if (metric === 'totalCostUsd') {
-        runningCost += Number(row.totalCostUsd || 0);
-        value = runningCost;
-      } else {
-        value = Number(row[metric] || 0);
-      }
-      return {
-        x: new Date(row.capturedAt),
-        y: value,
-        weight: metric === 'tokenPerCall' ? Number(row.requestCount || 0) : 1,
+    let runningTokens = 0;
+    let runningRequests = 0;
+    let runningCost = null;
+    const periodData = [];
+    const rawData = [...rows].sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt)).map((row) => {
+      const requestCount = Number(row.requestCount || 0);
+      const tokenCount = Number(row.totalTokens || 0);
+      const cost = row.totalCostUsd ?? null;
+      runningRequests += requestCount;
+      runningTokens += tokenCount;
+      if (cost != null) runningCost = Number(runningCost || 0) + Number(cost);
+
+      const cumulative = {
+        tokenPerCall: runningRequests > 0 ? runningTokens / runningRequests : null,
+        requestCount: runningRequests,
+        accumulatedTokens: runningTokens,
+        totalCostUsd: runningCost,
       };
+      const period = {
+        tokenPerCall: requestCount > 0 ? tokenCount / requestCount : null,
+        requestCount,
+        accumulatedTokens: tokenCount,
+        totalCostUsd: cost,
+      };
+      periodData.push({
+        x: new Date(row.capturedAt),
+        y: period[metric],
+        weight: metric === 'tokenPerCall' ? requestCount : 1,
+      });
+      return { x: new Date(row.lastCapturedAt || row.capturedAt), y: cumulative[metric] };
     });
     const processed = {
       data: rawData,
       gapSegments: new Set(),
       pointRadii: rawData.map(() => 2),
     };
-    const barStrategy = metric === 'tokenPerCall'
-      ? 'average'
-      : (metric === 'accumulatedTokens' || metric === 'totalCostUsd' ? 'delta' : 'sum');
-    const deltaBaseline = metric === 'accumulatedTokens'
-      ? accumulatedBaseline
-      : (metric === 'totalCostUsd' ? costBaseline : null);
     datasets.push({
       label: integrationName,
       data: processed.data,
@@ -8954,8 +8950,9 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
       pointHoverRadius: 4,
       spanGaps: false,
       segment: getSegmentStyle(processed.gapSegments, color.border),
-      _barStrategy: barStrategy,
-      _deltaBaseline: deltaBaseline,
+      _barStrategy: metric === 'tokenPerCall' ? 'average' : 'sum',
+      _serverBucketMs: Number(rows[0]?.bucketSeconds || 0) * 1000,
+      _periodData: periodData,
       _accessibleValueType: metric,
     });
     return datasets;
@@ -8963,20 +8960,29 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
 }
 
 const apiIntegrationsMetricTitle = {
-  tokenPerCall: 'Tokens per request',
-  requestCount: 'API requests',
-  accumulatedTokens: 'Accumulated tokens',
-  totalCostUsd: 'Cost (USD)',
+  tokenPerCall: ['Running average tokens per request', 'Average tokens per request'],
+  requestCount: ['Cumulative requests', 'Requests per period'],
+  accumulatedTokens: ['Cumulative tokens', 'Tokens per period'],
+  totalCostUsd: ['Cumulative priced cost (USD)', 'Priced cost per period (USD)'],
 };
 
 function renderAPIIntegrationsChart(range = State.currentRange || DEFAULT_CHART_RANGE) {
+  const historyWindow = State.apiIntegrationsHistoryWindow;
+  if (historyWindow && historyWindow.range !== range) return;
   if (!State.chart) initChart();
   if (!State.chart) return;
 
   const metric = normalizeAPIIntegrationsMetric(State.apiIntegrationsSelectedMetric);
   State.apiIntegrationsSelectedMetric = metric;
   const datasets = buildAPIIntegrationsChartDatasets(State.apiIntegrationsHistory || {}, range, metric);
-  setMainChartDatasets(datasets, range, { cap: false });
+  const min = Date.parse(historyWindow?.windowStart || '');
+  const max = Date.parse(historyWindow?.windowEnd || '');
+  setMainChartDatasets(datasets, range, {
+    ...historyWindow,
+    xBounds: range !== 'all' && Number.isFinite(min) && Number.isFinite(max) && min < max ? { min, max } : null,
+    cap: false,
+    emptyMessage: metric === 'totalCostUsd' ? 'No priced cost available for this range.' : undefined,
+  });
 }
 
 function buildFixedDatasetsForRows(rows, range, configs) {
@@ -9106,6 +9112,83 @@ function antigravityQuotaCardsMatch(container, quotas) {
   return quotas.every(quota => renderedKeys.has(antigravityQuotaKey(quota)));
 }
 
+function initAllProviderAccountPicker(container, provider, entries, previousPicker) {
+  const ids = entries.map(entry => String(entry.accountID));
+  const storageKey = 'onwatch-all-dashboard-accounts:' + provider;
+  let saved = State.allProviderAccountSelections[provider];
+  if (!saved) {
+    try {
+      const stored = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      if (Array.isArray(stored)) saved = stored;
+    } catch (_) { /* The page works without stored preferences. */ }
+  }
+
+  const signature = JSON.stringify(entries.map(entry => [entry.accountID, entry.accountName]));
+  const picker = previousPicker?.dataset.accounts === signature ? previousPicker : document.createElement('details');
+  const name = bothProviderNames[provider];
+  const selected = (saved || []).filter(id => ids.includes(id));
+  const applied = selected.length ? selected : ids;
+  const isNew = picker !== previousPicker;
+  if (isNew) {
+    picker.className = 'dashboard-account-picker all-provider-account-picker';
+    picker.dataset.accountProvider = provider;
+    picker.dataset.accounts = signature;
+    picker.innerHTML = '<summary>Accounts</summary><form class="dashboard-account-menu"><fieldset></fieldset><button class="btn" type="submit">Show selected</button></form>';
+    const fieldset = picker.querySelector('fieldset');
+    const legend = document.createElement('legend');
+    legend.textContent = 'Show ' + name + ' accounts';
+    fieldset.append(legend);
+    entries.forEach((entry, index) => {
+      const label = document.createElement('label');
+      label.className = 'dashboard-account-option';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = ids[index];
+      checkbox.checked = applied.includes(ids[index]);
+      label.append(checkbox, entry.accountName);
+      fieldset.append(label);
+    });
+  }
+
+  const summary = picker.querySelector('summary');
+  const form = picker.querySelector('form');
+  const options = [...form.querySelectorAll('input')];
+  const submit = form.querySelector('button');
+  const applySelection = (selection) => {
+    State.allProviderAccountSelections[provider] = selection;
+    let firstVisible;
+    entries.forEach(entry => {
+      const card = container.querySelector('.provider-card[data-card-key="' + entry.cardKey + '"]');
+      if (!card) return;
+      card.hidden = !selection.includes(String(entry.accountID));
+      if (!card.hidden && !firstVisible) firstVisible = card;
+    });
+    firstVisible?.querySelector('.provider-card-header').after(picker);
+    const labels = entries.filter(entry => selection.includes(String(entry.accountID))).map(entry => entry.accountName);
+    summary.textContent = labels.length === 1 ? labels[0] : labels.length + ' accounts';
+    summary.title = labels.join(', ');
+    summary.setAttribute('aria-label', 'Choose ' + name + ' accounts. Showing ' + labels.join(', '));
+  };
+  applySelection(applied);
+  form.onchange = () => { submit.disabled = !options.some(option => option.checked); };
+  form.onsubmit = event => {
+    event.preventDefault();
+    const selection = options.filter(option => option.checked).map(option => option.value);
+    if (!selection.length) return;
+    try { localStorage.setItem(storageKey, JSON.stringify(selection)); } catch (_) { /* optional */ }
+    picker.open = false;
+    applySelection(selection);
+    summary.focus();
+    container.dispatchEvent(new Event('dashboard-accounts-changed'));
+  };
+  picker.onkeydown = event => {
+    if (event.key === 'Escape') {
+      picker.open = false;
+      summary.focus();
+    }
+  };
+}
+
 function renderAllProvidersView() {
   const container = document.getElementById('all-providers-container');
   if (!container) return;
@@ -9123,11 +9206,12 @@ function renderAllProvidersView() {
 
   // Try in-place update: if every expected card already exists in the DOM,
   // just update the KPI values without rebuilding any HTML.
-  const canUpdateInPlace = entries.length > 0 && entries.every(entry => {
+  const canUpdateInPlace = container.querySelectorAll('.provider-card').length === entries.length && entries.every(entry => {
     if (entry.summaryOnly) return false; // API integrations card: always rebuild
     const card = container.querySelector(`.provider-card[data-card-key="${entry.cardKey}"]`);
     if (!card) return false;
     // A poll error appearing or clearing changes the card structure.
+    if (card.querySelector('.provider-card-title > span')?.textContent !== entry.title) return false;
     const hasBanner = card.querySelector('.poll-error-banner') !== null;
     const hasSubscription = ['anthropic', 'codex', 'antigravity'].includes(entry.provider);
     return hasBanner === Boolean(entry.pollError && entry.pollError.message)
@@ -9152,6 +9236,10 @@ function renderAllProvidersView() {
   const collapsedState = loadProviderCardCollapseState();
   const antigravityDetails = container.querySelector('.antigravity-quota-details');
   const summaryHadFocus = antigravityDetails?.firstElementChild === document.activeElement;
+
+  const previousPickers = new Map([...container.querySelectorAll('[data-account-provider]')]
+    .map(picker => [picker.dataset.accountProvider, picker]));
+  const accountFocus = document.activeElement?.closest('.all-provider-account-picker') ? document.activeElement : null;
 
   container.innerHTML = entries.map((entry) => {
     const collapsed = Boolean(collapsedState[entry.cardKey]);
@@ -9184,6 +9272,12 @@ function renderAllProvidersView() {
       </div>
     </section>`;
   }).join('');
+  for (const provider of ['codex', 'antigravity', 'minimax']) {
+    const accounts = entries.filter(entry => entry.provider === provider && entry.accountID != null);
+    if (accounts.length > 1) initAllProviderAccountPicker(container, provider, accounts, previousPickers.get(provider));
+    else delete State.allProviderAccountSelections[provider];
+  }
+  if (accountFocus?.isConnected) accountFocus.focus();
   if (summaryHadFocus) container.querySelector('.antigravity-quota-details > summary')?.focus();
 
   container.querySelectorAll('.provider-card-collapse-btn').forEach((btn) => {
@@ -9437,9 +9531,10 @@ function updateBothCharts(data, range = '6h') {
   });
 }
 
-function buildChartOptions(colors, yMax, range) {
+function buildChartOptions(colors, yMax, range, mode = 'cumulative') {
   const rangeKey = (range || '6h').toLowerCase();
-  const timeUnit = ['7d', '30d', '15d', 'all'].includes(rangeKey) ? 'day' : ['24h', '3d'].includes(rangeKey) ? 'hour' : 'hour';
+  const periodMode = isPeriodGraphMode(mode);
+  const timeUnit = ['7d', '30d', '15d', 'all'].includes(rangeKey) ? 'day' : rangeKey === '1h' ? 'minute' : 'hour';
   const displayFormats = {
     minute: 'HH:mm',
     hour: ['7d', '30d', '15d', '24h', '3d', 'all'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm',
@@ -9473,7 +9568,7 @@ function buildChartOptions(colors, yMax, range) {
         borderWidth: 1, padding: 12, displayColors: true, usePointStyle: true,
         callbacks: {
           title: items => items && items.length > 0 ? formatPeriodTooltipTitle(items[0]) : '',
-          label: ctx => ctx.parsed.y != null ? `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%` : null
+          label: ctx => ctx.parsed.y != null ? `${ctx.dataset.label}: ${formatChartReading(ctx.parsed.y)}${periodMode ? ' pp' : '%'}` : null
         }
       }
     },
@@ -9484,7 +9579,7 @@ function buildChartOptions(colors, yMax, range) {
         grid: { color: colors.grid, drawBorder: false },
         ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick }
       },
-      y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax || 100 }
+      y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + (periodMode ? ' pp' : '%') }, min: 0, max: yMax || 100 }
     }
   };
 }
@@ -9562,7 +9657,7 @@ function updateTimeScale(chart, range) {
     ? (customDuration <= 2 * 60 * 60 * 1000 ? 'minute'
       : customDuration <= 2 * 24 * 60 * 60 * 1000 ? 'hour'
         : 'day')
-    : (['7d', '30d', '15d', 'all'].includes(rangeKey) ? 'day' : 'hour');
+    : (['7d', '30d', '15d', 'all'].includes(rangeKey) ? 'day' : rangeKey === '1h' ? 'minute' : 'hour');
   const timeUnit = isPeriodGraphMode(graphMode)
     ? graphBucketTimeUnit(range, graphMode, points)
     : cumulativeTimeUnit;
@@ -10672,13 +10767,10 @@ function openModal(quotaType, providerOverride) {
         <div class="modal-kpi-label">Until Reset</div>
       </div>
     </div>
-    <h3 class="modal-section-title">Usage History</h3>
-    <div class="modal-chart-container">
-      <canvas id="modal-chart"></canvas>
-    </div>
+    ${modalChartMarkup()}
     ${data.insight ? `<h3 class="modal-section-title">Insight</h3><div class="modal-insight">${data.insight}</div>` : ''}
     <h3 class="modal-section-title">Recent Cycles</h3>
-    <div class="table-wrapper">
+    <div class="table-wrapper" role="region" aria-label="Recent cycles" tabindex="0">
       <table class="data-table" id="modal-cycles-table">
         <thead><tr><th>Cycle</th><th>Duration</th><th>Peak</th><th>Total</th><th>Rate</th></tr></thead>
         <tbody id="modal-cycles-tbody"><tr><td colspan="5" class="empty-state">Loading...</td></tr></tbody>
@@ -10696,88 +10788,19 @@ function openModal(quotaType, providerOverride) {
   loadModalCycles(quotaType, effectiveProvider);
 }
 
-async function loadModalChart(quotaType, effectiveProvider) {
-  const ctx = document.getElementById('modal-chart');
-  if (!ctx || typeof Chart === 'undefined') return;
-
-  setModalChartStatus(ctx, 'Loading quota history...');
-
-  // Destroy previous modal chart
-  if (State.modalChart) {
-    State.modalChart.destroy();
-    State.modalChart = null;
-  }
-
-  const range = State.currentRange || DEFAULT_CHART_RANGE;
-  const rangeKey = range.toLowerCase();
-  const timeUnit = ['7d', '30d', '15d'].includes(rangeKey) ? 'day' : 'hour';
-
-  const provider = effectiveProvider || getCurrentProvider();
-  try {
-    const res = await authFetch(`${API_BASE}/api/history?${historyRequestQuery(range)}&provider=${provider}`);
-    if (!res.ok) throw new Error('Quota history unavailable');
-    const data = await res.json();
-    if (document.getElementById('modal-chart') !== ctx || !setModalChartStatus(ctx, '')) return;
-    if (!Array.isArray(data) || data.length === 0) {setModalChartStatus(ctx, 'No quota history in this range.');return;}
-    const historyRows = data;
-    let datasetKey;
-    if (provider === 'zai') {
-      datasetKey = quotaType === 'tokensLimit' ? 'tokensPercent' : quotaType === 'toolCalls' ? 'toolCallsPercent' : 'timePercent';
-    } else {
-      datasetKey = quotaType === 'subscription' ? 'subscriptionPercent' : quotaType === 'search' ? 'searchPercent' : 'toolCallsPercent';
-    }
-    const style = getComputedStyle(document.documentElement);
-    const colorMap = { subscription: style.getPropertyValue('--chart-subscription').trim() || '#0D9488', search: style.getPropertyValue('--chart-search').trim() || '#F59E0B', toolCalls: style.getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', tokensLimit: style.getPropertyValue('--chart-subscription').trim() || '#0D9488', timeLimit: style.getPropertyValue('--chart-search').trim() || '#F59E0B' };
-    const bgMap = { subscription: 'rgba(13,148,136,0.08)', search: 'rgba(245,158,11,0.08)', toolCalls: 'rgba(59,130,246,0.08)', tokensLimit: 'rgba(13,148,136,0.08)', timeLimit: 'rgba(245,158,11,0.08)' };
-
-    const colors = getThemeColors();
-    const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[datasetKey] }));
-    const processed = processCappedDataWithGaps(rawData, range);
-
-    const yMax = computeYMax([{ data: processed.data }]);
-
-    State.modalChart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        datasets: [{
-          label: (provider === 'zai' ? { tokensLimit: 'Tokens Limit', timeLimit: 'Time Limit', toolCalls: 'Tool Calls' } : quotaNames)[quotaType] || quotaType,
-          data: processed.data,
-          borderColor: colorMap[quotaType] || '#3B82F6',
-          backgroundColor: bgMap[quotaType] || 'rgba(59,130,246,0.08)',
-          fill: processed.gapSegments.size === 0,
-          tension: 0,
-          borderWidth: 2.5,
-          pointRadius: processed.pointRadii,
-          pointHoverRadius: 5,
-          spanGaps: false,
-          segment: getSegmentStyle(processed.gapSegments, colorMap[quotaType] || '#3B82F6')
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: colors.surfaceContainer,
-            titleColor: colors.onSurface,
-            bodyColor: colors.text,
-            borderColor: colors.outline,
-            borderWidth: 1,
-            callbacks: { label: c => `${c.parsed.y.toFixed(1)}%` }
-          }
-        },
-        scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick } },
-          y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
-        }
-      }
-    });
-  } catch (err) {
-    setModalChartStatus(ctx, 'Could not load quota history. Close and reopen details to retry.');
-  }
+function loadModalChart(quotaType, provider) {
+  const field = provider === 'zai'
+    ? { tokensLimit: 'tokensPercent', toolCalls: 'toolCallsPercent', timeLimit: 'timePercent' }[quotaType]
+    : { subscription: 'subscriptionPercent', search: 'searchPercent', toolCalls: 'toolCallsPercent' }[quotaType];
+  const style = getComputedStyle(document.documentElement);
+  const color = quotaType === 'subscription' || quotaType === 'tokensLimit'
+    ? style.getPropertyValue('--chart-subscription').trim()
+    : quotaType === 'search' || quotaType === 'timeLimit'
+      ? style.getPropertyValue('--chart-search').trim()
+      : style.getPropertyValue('--chart-toolcalls').trim();
+  return loadQuotaModalChart(provider, records => modalQuotaSeries(records, record => record[field], color || '#3B82F6'));
 }
+
 
 async function loadModalCycles(quotaType, effectiveProvider) {
   const provider = effectiveProvider || getCurrentProvider();
@@ -10787,14 +10810,15 @@ async function loadModalCycles(quotaType, effectiveProvider) {
   } else {
     apiType = quotaType === 'toolCalls' ? 'toolcall' : quotaType;
   }
+  const tbody = document.getElementById('modal-cycles-tbody');
+  if (!tbody) return;
   try {
     const accountParam = provider === 'codex' ? codexAccountParam() : provider === 'minimax' ? minimaxAccountParam() : '';
     const res = await authFetch(`${API_BASE}/api/cycles?type=${apiType}&provider=${provider}${accountParam}`);
     if (!res.ok) return;
     const cycles = await res.json();
 
-    const tbody = document.getElementById('modal-cycles-tbody');
-    if (!tbody) return;
+    if (!tbody.isConnected || document.getElementById('detail-modal')?.hidden) return;
 
     const recent = cycles.slice(0, 5);
     if (recent.length === 0) {
@@ -10819,7 +10843,7 @@ async function loadModalCycles(quotaType, effectiveProvider) {
 
 function closeModal() {
   const modal = document.getElementById('detail-modal');
-  if (!modal) return;
+  if (!modal || modal.hidden) return;
   modal.hidden = true;
   // Destroy modal chart to free memory
   if (State.modalChart) {
@@ -10827,6 +10851,7 @@ function closeModal() {
     State.modalChart = null;
   }
   const target = State.modalReturnFocus;
+  State.modalReturnFocus = null;
   if (target?.isConnected && target.getClientRects().length) target.focus();
   else document.querySelector('.provider-tab[aria-selected="true"]')?.focus();
 }
@@ -10947,7 +10972,7 @@ function applyCustomHistoryDates(scope, startDate, endDate) {
   return true;
 }
 
-function setupGraphHistoryRangeControls() {
+function setupGraphHistoryRangeControls(reload = reloadGraphHistoryRange) {
   document.querySelectorAll('.graph-history-control[data-history-scope]').forEach(control => {
     const scope = control.dataset.historyScope || 'chart';
     const initialWindow = historyScopeWindow(scope);
@@ -10976,13 +11001,13 @@ function setupGraphHistoryRangeControls() {
           setGraphHistoryRangeError(scope, '');
           syncGraphHistoryRangeControl(scope);
       }
-        reloadGraphHistoryRange(scope);
+        reload(scope);
     });
   });
 
     const onDateChange = () => {
       if (!applyCustomHistoryDates(scope, startInput?.value, endInput?.value)) return;
-      reloadGraphHistoryRange(scope);
+      reload(scope);
     };
     startInput?.addEventListener('change', onDateChange);
     endInput?.addEventListener('change', onDateChange);
@@ -11006,7 +11031,7 @@ function setupAPIIntegrationsMetricSelector() {
   });
 }
 
-function setupChartModeSelector() {
+function setupChartModeSelector(render = () => fetchHistory(selectedChartRange())) {
   const group = document.getElementById('chart-mode-select');
   if (!group) return;
   const setActive = () => {
@@ -11020,7 +11045,7 @@ function setupChartModeSelector() {
     State.graphMode = normalizeGraphMode(button.dataset.graphMode);
     setActive();
     saveGraphMode(State.graphMode);
-    fetchHistory(selectedChartRange());
+    render();
   });
   group.dataset.bound = 'true';
 }
@@ -11575,7 +11600,14 @@ function setupTableControls() {
 function setupProviderSelector() {
   const tabs = document.getElementById('provider-tabs');
   if (!tabs) return;
-  if (getCurrentProvider() === 'subscription-value') tabs.scrollLeft = tabs.scrollWidth;
+  // Reveal the current tab only when it falls outside the horizontal viewport.
+  const active = tabs.querySelector('.active');
+  if (active) {
+    const bounds = tabs.getBoundingClientRect();
+    const activeBounds = active.getBoundingClientRect();
+    if (activeBounds.right > bounds.right) tabs.scrollLeft += activeBounds.right - bounds.right;
+    else if (activeBounds.left < bounds.left) tabs.scrollLeft -= bounds.left - activeBounds.left;
+  }
   tabs.querySelectorAll('.provider-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       const provider = tab.dataset.provider;
@@ -11772,9 +11804,23 @@ function setupCardModals() {
     });
   }
 
-  // ESC to close
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeModal();
+    if (!overlay || overlay.hidden) return;
+    if (e.key === 'Escape') {
+      closeModal();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusable = [...overlay.querySelectorAll('button:not(:disabled), a[href], [tabindex="0"]')]
+      .filter(element => element.getClientRects().length);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    const active = document.activeElement;
+    if (!overlay.contains(active) || (e.shiftKey ? active === first : active === last)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    }
   });
 }
 
@@ -14462,12 +14508,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (initDashboardAccountPicker()) return;
 
   loadMiniMaxAccount();
-  if (getCurrentProvider() === 'minimax') {
-    await loadMiniMaxAccounts();
-  } else {
-    updateMiniMaxAccountTabsVisibility();
-  }
-  initMiniMaxAccountTabs();
+  if (getCurrentProvider() === 'minimax') await loadMiniMaxAccounts();
   loadAPIIntegrationsPreferences();
   loadPlatformCostHistoryCache();
 

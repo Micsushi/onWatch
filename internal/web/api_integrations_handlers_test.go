@@ -352,6 +352,39 @@ func TestHandler_APIIntegrationsHistory_PreservesTotalsWhenCombiningBuckets(t *t
 	}
 }
 
+func TestHandler_APIIntegrationsHistory_DistinguishesZeroFromUnknownCost(t *testing.T) {
+	t.Parallel()
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	defer s.Close()
+
+	at := time.Now().UTC().Truncate(time.Minute).Add(-30 * time.Minute)
+	insertAPIIntegrationEventForTest(t, s, fmt.Sprintf(
+		`{"ts":%q,"integration":"notes","provider":"anthropic","model":"custom","prompt_tokens":3}`,
+		at.Format(time.RFC3339)), "/tmp/api-integrations/notes.jsonl")
+	insertAPIIntegrationEventForTest(t, s, fmt.Sprintf(
+		`{"ts":%q,"integration":"notes","provider":"anthropic","model":"custom","prompt_tokens":4,"cost_usd":0}`,
+		at.Add(5*time.Minute).Format(time.RFC3339)), "/tmp/api-integrations/notes.jsonl")
+
+	h := NewHandler(s, nil, nil, nil, &config.Config{APIIntegrationsEnabled: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/api-integrations/history?range=1h", nil)
+	rr := httptest.NewRecorder()
+	h.APIIntegrationsHistory(rr, req)
+
+	var response map[string][]struct {
+		Cost *float64 `json:"totalCostUsd"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	rows := response["notes"]
+	if len(rows) != 2 || rows[0].Cost != nil || rows[1].Cost == nil || *rows[1].Cost != 0 {
+		t.Fatalf("expected unknown cost followed by recorded zero cost: %s", rr.Body.String())
+	}
+}
+
 func TestHandler_APIIntegrationsSessions_IncludesUnsampledTotals(t *testing.T) {
 	t.Parallel()
 	s, err := store.New(":memory:")

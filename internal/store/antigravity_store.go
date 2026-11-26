@@ -193,10 +193,15 @@ func (s *Store) QueryAntigravityRange(start, end time.Time, limit ...int) ([]*ap
 	if len(limit) > 0 {
 		maxSnapshots = limit[0]
 	}
-	return s.queryAntigravityRange(start, end, "", maxSnapshots)
+	return s.queryAntigravityRange(start, end, "", maxSnapshots, 0)
 }
 
-func (s *Store) queryAntigravityRange(start, end time.Time, email string, limit int) ([]*api.AntigravitySnapshot, error) {
+// QueryAntigravityRangeSampled selects chart points before loading model and summary data.
+func (s *Store) QueryAntigravityRangeSampled(start, end time.Time, maxPoints int) ([]*api.AntigravitySnapshot, error) {
+	return s.queryAntigravityRange(start, end, "", 0, maxPoints)
+}
+
+func (s *Store) queryAntigravityRange(start, end time.Time, email string, limit, maxPoints int) ([]*api.AntigravitySnapshot, error) {
 	// Order by ASC for chronological chart display (oldest to newest, left to right)
 	query := `SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
 		FROM antigravity_snapshots WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?`
@@ -209,8 +214,27 @@ func (s *Store) queryAntigravityRange(start, end time.Time, email string, limit 
 		query = `SELECT * FROM (` + query + ` ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC,id DESC LIMIT ?)`
 		args = append(args, limit)
 	}
+	if maxPoints > 0 {
+		query = `SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count FROM (` +
+			sampleAntigravityRange(query, "id ASC") + `)`
+		args = append(args, maxPoints, maxPoints)
+	}
 	query += ` ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC,id ASC`
+	return s.queryAntigravitySnapshots(query, args...)
+}
 
+// Keep the first, last, and every ceil(count/maxPoints)-th observation.
+func sampleAntigravityRange(query, tieOrder string) string {
+	return `WITH ranked AS (
+		SELECT *, ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC,` + tieOrder + `) AS position,
+			COUNT(*) OVER () AS total
+		FROM (` + query + `)
+	)
+	SELECT * FROM ranked
+	WHERE position = total OR (position - 1) % ((total + ? - 1) / ?) = 0`
+}
+
+func (s *Store) queryAntigravitySnapshots(query string, args ...any) ([]*api.AntigravitySnapshot, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query antigravity range: %w", err)

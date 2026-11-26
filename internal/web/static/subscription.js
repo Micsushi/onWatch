@@ -674,7 +674,7 @@
     el('reset-summary').hidden = !series.length;
     el('reset-totals').innerHTML = series.map(item => {
       const last = item.points?.at(-1);
-      return `<tr><th scope="row">${esc(item.label)}</th><td>${last ? usd(last.observedUsd) : '—'}</td><td>${last ? usd(last.withoutRefillUsd) : '—'}</td><td>${num(item.earlyRefills)}</td><td>${num(item.skippedIntervals)}</td></tr>`;
+      return `<tr><th scope="row">${esc(item.label)}${item.stale ? '<span class="subscription-comparison-plan">Latest quota reading delayed</span>' : ''}</th><td>${last ? usd(last.observedUsd) : '—'}</td><td>${last ? usd(last.withoutRefillUsd) : '—'}</td><td>${num(item.earlyRefills)}</td><td>${num(item.skippedIntervals)}</td></tr>`;
     }).join('');
     const showCharts = matched.length > 0 && typeof Chart !== 'undefined';
     el('reset-charts').hidden = !showCharts;
@@ -752,16 +752,16 @@
     }
     const reports = await Promise.all([...comparisonRows.keys()].map(async key => {
       try {
-        if (key === selectedProvider) return [key, (await selected).report];
+        if (key === selectedProvider) return [key, await selected];
         const params = reportParams(key, bounds);
         const response = await authFetch(`${API_BASE}/api/subscription-value?${params}`, {signal:requestController.signal});
-        return [key, response.ok ? (await response.json()).report : null];
+        return [key, response.ok ? await response.json() : null];
       } catch (_) {
         return [key, null];
       }
     }));
     if (requestController !== controller) return;
-    const incomplete = reports.some(([,report]) => !report);
+    const incomplete = reports.some(([,snapshot]) => !snapshot?.report);
     const retain = incomplete && identity === comparisonIdentity && [...capacityReports.values()].every(Boolean);
     comparisonStatus.textContent = !incomplete ? '' : retain
       ? 'Refresh incomplete. Showing the previous matching comparison.'
@@ -770,10 +770,11 @@
     if (retain) return;
     comparisonIdentity = identity;
     resetBounds = bounds;
-    for (const [key, report] of reports) {
+    for (const [key, snapshot] of reports) {
+      const report = snapshot?.report || null;
       capacityReports.set(key, report);
       const weekly = report?.weeklyValue?.[0];
-      resetReports.set(key, report ? {...weekly, provider:key, label:comparisonRows.get(key).dataset.label} : null);
+      resetReports.set(key, report ? {...weekly, stale:snapshot.meter_stale, provider:key, label:comparisonRows.get(key).dataset.label} : null);
       renderComparison(key, report, 'Usage unavailable');
     }
     renderResetValue();
@@ -802,6 +803,7 @@
     el('chart-empty').textContent = !hasPoints ? 'No reliably matched cost and quota observations in this allowance.'
       : !canPlot ? 'Chart unavailable. Matched values are shown above and in Allowance history.' : '';
     el('chart').hidden = !canPlot;
+    el('chart-wrap').hidden = !canPlot;
     const signature=JSON.stringify([points,canPlot,document.documentElement.getAttribute('data-theme')]);
     if (signature !== chartSignature && chart) {chart.destroy();chart=null;}
     chartSignature=signature;
@@ -920,6 +922,7 @@
     }
     el('cycle').disabled = true;
     el('chart').hidden = true;
+    el('chart-wrap').hidden = true;
     el('chart-empty').hidden = true;
   }
   el('cycle').addEventListener('change',renderCycle);

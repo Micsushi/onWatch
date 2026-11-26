@@ -189,3 +189,22 @@ func TestModelCalibrationDistinguishesUnknownPriceFromMissingTokenBreakdown(t *t
 		t.Fatalf("complete vectors can support token projection without a dollar estimate: %+v", got)
 	}
 }
+
+func TestWeeklyRefillShortSpanKeepsHourlyPointsAndRealBaseline(t *testing.T) {
+	at := time.Date(2026, 11, 1, 12, 5, 0, 0, time.UTC)
+	points := []Point{
+		{At: at, Used: 10},
+		{At: at.Add(10 * time.Minute), Used: 20, Matched: true, Cost: 5},
+		{At: at.Add(20 * time.Minute), Used: 30, Matched: true, Cost: 10},
+		{At: at.Add(time.Hour), Used: 40, Matched: true, Cost: 15},
+	}
+	got := weeklyResetValue([]Cycle{{Quota: "seven_day", Start: at, End: points[3].At, Points: points}})
+	if len(got) != 1 || len(got[0].Points) != 3 {
+		t.Fatalf("want first evidence baseline and two hourly points, got %+v", got)
+	}
+	if !got[0].Points[0].At.Equal(at) || got[0].Points[0].ObservedUSD != 0 ||
+		!got[0].Points[1].At.Equal(points[2].At) || got[0].Points[1].ObservedUSD != 10 ||
+		got[0].Points[2].ObservedUSD != 15 || got[0].Points[2].WithoutRefill != 15 {
+		t.Fatalf("wrong timestamps or value totals: %+v", got[0].Points)
+	}
+}

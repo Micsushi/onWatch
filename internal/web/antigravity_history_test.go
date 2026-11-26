@@ -43,7 +43,7 @@ func TestAntigravityDashboardAccountsKeepCentralReadingsSeparate(t *testing.T) {
 			t.Fatalf("ingest %s: %v, %v", id, results, err)
 		}
 	}
-	h := NewHandler(s, nil, nil, nil, createTestConfigWithAntigravity())
+	h := NewHandler(s, nil, nil, nil, createTestConfigWithAllProviders())
 	accounts := h.dashboardAccounts("antigravity", nil)
 	if len(accounts) != 2 || accounts[0].ID == accounts[1].ID {
 		t.Fatalf("expected two independent accounts, got %v", accounts)
@@ -53,6 +53,29 @@ func TestAntigravityDashboardAccountsKeepCentralReadingsSeparate(t *testing.T) {
 	if pair.Code != 200 || strings.Count(pair.Body.String(), "data-account-plot") != 2 {
 		t.Fatalf("wanted two account panels, got HTTP %d", pair.Code)
 	}
+	picker := strings.Index(pair.Body.String(), `id="dashboard-account-picker"`)
+	if picker < strings.Index(pair.Body.String(), `id="main-content"`) ||
+		!strings.Contains(pair.Body.String(), `provider=antigravity&amp;account=provider`) {
+		t.Fatal("expected account picker in dashboard content and provider-wide cost link")
+	}
+
+	combined := httptest.NewRecorder()
+	h.Current(combined, httptest.NewRequest(http.MethodGet, "/api/current?provider=both", nil))
+	var current struct {
+		AntigravityAccounts []struct {
+			AccountID string
+			Quotas    []struct{ UsagePercent float64 }
+		}
+	}
+	if err := json.Unmarshal(combined.Body.Bytes(), &current); err != nil || len(current.AntigravityAccounts) != 2 {
+		t.Fatalf("wanted two account readings in All: %s, %v", combined.Body.String(), err)
+	}
+	for i, reading := range current.AntigravityAccounts {
+		if reading.AccountID != accounts[i].ID || len(reading.Quotas) != 1 || reading.Quotas[0].UsagePercent != float64(25+50*i) {
+			t.Fatalf("wrong scoped All reading: %+v", reading)
+		}
+	}
+
 	for i, account := range accounts {
 		want := float64(25 + 50*i)
 		rr := httptest.NewRecorder()

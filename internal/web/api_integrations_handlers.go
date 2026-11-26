@@ -711,7 +711,7 @@ func (h *Handler) buildAPIIntegrationsHistory(start, end time.Time, integration 
 			"outputTokens":             row.OutputTokens,
 			"reasoningTokens":          row.ReasoningTokens,
 		}
-		if row.TotalCostUSD > 0 {
+		if row.TotalCostUSD > 0 || row.PricedRequests > 0 {
 			entry["totalCostUsd"] = row.TotalCostUSD
 		}
 		byIntegration[row.IntegrationName] = append(byIntegration[row.IntegrationName], entry)

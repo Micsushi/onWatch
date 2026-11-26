@@ -80,6 +80,7 @@ type APIIntegrationUsageBucketRow struct {
 	OutputTokens      int
 	ReasoningTokens   int
 	TotalCostUSD      float64
+	PricedRequests    int
 }
 
 // APIIntegrationUsageSessionRow groups usage by chat/session and day.
@@ -1061,6 +1062,7 @@ func (s *Store) queryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 			       COALESCE(SUM(output_tokens), 0) AS output_tokens,
 			       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
 			       COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
+			       COUNT(cost_usd) AS priced_requests,
 			       MIN(captured_at COLLATE ONWATCH_RFC3339) AS first_at,
 			       MAX(captured_at COLLATE ONWATCH_RFC3339) AS last_at
 			FROM api_integration_usage_events
@@ -1079,6 +1081,7 @@ func (s *Store) queryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 			       COALESCE(SUM(output_tokens), 0),
 			       COALESCE(SUM(reasoning_output_tokens), 0),
 			       COALESCE(SUM(total_cost_usd), 0),
+			       0,
 			       MIN(first_captured_at COLLATE ONWATCH_RFC3339),
 			       MAX(last_captured_at COLLATE ONWATCH_RFC3339)
 			FROM api_integration_usage_hourly
@@ -1096,6 +1099,7 @@ func (s *Store) queryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 		       COALESCE(SUM(output_tokens), 0),
 		       COALESCE(SUM(reasoning_output_tokens), 0),
 		       COALESCE(SUM(total_cost_usd), 0),
+		       COALESCE(SUM(priced_requests), 0),
 		       MIN(first_at COLLATE ONWATCH_RFC3339),
 		       MAX(last_at COLLATE ONWATCH_RFC3339)
 		FROM combined
@@ -1125,6 +1129,7 @@ func (s *Store) queryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 			&row.OutputTokens,
 			&row.ReasoningTokens,
 			&row.TotalCostUSD,
+			&row.PricedRequests,
 			&firstAt,
 			&lastAt,
 		); err != nil {

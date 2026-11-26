@@ -22,7 +22,21 @@ type WeeklyValue struct {
 func weeklyResetValue(cycles []Cycle) []WeeklyValue {
 	var result []WeeklyValue
 	var value *WeeklyValue
-	var plan, day string
+	var plan string
+	var bucket time.Time
+	var earliest, latest time.Time
+	for _, cycle := range cycles {
+		if earliest.IsZero() || cycle.Start.Before(earliest) {
+			earliest = cycle.Start
+		}
+		if cycle.End.After(latest) {
+			latest = cycle.End
+		}
+	}
+	resolution := 24 * time.Hour
+	if latest.Sub(earliest) <= 24*time.Hour {
+		resolution = time.Hour
+	}
 	var deadline time.Time
 	var remaining, observedUSD, withoutUSD float64
 	for _, cycle := range cycles {
@@ -34,7 +48,7 @@ func weeklyResetValue(cycles []Cycle) []WeeklyValue {
 		if value == nil || cycle.Quota != value.Quota {
 			result = append(result, WeeklyValue{Quota: cycle.Quota})
 			value = &result[len(result)-1]
-			observedUSD, withoutUSD, day = 0, 0, ""
+			observedUSD, withoutUSD, bucket = 0, 0, time.Time{}
 			deadline = time.Time{}
 		}
 		if cycle.Plan != plan || !cycle.Start.Before(deadline) {
@@ -74,16 +88,19 @@ func weeklyResetValue(cycles []Cycle) []WeeklyValue {
 				value.SkippedIntervals++
 				continue
 			}
+			if len(value.Points) == 0 {
+				value.Points = append(value.Points, WeeklyValuePoint{At: before.At})
+			}
 			cost := after.Cost - before.Cost
 			observedUSD += cost
 			withoutUSD += cost * fraction
 			point := WeeklyValuePoint{At: after.At, ObservedUSD: observedUSD, WithoutRefill: withoutUSD}
-			currentDay := after.At.UTC().Format(time.DateOnly)
-			if currentDay == day {
+			currentBucket := after.At.UTC().Truncate(resolution)
+			if currentBucket.Equal(bucket) {
 				value.Points[len(value.Points)-1] = point
 			} else {
 				value.Points = append(value.Points, point)
-				day = currentDay
+				bucket = currentBucket
 			}
 		}
 	}

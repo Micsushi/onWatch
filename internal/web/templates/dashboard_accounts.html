@@ -34,15 +34,15 @@
 <section id="dashboard-account-overview" class="dashboard-account-overview" aria-labelledby="dashboard-account-title">
     <header class="history-chart-heading">
         <h1 id="dashboard-account-title">{{if eq .CurrentProvider "codex"}}Codex{{else}}Antigravity{{end}} accounts</h1>
-        <label class="dashboard-account-range" for="dashboard-account-range">Quota history
-            <select id="dashboard-account-range">
-                <option value="6h">Last 6 hours</option>
-                <option value="24h">Last 24 hours</option>
-                <option value="7d" selected>Last 7 days</option>
-                <option value="30d">Last 30 days</option>
-            </select>
-        </label>
+        {{template "dashboard-account-picker" .}}
     </header>
+    <div class="history-chart-toolbar">
+        <div class="range-selector graph-mode-toggle" id="chart-mode-select" role="group" aria-label="Graph style">
+            <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative" aria-pressed="true">Quota used</button>
+            <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket" aria-pressed="false">Usage change</button>
+        </div>
+        {{template "quota-history-ranges" .}}
+    </div>
     <div class="dashboard-account-panels">
         {{range .SelectedDashboardAccounts}}
         <article class="chart-section history-chart dashboard-account-panel" data-account="{{.ID}}" aria-labelledby="dashboard-account-{{.ID}}">

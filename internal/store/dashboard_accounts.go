@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -111,7 +112,7 @@ func (s *Store) QueryAntigravityAccountRange(account AntigravityAccount, start, 
 	var snapshots []*api.AntigravitySnapshot
 	if account.Local && account.Email != "" {
 		var err error
-		snapshots, err = s.queryAntigravityRange(start, end, account.Email, limit)
+		snapshots, err = s.queryAntigravityRange(start, end, account.Email, limit, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -133,15 +134,11 @@ func (s *Store) QueryAntigravityAccountRange(account AntigravityAccount, start, 
 			if err := rows.Scan(&captured, &raw); err != nil {
 				return nil, err
 			}
-			at, err := time.Parse(time.RFC3339Nano, captured)
+			snapshot, err := decodeAntigravityReceipt(account.Email, captured, raw)
 			if err != nil {
 				return nil, err
 			}
-			var payload ingest.QuotaSnapshot
-			if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-				return nil, fmt.Errorf("decode Antigravity quota receipt: %w", err)
-			}
-			snapshots = append(snapshots, antigravityReceiptSnapshot(account.Email, at, payload))
+			snapshots = append(snapshots, snapshot)
 		}
 		if err := rows.Err(); err != nil {
 			return nil, err
@@ -149,6 +146,85 @@ func (s *Store) QueryAntigravityAccountRange(account AntigravityAccount, start, 
 	}
 	sort.SliceStable(snapshots, func(i, j int) bool { return snapshots[i].CapturedAt.Before(snapshots[j].CapturedAt) })
 	return snapshots, nil
+}
+
+// QueryAntigravityAccountRangeSampled samples the combined local and collector
+// timeline before loading local detail rows or decoding collector receipts.
+func (s *Store) QueryAntigravityAccountRangeSampled(account AntigravityAccount, start, end time.Time, maxPoints int) ([]*api.AntigravitySnapshot, error) {
+	if maxPoints < 1 {
+		return nil, fmt.Errorf("antigravity sample size must be positive")
+	}
+	lower, upper := start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano)
+	// Start from the indexed account range before looking up provenance and receipts.
+	query := `SELECT 0 AS source, id, captured_at, NULL AS device_id, NULL AS event_id
+		FROM antigravity_snapshots
+		WHERE ? AND trim(email)=? AND captured_at COLLATE ONWATCH_RFC3339>=? AND captured_at COLLATE ONWATCH_RFC3339<?
+		UNION ALL
+		SELECT 1, -c.id, c.captured_at, r.device_id, r.event_id
+		FROM central_quota_snapshots c
+		CROSS JOIN observation_provenance p ON p.target_table='central_quota_snapshots' AND p.target_record_id=CAST(c.id AS TEXT)
+		CROSS JOIN ingest_receipts r ON r.device_id=p.device_id AND r.event_id=p.event_id AND r.status='accepted'
+		WHERE c.provider='antigravity' AND c.external_account_id=? AND c.external_account_id<>''
+		AND c.captured_at COLLATE ONWATCH_RFC3339>=? AND c.captured_at COLLATE ONWATCH_RFC3339<?`
+	rows, err := s.db.Query(`SELECT points.id, points.captured_at, receipt.payload_json
+		FROM (`+sampleAntigravityRange(query, "source ASC, id ASC")+`) AS points
+		LEFT JOIN ingest_receipts receipt ON receipt.device_id=points.device_id AND receipt.event_id=points.event_id
+		ORDER BY points.position`, account.Local && account.Email != "", account.Email, lower, upper,
+		account.ExternalID, lower, upper, maxPoints, maxPoints)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var snapshots []*api.AntigravitySnapshot
+	var localIDs []any
+	localPositions := make(map[int64]int)
+	for rows.Next() {
+		var id int64
+		var captured string
+		var raw sql.NullString
+		if err := rows.Scan(&id, &captured, &raw); err != nil {
+			return nil, err
+		}
+		if !raw.Valid {
+			localIDs = append(localIDs, id)
+			localPositions[id] = len(snapshots)
+			snapshots = append(snapshots, nil)
+			continue
+		}
+		snapshot, err := decodeAntigravityReceipt(account.Email, captured, raw.String)
+		if err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(localIDs) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(localIDs)), ",")
+		local, err := s.queryAntigravitySnapshots(`SELECT id, captured_at, email, plan_name, prompt_credits,
+			monthly_credits, model_count FROM antigravity_snapshots WHERE id IN (`+placeholders+`)`, localIDs...)
+		if err != nil {
+			return nil, err
+		}
+		for _, snapshot := range local {
+			snapshots[localPositions[snapshot.ID]] = snapshot
+		}
+	}
+	return slices.DeleteFunc(snapshots, func(snapshot *api.AntigravitySnapshot) bool { return snapshot == nil }), nil
+}
+
+func decodeAntigravityReceipt(email, captured, raw string) (*api.AntigravitySnapshot, error) {
+	at, err := time.Parse(time.RFC3339Nano, captured)
+	if err != nil {
+		return nil, err
+	}
+	var payload ingest.QuotaSnapshot
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, fmt.Errorf("decode Antigravity quota receipt: %w", err)
+	}
+	return antigravityReceiptSnapshot(email, at, payload), nil
 }
 
 func antigravityReceiptSnapshot(email string, at time.Time, payload ingest.QuotaSnapshot) *api.AntigravitySnapshot {

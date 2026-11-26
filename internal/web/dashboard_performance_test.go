@@ -281,7 +281,7 @@ func TestDashboardHasIndependentGraphCustomDateRangeControls(t *testing.T) {
 	for _, marker := range []string{
 		"function setupGraphHistoryRangeControls(",
 		"function historyRequestQuery(range, scope = 'chart')",
-		"fetchPlatformCostPayload(job.provider, job.range, signal, job.scope, job.query)",
+		"fetchPlatformCostPayload(job.provider, job.range, signal, job.scope, job.query,",
 		"createPlatformCostRefreshJob(range, provider, 'platformCost')",
 		"createPlatformCostRefreshJob(range, provider, 'platformCostBreakdown')",
 		"State.platformCostRange = 'custom'",

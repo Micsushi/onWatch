@@ -315,9 +315,10 @@ button, input, select { font-family: inherit; }
    ═══════════════════════════════════════════ */
 
 .app-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, max-content) minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
   padding: 14px 28px;
   background: var(--surface-card);
   border-bottom: 1px solid var(--border-default);
@@ -325,6 +326,14 @@ button, input, select { font-family: inherit; }
   top: 0;
   z-index: 10;
   box-shadow: var(--shadow-xs);
+}
+
+.header-identity {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
 }
 
 .header-brand {
@@ -352,14 +361,17 @@ button, input, select { font-family: inherit; }
 
 /* Provider Tabs */
 .provider-tabs {
+  grid-column: 2;
   display: flex;
+  max-width: max(300px, calc(100vw - 520px));
+  overflow-x: auto;
   gap: 2px;
   background: var(--surface-inset);
   padding: 3px;
   border-radius: var(--radius-sm);
-  margin-left: 16px;
 }
 .provider-tab {
+  flex: 0 0 auto;
   padding: 6px 16px;
   border: none;
   background: transparent;
@@ -378,7 +390,6 @@ button, input, select { font-family: inherit; }
 .provider-tab.active {
   background: var(--surface-card);
   color: var(--accent-teal);
-  font-weight: 600;
   box-shadow: var(--shadow-xs);
 }
 .provider-tab.active[data-provider="anthropic"] {
@@ -389,7 +400,7 @@ button, input, select { font-family: inherit; }
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-left: auto;
+  min-width: 0;
 }
 
 .dashboard-refresh-status {
@@ -430,10 +441,11 @@ button, input, select { font-family: inherit; }
 }
 
 .header-controls {
+  grid-column: 3;
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: 6px;
 }
 
 
@@ -578,6 +590,10 @@ button, input, select { font-family: inherit; }
 
 /* Welcome banner */
 .welcome-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
   margin-bottom: 20px;
 }
 .welcome-title {
@@ -741,6 +757,8 @@ button, input, select { font-family: inherit; }
   overflow: hidden;
   transition: border-color 180ms ease, box-shadow 180ms ease;
 }
+
+.provider-card[hidden] { display: none; }
 
 .provider-card.dragging {
   opacity: 0.55;
@@ -1660,6 +1678,9 @@ body.all-density-comfortable .provider-kpi-card {
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   background: var(--surface-container);
+}
+.card-freshness[hidden] {
+  display: none;
 }
 .card-freshness.stale {
   color: var(--status-warning);
@@ -2831,9 +2852,12 @@ body.all-density-comfortable .provider-kpi-card {
   font-weight: 600;
 }
 
+.modal-chart {
+  margin-block-end: 24px;
+}
+
 .modal-chart-container {
-  height: 240px;
-  margin-bottom: 24px;
+  height: clamp(210px, 30vw, 280px);
   position: relative;
 }
 
@@ -3044,7 +3068,7 @@ body.all-density-comfortable .provider-kpi-card {
 }
 
 @media (max-width: 768px) {
-  .app-header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
+  .app-header { grid-template-columns: minmax(0, 1fr) auto; padding: 12px 16px; gap: 8px; }
   .brand-text { font-size: 18px; }
   .main-content { padding: 16px; }
   .quota-grid,
@@ -3085,8 +3109,8 @@ body.all-density-comfortable .provider-kpi-card {
   }
   .session-detail-grid { grid-template-columns: repeat(2, 1fr); }
   .cycles-filters-inline { gap: 6px; }
-  .cycles-filters-inline .filter-group { width: 100%; }
-  .cycles-filters-inline .filter-pills { flex: 1; }
+  .cycles-filters-inline .filter-group { width: 100%; min-width: 0; flex-wrap: wrap; }
+  .cycles-filters-inline .filter-pills { flex: 1; min-width: 0; flex-wrap: wrap; }
   .filter-pill { flex: 1; text-align: center; padding: 5px 6px; font-size: 11px; }
   .insights-stats { grid-template-columns: repeat(2, 1fr); }
   .insights-cards { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
@@ -4682,9 +4706,8 @@ select.settings-input {
 .antigravity-quota-details[open] > summary { margin-bottom: 8px; }
 @media (max-width: 768px) {
  #quota-grid-antigravity > .antigravity-primary-quotas { grid-template-columns: minmax(0, 1fr); }
- .app-header .provider-tabs { order: 4; flex: 1 0 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
- .app-header .header-controls { margin-left: auto; }
- .app-header .header-actions { order: 5; width: 100%; margin: 0; }
+ .app-header .provider-tabs { grid-column: 1 / -1; grid-row: 2; max-width: 100%; }
+ .app-header .header-controls { grid-column: 2; grid-row: 1; }
  .provider-tab, .header-btn, .theme-toggle, .notification-bell { min-height: 44px; }
  .graph-history-presets { flex-wrap: wrap; }
  .subscription-value .section-header { width: 100%; }
@@ -4695,7 +4718,22 @@ select.settings-input {
  .platform-cost-metric { min-width: 0; }
  .platform-cost-metric strong { font-size: 20px; overflow-wrap: anywhere; }
 }
+html:has(.app-header) { scrollbar-gutter: stable; }
+
+.dashboard-minimax-picker {
+  max-width: min(260px, 55vw);
+  padding: 8px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--surface-card);
+  font: inherit;
+  font-size: .85rem;
+}
+
 .dashboard-account-picker { position: relative; min-width: 0; }
+.all-provider-account-picker { margin: 8px 14px 0; }
+.all-provider-account-picker > summary { width: fit-content; }
 .dashboard-account-picker > summary {
   max-width: min(260px, 55vw);
   overflow: hidden;
@@ -4720,6 +4758,12 @@ select.settings-input {
   border: 1px solid var(--border-default);
   border-radius: 12px;
   box-shadow: 0 8px 25px #0003;
+}
+.all-provider-account-picker .dashboard-account-menu {
+  position: static;
+  width: min(100%, 330px);
+  margin-top: 6px;
+  box-shadow: none;
 }
 .dashboard-account-menu fieldset { border: 0; margin: 0 0 10px; padding: 0; min-width: 0; }
 .dashboard-account-menu legend { padding: 0; margin-bottom: 4px; font-weight: 650; }
@@ -4754,5 +4798,5 @@ select.settings-input {
 .dashboard-account-readings time { color: var(--text-secondary); font-size: .73rem; }
 @media (max-width: 640px) {
   .dashboard-account-menu { position: fixed; inset-inline: 16px; inset-block-start: auto; width: auto; }
-  .dashboard-account-option { min-height: 44px; }
+  .dashboard-account-option, .dashboard-minimax-picker { min-height: 44px; }
 }

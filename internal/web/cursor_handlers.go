@@ -208,6 +208,7 @@ func (h *Handler) buildCursorCurrent() map[string]interface{} {
 
 	latestPerQuota, err := h.store.QueryCursorLatestPerQuota()
 	if err != nil || len(latestPerQuota) == 0 {
+		age := now.Sub(latest.CapturedAt)
 		for _, q := range latest.Quotas {
 			quotaMap := map[string]interface{}{
 				"name":          q.Name,
@@ -218,7 +219,8 @@ func (h *Handler) buildCursorCurrent() map[string]interface{} {
 				"format":        string(q.Format),
 				"status":        utilStatus(q.Utilization),
 				"lastUpdatedAt": latest.CapturedAt.Format(time.RFC3339),
-				"ageSeconds":    int64(now.Sub(latest.CapturedAt).Seconds()),
+				"ageSeconds":    int64(age.Seconds()),
+				"isStale":       age > 30*time.Minute,
 			}
 			if q.ResetsAt != nil {
 				timeUntilReset := time.Until(*q.ResetsAt)

@@ -1180,7 +1180,7 @@ func sanitizeNotificationTestError(err error) string {
 	}
 }
 
-// parseTimeRange parses a time range string (1h, 6h, 24h, 1d, 7d, 30d)
+// parseTimeRange parses a time range string (1h, 6h, 12h, 24h, 1d, 7d, 30d)
 func parseTimeRange(rangeStr string) (time.Duration, error) {
 	if rangeStr == "" {
 		return 6 * time.Hour, nil
@@ -1191,6 +1191,8 @@ func parseTimeRange(rangeStr string) (time.Duration, error) {
 		return time.Hour, nil
 	case "6h":
 		return 6 * time.Hour, nil
+	case "12h":
+		return 12 * time.Hour, nil
 	case "24h", "1d":
 		return 24 * time.Hour, nil
 	case "7d":
@@ -2363,6 +2365,25 @@ func (h *Handler) currentBoth(w http.ResponseWriter, r *http.Request) {
 	}
 	if providers["antigravity"] && providerTelemetryEnabled(visibility, "antigravity") {
 		response["antigravity"] = h.buildAntigravityCurrent()
+		accounts := h.dashboardAccounts("antigravity", nil)
+		if len(accounts) > 1 {
+			usages := make([]map[string]interface{}, 0, len(accounts))
+			for _, account := range accounts {
+				latest, err := h.latestAntigravityDashboardAccount(account)
+				if err != nil {
+					h.logger.Error("failed to query Antigravity account", "error", err)
+					continue
+				}
+				usage := h.antigravityCurrentSnapshot(latest, false)
+				usage["accountId"] = account.ID
+				usage["accountName"] = account.Name
+				if account.Email != "" {
+					usage["accountName"] = account.Email
+				}
+				usages = append(usages, usage)
+			}
+			response["antigravityAccounts"] = usages
+		}
 	}
 	if providers["minimax"] && providerTelemetryEnabled(visibility, "minimax") {
 		minimaxAccounts := h.minimaxUsageAccounts()
@@ -2909,24 +2930,37 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if providers["antigravity"] && providerTelemetryEnabled(visibility, "antigravity") && h.store != nil {
-		snapshots, err := h.store.QueryAntigravityRange(start, now)
-		if err == nil {
-			step := downsampleStep(len(snapshots), maxChartPoints)
-			last := len(snapshots) - 1
-			antData := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-			for i, snap := range snapshots {
-				if step > 1 && i != 0 && i != last && i%step != 0 {
-					continue
-				}
-				entry := map[string]interface{}{
-					"capturedAt": snap.CapturedAt.Format(time.RFC3339),
-				}
-				for _, model := range snap.Models {
-					entry[model.ModelID] = 100 - model.RemainingPercent
-				}
-				antData = append(antData, entry)
+		var accounts []dashboardAccount
+		if r.URL.Query().Get("quotaAccounts") == "1" {
+			accounts = h.dashboardAccounts("antigravity", nil)
+		}
+		histories := make([]map[string]interface{}, 0, len(accounts))
+		for _, account := range accounts {
+			snapshots, err := h.store.QueryAntigravityAccountRangeSampled(account.Source, start, now, maxChartPoints)
+			if err != nil {
+				h.logger.Error("failed to query Antigravity account history", "error", err)
+				continue
 			}
-			response["antigravity"] = antData
+			histories = append(histories, map[string]interface{}{
+				"accountId": account.ID, "accountName": account.Name,
+				"history": antigravityHistorySeries(snapshots),
+			})
+		}
+		if len(accounts) > 0 {
+			response["antigravityAccounts"] = histories
+		} else {
+			snapshots, err := h.store.QueryAntigravityRangeSampled(start, now, maxChartPoints)
+			if err == nil {
+				antData := make([]map[string]interface{}, 0, len(snapshots))
+				for _, snap := range snapshots {
+					entry := map[string]interface{}{"capturedAt": snap.CapturedAt.Format(time.RFC3339)}
+					for _, model := range snap.Models {
+						entry[model.ModelID] = 100 - model.RemainingPercent
+					}
+					antData = append(antData, entry)
+				}
+				response["antigravity"] = antData
+			}
 		}
 	}
 
@@ -3195,12 +3229,15 @@ func (h *Handler) buildOpenRouterCurrent() map[string]interface{} {
 		}
 
 		if latest != nil {
+			age := now.Sub(latest.CapturedAt)
 			response["capturedAt"] = latest.CapturedAt.Format(time.RFC3339)
 			credits := map[string]interface{}{
 				"name":        "Credits",
 				"description": "OpenRouter API credits usage",
 				"usage":       latest.Usage,
 				"usageDaily":  latest.UsageDaily,
+				"ageSeconds":  int64(age.Seconds()),
+				"isStale":     age > 30*time.Minute,
 				"limit":       nil,
 				"remaining":   nil,
 				"percent":     0.0,
@@ -8887,9 +8924,9 @@ func (h *Handler) historyAntigravity(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "Account unavailable")
 			return
 		}
-		snapshots, err = h.store.QueryAntigravityAccountRange(account.Source, window.Start, window.End, -1)
+		snapshots, err = h.store.QueryAntigravityAccountRangeSampled(account.Source, window.Start, window.End, maxChartPoints)
 	} else {
-		snapshots, err = h.store.QueryAntigravityRange(window.Start, window.End)
+		snapshots, err = h.store.QueryAntigravityRangeSampled(window.Start, window.End, maxChartPoints)
 	}
 	if err != nil {
 		h.logger.Error("failed to query antigravity history", "error", err)
@@ -8897,22 +8934,11 @@ func (h *Handler) historyAntigravity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(snapshots) == 0 {
-		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"labels":   []string{},
-			"datasets": []interface{}{},
-		})
-		return
-	}
+	respondJSON(w, http.StatusOK, antigravityHistorySeries(snapshots))
+}
 
-	step := downsampleStep(len(snapshots), maxChartPoints)
-	selected := make([]*api.AntigravitySnapshot, 0, maxChartPoints+1)
-	for i, snapshot := range snapshots {
-		if i%step == 0 || i == len(snapshots)-1 {
-			selected = append(selected, snapshot)
-		}
-	}
-	labels := make([]string, len(selected))
+func antigravityHistorySeries(snapshots []*api.AntigravitySnapshot) map[string]interface{} {
+	labels := make([]string, len(snapshots))
 	type historySeries struct {
 		key, label, window, color string
 		values                    []*float64
@@ -8921,11 +8947,11 @@ func (h *Handler) historyAntigravity(w http.ResponseWriter, r *http.Request) {
 	add := func(index int, group, label, window string, usage float64) {
 		key := group + ":" + window
 		if series[key] == nil {
-			series[key] = &historySeries{key: key, label: label + " · " + api.AntigravityQuotaWindowLabel(window), window: window, color: api.AntigravityQuotaGroupColor(group), values: make([]*float64, len(selected))}
+			series[key] = &historySeries{key: key, label: label + " · " + api.AntigravityQuotaWindowLabel(window), window: window, color: api.AntigravityQuotaGroupColor(group), values: make([]*float64, len(snapshots))}
 		}
 		series[key].values[index] = &usage
 	}
-	for i, snapshot := range selected {
+	for i, snapshot := range snapshots {
 		labels[i] = snapshot.CapturedAt.Format(time.RFC3339Nano)
 		if len(snapshot.SummaryGroups) > 0 {
 			for _, group := range snapshot.SummaryGroups {
@@ -8956,10 +8982,10 @@ func (h *Handler) historyAntigravity(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	return map[string]interface{}{
 		"labels":   labels,
 		"datasets": datasets,
-	})
+	}
 }
 
 func codexRemainingStatus(remaining float64) string {

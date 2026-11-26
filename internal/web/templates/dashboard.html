@@ -1,12 +1,26 @@
 {{define "content"}}
 <div class="app" data-poll-interval="{{.PollIntervalSec}}" data-provider="{{.CurrentProvider}}">
     <header class="app-header">
-        <a href="#" class="header-brand" id="scroll-top" aria-label="Scroll to top">
-            <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M19.07 4.93L4.93 19.07"/>
-            </svg>
-            <span class="brand-text">onWatch</span>
-        </a>
+        <div class="header-identity">
+            <a href="#" class="header-brand" id="scroll-top" aria-label="Scroll to top">
+                <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M19.07 4.93L4.93 19.07"/>
+                </svg>
+                <span class="brand-text">onWatch</span>
+            </a>
+            {{if ne .CurrentProvider "subscription-value"}}
+            <div class="header-actions">
+                <div class="dashboard-refresh-status" id="dashboard-refresh-status" role="status" aria-live="polite" aria-atomic="true" hidden>
+                    <span class="loading-spinner tiny" aria-hidden="true"></span>
+                    <span class="dashboard-refresh-message" id="dashboard-refresh-message">Updating data...</span>
+                </div>
+                <div class="header-meta">
+                    <span class="last-updated" id="last-updated">Last updated: --:--:--</span>
+                    <span class="status-indicator" id="status-dot" aria-label="Connection status"></span>
+                </div>
+            </div>
+            {{end}}
+        </div>
         {{if gt (len .Providers) 1}}
         <div class="provider-tabs" id="provider-tabs" role="tablist" aria-label="Select provider">
             {{range .Providers}}
@@ -19,27 +33,6 @@
         {{end}}
         {{if eq .CurrentProvider "codex"}}
         <script type="application/json" id="codex-dashboard-profiles">{{.CodexProfiles}}</script>
-        {{end}}
-        {{if .DashboardAccounts}}{{template "dashboard-account-picker" .}}{{end}}
-        <div class="codex-profile-dropdown" id="minimax-profile-dropdown" style="display: none;">
-            <button class="codex-profile-trigger" id="minimax-profile-trigger" aria-haspopup="listbox" aria-expanded="false">
-                <span class="codex-profile-label" id="minimax-profile-label">Account</span>
-                <svg class="codex-profile-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-            </button>
-            <ul class="codex-profile-menu" id="minimax-profile-menu" role="listbox" aria-label="Select MiniMax account"></ul>
-        </div>
-        {{if ne .CurrentProvider "subscription-value"}}
-        <div class="header-actions">
-            <div class="dashboard-refresh-status" id="dashboard-refresh-status" role="status" aria-live="polite" aria-atomic="true" hidden>
-                <span class="loading-spinner tiny" aria-hidden="true"></span>
-                <span class="dashboard-refresh-message" id="dashboard-refresh-message">Updating data...</span>
-            </div>
-            <div class="header-meta">
-                <span class="last-updated" id="last-updated">Last updated: --:--:--</span>
-                <span class="status-indicator" id="status-dot" aria-label="Connection status"></span>
-            </div>
-        </div>
-
         {{end}}
         <div class="header-controls">
             {{if ne .CurrentProvider "subscription-value"}}
@@ -100,6 +93,10 @@
         {{else}}
         <div class="welcome-banner">
             <h1 class="welcome-title">{{if and .DashboardAccounts (eq .CurrentProvider "antigravity")}}Antigravity provider dashboard{{else}}Dashboard{{end}}</h1>
+            {{if .DashboardAccounts}}{{template "dashboard-account-picker" .}}{{end}}
+            {{if eq .CurrentProvider "minimax"}}
+            <select class="dashboard-minimax-picker" id="minimax-profile-select" aria-label="MiniMax account" hidden></select>
+            {{end}}
         </div>
 
         {{if eq .CurrentProvider "both"}}
@@ -494,6 +491,7 @@
                         <div class="range-selector graph-history-presets" role="group" aria-label="Cost graph time range">
                             <button class="platform-cost-range-btn" type="button" data-range="1h" aria-pressed="false">1h</button>
                             <button class="platform-cost-range-btn" type="button" data-range="6h" aria-pressed="false">6h</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="12h" aria-pressed="false">12h</button>
                             <button class="platform-cost-range-btn" type="button" data-range="24h" aria-pressed="false">24h</button>
                             <button class="platform-cost-range-btn active" type="button" data-range="7d" aria-pressed="true">7d</button>
                             <button class="platform-cost-range-btn" type="button" data-range="30d" aria-pressed="false">30d</button>
@@ -522,7 +520,6 @@
         </section>
         {{end}}
 
-        {{if ne .CurrentProvider "both"}}
         <section class="chart-section history-chart{{if eq .CurrentProvider "antigravity"}} antigravity-history-section{{end}}" aria-labelledby="usage-chart-title">
             <header class="history-chart-heading">
                 <h3 class="section-title history-chart-title" id="usage-chart-title">
@@ -546,34 +543,18 @@
                     <select class="page-size-select" id="api-integrations-metric-select" aria-label="API integrations chart metric">
                         <option value="tokenPerCall">Tokens per Request</option>
                         <option value="requestCount">Requests</option>
-                        <option value="accumulatedTokens">Accumulated Token Use</option>
-                        <option value="totalCostUsd">Estimated Cost</option>
+                        <option value="accumulatedTokens">Tokens</option>
+                        <option value="totalCostUsd">Priced Cost</option>
                     </select>
                     {{end}}
                     <div class="range-selector graph-mode-toggle" id="chart-mode-select" role="group" aria-label="Graph style">
-                        <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative" aria-pressed="true">{{if eq .CurrentProvider "antigravity"}}Quota Used{{else}}Cumulative{{end}}</button>
-                        <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket" aria-pressed="false">{{if eq .CurrentProvider "antigravity"}}Usage Change{{else}}Per period{{end}}</button>
+                        <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative" aria-pressed="true">{{if ne .CurrentProvider "api-integrations"}}Quota used{{else}}Cumulative{{end}}</button>
+                        <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket" aria-pressed="false">{{if ne .CurrentProvider "api-integrations"}}Usage change{{else}}Per period{{end}}</button>
                     </div>
                 </div>
-                <div class="graph-history-control" data-history-scope="chart">
-                    <div class="range-selector graph-history-presets" role="group" aria-label="Usage graph time range">
-                        <button class="chart-range-btn" type="button" data-range="1h" aria-pressed="false">1h</button>
-                        <button class="chart-range-btn" type="button" data-range="6h" aria-pressed="false">6h</button>
-                        <button class="chart-range-btn" type="button" data-range="24h" aria-pressed="false">24h</button>
-                        <button class="chart-range-btn active" type="button" data-range="7d" aria-pressed="true">7d</button>
-                        <button class="chart-range-btn" type="button" data-range="30d" aria-pressed="false">30d</button>
-                        <button class="chart-range-btn" type="button" data-range="all" aria-pressed="false">All</button>
-                        <button class="chart-range-btn" type="button" data-range="custom" aria-pressed="false">Custom</button>
-                    </div>
-                    <div class="graph-history-dates">
-                        <label for="chart-history-start-date"><span>Start</span><input type="date" id="chart-history-start-date" data-history-start autocomplete="off"></label>
-                        <span class="graph-history-date-separator" aria-hidden="true">to</span>
-                        <label for="chart-history-end-date"><span>End</span><input type="date" id="chart-history-end-date" data-history-end autocomplete="off"></label>
-                    </div>
-                    <p class="graph-history-error" data-history-error role="alert" hidden></p>
-                </div>
+                {{template "quota-history-ranges" .}}
             </div>
-            {{if ne .CurrentProvider "api-integrations"}}
+            {{if and (ne .CurrentProvider "api-integrations") (ne .CurrentProvider "both")}}
             <p class="collection-freshness-note" id="collection-freshness-note" hidden role="status"></p>
             <div class="usage-summary" id="usage-summary">
                 <div class="platform-cost-metric primary">
@@ -606,7 +587,6 @@
                 <div class="chart-empty-state" id="usage-chart-empty" hidden aria-live="polite"></div>
             </div>
         </section>
-        {{end}}
 
         {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}}
         <details class="sessions-section platform-cost-breakdown-section dashboard-detail" id="platform-cost-breakdown-section" data-provider="{{.CurrentProvider}}">
@@ -630,6 +610,7 @@
                         <div class="range-selector graph-history-presets" role="group" aria-label="Token cost breakdown time range">
                             <button class="platform-cost-breakdown-range-btn" type="button" data-range="1h">1h</button>
                             <button class="platform-cost-breakdown-range-btn" type="button" data-range="6h">6h</button>
+                            <button class="platform-cost-breakdown-range-btn" type="button" data-range="12h">12h</button>
                             <button class="platform-cost-breakdown-range-btn" type="button" data-range="24h">24h</button>
                             <button class="platform-cost-breakdown-range-btn active" type="button" data-range="7d">7d</button>
                             <button class="platform-cost-breakdown-range-btn" type="button" data-range="30d">30d</button>
@@ -1056,5 +1037,26 @@
         </header>
         <div class="modal-body" id="modal-body"></div>
     </div>
+</div>
+{{end}}
+
+{{define "quota-history-ranges"}}
+<div class="graph-history-control" data-history-scope="chart">
+    <div class="range-selector graph-history-presets" role="group" aria-label="Usage graph time range">
+        <button class="chart-range-btn" type="button" data-range="1h" aria-pressed="false">1h</button>
+        <button class="chart-range-btn" type="button" data-range="6h" aria-pressed="false">6h</button>
+        <button class="chart-range-btn" type="button" data-range="12h" aria-pressed="false">12h</button>
+        <button class="chart-range-btn" type="button" data-range="24h" aria-pressed="false">24h</button>
+        <button class="chart-range-btn active" type="button" data-range="7d" aria-pressed="true">7d</button>
+        <button class="chart-range-btn" type="button" data-range="30d" aria-pressed="false">30d</button>
+        <button class="chart-range-btn" type="button" data-range="all" aria-pressed="false">All</button>
+        <button class="chart-range-btn" type="button" data-range="custom" aria-pressed="false">Custom</button>
+    </div>
+    <div class="graph-history-dates">
+        <label for="chart-history-start-date"><span>Start</span><input type="date" id="chart-history-start-date" data-history-start autocomplete="off"></label>
+        <span class="graph-history-date-separator" aria-hidden="true">to</span>
+        <label for="chart-history-end-date"><span>End</span><input type="date" id="chart-history-end-date" data-history-end autocomplete="off"></label>
+    </div>
+    <p class="graph-history-error" data-history-error role="alert" hidden></p>
 </div>
 {{end}}
