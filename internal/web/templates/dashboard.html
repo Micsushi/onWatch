@@ -508,13 +508,14 @@
                         <p class="graph-history-error" data-history-error role="alert" hidden></p>
                     </div>
                 </div>
+                <p class="history-chart-note" id="platform-cost-chart-gap-note" hidden></p>
                 <div class="platform-cost-chart-wrap history-chart-plot">
                     <div class="chart-loading-overlay" id="platform-cost-chart-loading" aria-live="polite" hidden>
                         <span class="loading-spinner" aria-hidden="true"></span>
                         <span>Loading cost history</span>
                     </div>
                     <p class="sr-only" id="platform-cost-chart-accessible-summary" aria-live="polite"></p>
-                    <canvas id="platform-cost-chart" role="img" aria-label="Cost and token history chart" aria-describedby="platform-cost-summary platform-cost-chart-accessible-summary"></canvas>
+                    <canvas id="platform-cost-chart" role="img" aria-label="Cost and token history chart" aria-describedby="platform-cost-summary platform-cost-chart-gap-note platform-cost-chart-accessible-summary"></canvas>
                     <div class="chart-empty-state" id="platform-cost-chart-empty" hidden aria-live="polite"></div>
                 </div>
             </section>

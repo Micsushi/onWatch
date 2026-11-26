@@ -25,10 +25,11 @@ dashboard.
 - Swap history graph datasets and axis scales atomically without transition
   animation. Cached and refreshed payloads may arrive close together, so range
   changes must not interpolate from the old graph or restart an animation.
-- Preserve observed usage points and timestamps through client rendering.
-  Summary values use observed response data, and collection gaps must not be
-  filled with synthetic usage points, connecting lines, or shaded areas. Leave
-  unobserved time blank in cumulative usage and cost graphs.
+- Preserve observed usage points and timestamps through client rendering. Quota
+  graphs leave collection gaps blank. Cumulative token and cost graphs carry the
+  last recorded total forward with a solid step between recorded points. Their
+  per-period views use labeled dotted connectors between measured periods across
+  gaps. Keep missing measurements out of the data and tooltips in both modes.
 - When collection gaps split a dense usage series, remove area fill and point
   markers, and explain that blank spans mean no samples were collected.
 - Per-period usage keeps unobserved buckets unknown, never assigns usage across

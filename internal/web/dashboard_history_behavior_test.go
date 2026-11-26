@@ -975,11 +975,12 @@ if (!postReset || postReset.y !== 5) {
 	runDashboardNodeTest(t, script)
 }
 
-func TestCumulativeGraphLeavesCollectionGapsBlank(t *testing.T) {
+func TestQuotaGraphLeavesCollectionGapsBlank(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
-	if strings.Contains(source, "spanGaps: true") {
-		t.Fatal("line datasets must not reconnect across collection-gap markers")
+	lineStyle := dashboardJavaScriptBetween(t, source, "function graphLineStyle(", "function applyGraphModeToDatasets(")
+	if !strings.Contains(lineStyle, "spanGaps: false") {
+		t.Fatal("the common quota chart style must leave collection gaps visible")
 	}
 	gapProcessing := dashboardJavaScriptBetween(t, source, "function processDataWithGaps(", "function getSegmentStyle(")
 

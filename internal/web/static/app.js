@@ -8177,12 +8177,17 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   bindPlatformCostRangeControls(range);
   const subtitle = document.getElementById('platform-cost-chart-subtitle');
   const title = document.getElementById('platform-cost-chart-title');
+  const gapNote = document.getElementById('platform-cost-chart-gap-note');
   const graphMode = normalizeGraphMode(State.platformCostGraphMode);
   const showTokens = State.platformCostChartMetric === 'tokens';
   const metric = showTokens ? 'Tokens' : 'Priced cost';
   const periodMode = isPeriodGraphMode(graphMode);
   const costTimeBounds = platformCostChartTimeBounds(range);
   if (!hasLoadedSelectedRange) return;
+  if (gapNote) {
+    gapNote.hidden = true;
+    gapNote.textContent = '';
+  }
   canvas.setAttribute('aria-label', `${metric} history chart`);
   if (title) {
     title.textContent = periodMode
@@ -8264,6 +8269,12 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
       : 'No priced cost available for this range.');
     return;
   }
+  if (gapNote && periodMode) {
+    const first = plottedPoints.findIndex(point => point.y != null);
+    const last = plottedPoints.findLastIndex(point => point.y != null);
+    gapNote.hidden = !plottedPoints.some((point, index) => index > first && index < last && point.y == null);
+    if (!gapNote.hidden) gapNote.textContent = 'Dotted lines bridge periods with no recorded values.';
+  }
   const metricColor = showTokens ? '#38BDF8' : '#14B8A6';
   const formatMetric = showTokens ? formatNumber : formatCurrencyUSD;
   const formatAxis = showTokens ? formatChartAxisNumber : formatCurrencyUSD;
@@ -8284,6 +8295,11 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
       borderColor: metricColor,
       backgroundColor: metricColor,
       ...graphLineStyle(periodMode),
+      spanGaps: true,
+      stepped: periodMode ? false : 'before',
+      segment: periodMode ? {
+        borderDash: ({ p0, p1 }) => p0.skip || p1.skip ? [2, 4] : undefined,
+      } : undefined,
       fill: false,
     }],
   };
