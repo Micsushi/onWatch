@@ -89,8 +89,8 @@ func TestDefaultPricingMapVersionsGPTPricingByLaunchDate(t *testing.T) {
 	}
 	for _, test := range tests {
 		periods, ok := pricing.lookup(test.model, nil)
-		if !ok || len(periods) != 1 {
-			t.Fatalf("%s periods = %v, want one period", test.model, periods)
+		if !ok || len(periods) == 0 {
+			t.Fatalf("%s periods = %v, want a launch period", test.model, periods)
 		}
 		if !periods[0].EffectiveFrom.Equal(test.wantDate) {
 			t.Fatalf("%s effective_from = %s, want %s", test.model, periods[0].EffectiveFrom, test.wantDate)
@@ -102,6 +102,25 @@ func TestDefaultPricingMapVersionsGPTPricingByLaunchDate(t *testing.T) {
 		}, CostOptions{})
 		if cost != test.wantCost {
 			t.Fatalf("%s cost = %v, want %v", test.model, cost, test.wantCost)
+		}
+	}
+
+	counts := TokenCounts{InputTokens: 1_000_000, CachedInputTokens: 1_000_000, OutputTokens: 1_000_000}
+	for _, test := range []struct {
+		model            string
+		change           time.Time
+		oldCost, newCost float64
+	}{
+		{"gpt-5.6-sol", time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC), 35.5, 24.4},
+		{"gpt-5.6-terra", time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC), 17.75, 14.2},
+		{"gpt-5.6-luna", time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC), 7.1, 1.42},
+		{"gemini-3.8-flash-tiered", time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), 4.575, 9.15},
+	} {
+		if got := pricing.CalculateCostAt(test.model, test.change.Add(-time.Nanosecond), counts, CostOptions{}); got != test.oldCost {
+			t.Fatalf("%s before transition: got %v, want %v", test.model, got, test.oldCost)
+		}
+		if got := pricing.CalculateCostAt(test.model, test.change, counts, CostOptions{}); got != test.newCost {
+			t.Fatalf("%s at transition: got %v, want %v", test.model, got, test.newCost)
 		}
 	}
 }
@@ -124,7 +143,7 @@ func TestDefaultPricingMapIncludesClaudeOpus5(t *testing.T) {
 	}
 }
 
-func TestDefaultPricingMapVersionsClaudeSonnet5Pricing(t *testing.T) {
+func TestDefaultPricingMapPreservesClaudeSonnet5IntroductoryPricing(t *testing.T) {
 	pricing, err := DefaultPricingMap()
 	if err != nil {
 		t.Fatalf("DefaultPricingMap() error = %v", err)
@@ -149,8 +168,8 @@ func TestDefaultPricingMapVersionsClaudeSonnet5Pricing(t *testing.T) {
 	if before != 12.2 {
 		t.Fatalf("pre-September cost = %v, want 12.2", before)
 	}
-	if after != 18.3 {
-		t.Fatalf("September cost = %v, want 18.3", after)
+	if after != 12.2 {
+		t.Fatalf("September cost = %v, want 12.2", after)
 	}
 }
 

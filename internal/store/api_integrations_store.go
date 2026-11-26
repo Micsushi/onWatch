@@ -56,6 +56,9 @@ type APIIntegrationUsageEffortSummaryRow struct {
 	CacheCreateTokens int
 	OutputTokens      int
 	ReasoningTokens   int
+	UnpricedTokens    int
+	ArchivedTokens    int
+	PricedRequests    int
 	TotalCostUSD      float64
 	LastCapturedAt    time.Time
 }
@@ -107,6 +110,9 @@ type APIIntegrationUsageTotalsRow struct {
 	CacheCreateTokens int
 	OutputTokens      int
 	ReasoningTokens   int
+	UnpricedTokens    int
+	ArchivedTokens    int
+	PricedRequests    int
 	TotalCostUSD      float64
 	LastCapturedAt    time.Time
 }
@@ -129,6 +135,8 @@ type APIIntegrationCompactionResult struct {
 }
 
 type apiIntegrationNormalizedMetadata struct {
+	Source                   string `json:"source"`
+	CacheCreation1hTokens    *int   `json:"cache_creation_1h_input_tokens"`
 	SessionID                string `json:"session_id"`
 	ReasoningEffort          string `json:"reasoning_effort"`
 	Mode                     string `json:"mode"`
@@ -877,6 +885,9 @@ func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integ
 			       COALESCE(SUM(output_tokens), 0) AS output_tokens,
 			       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
 			       COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
+			       COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN total_tokens ELSE 0 END),0) AS unpriced_tokens,
+			       0 AS archived_tokens,
+			       COUNT(cost_usd) AS priced_requests,
 			       MAX(captured_at COLLATE ONWATCH_RFC3339) AS last_captured_at
 			FROM raw_annotated
 			GROUP BY integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode
@@ -884,7 +895,7 @@ func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integ
 			SELECT integration_name, provider, account_name, model, reasoning_effort, mode, speed_mode,
 			       request_count, prompt_tokens, completion_tokens, total_tokens, input_tokens,
 			       cached_input_tokens, cache_creation_input_tokens, output_tokens,
-			       reasoning_output_tokens, total_cost_usd, last_captured_at
+			       reasoning_output_tokens, total_cost_usd, 0, total_tokens, 0, last_captured_at
 			FROM api_integration_usage_hourly
 			WHERE hour_start < ? AND last_captured_at COLLATE ONWATCH_RFC3339 >= ?
 		)
@@ -899,6 +910,9 @@ func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integ
 		       COALESCE(SUM(output_tokens), 0),
 		       COALESCE(SUM(reasoning_output_tokens), 0),
 		       COALESCE(SUM(total_cost_usd), 0),
+		       COALESCE(SUM(unpriced_tokens), 0),
+		       COALESCE(SUM(archived_tokens), 0),
+		       COALESCE(SUM(priced_requests), 0),
 		       MAX(last_captured_at COLLATE ONWATCH_RFC3339)
 		FROM combined
 	`
@@ -944,6 +958,9 @@ func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integ
 			&row.OutputTokens,
 			&row.ReasoningTokens,
 			&row.TotalCostUSD,
+			&row.UnpricedTokens,
+			&row.ArchivedTokens,
+			&row.PricedRequests,
 			&lastCapturedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan API integration effort range totals: %w", err)
@@ -1131,6 +1148,9 @@ func (s *Store) QueryAPIIntegrationUsageTotals(start, end time.Time, integration
 			       COALESCE(SUM(output_tokens), 0) AS output_tokens,
 			       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
 			       COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
+			       COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN total_tokens ELSE 0 END), 0) AS unpriced_tokens,
+			       0 AS archived_tokens,
+			       COUNT(cost_usd) AS priced_requests,
 			       MAX(captured_at COLLATE ONWATCH_RFC3339) AS last_captured_at
 			FROM api_integration_usage_events
 			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
@@ -1147,6 +1167,9 @@ func (s *Store) QueryAPIIntegrationUsageTotals(start, end time.Time, integration
 			       COALESCE(SUM(output_tokens), 0),
 			       COALESCE(SUM(reasoning_output_tokens), 0),
 			       COALESCE(SUM(total_cost_usd), 0),
+			       0,
+			       COALESCE(SUM(total_tokens), 0),
+			       0,
 			       MAX(last_captured_at COLLATE ONWATCH_RFC3339)
 			FROM api_integration_usage_hourly
 			WHERE hour_start < ? AND last_captured_at COLLATE ONWATCH_RFC3339 >= ?
@@ -1163,6 +1186,9 @@ func (s *Store) QueryAPIIntegrationUsageTotals(start, end time.Time, integration
 		       COALESCE(SUM(output_tokens), 0),
 		       COALESCE(SUM(reasoning_output_tokens), 0),
 		       COALESCE(SUM(total_cost_usd), 0),
+		       COALESCE(SUM(unpriced_tokens), 0),
+		       COALESCE(SUM(archived_tokens), 0),
+		       COALESCE(SUM(priced_requests), 0),
 		       MAX(last_captured_at COLLATE ONWATCH_RFC3339)
 		FROM combined
 	`
@@ -1200,6 +1226,9 @@ func (s *Store) QueryAPIIntegrationUsageTotals(start, end time.Time, integration
 			&row.OutputTokens,
 			&row.ReasoningTokens,
 			&row.TotalCostUSD,
+			&row.UnpricedTokens,
+			&row.ArchivedTokens,
+			&row.PricedRequests,
 			&lastCapturedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan API integration usage totals: %w", err)

@@ -13,8 +13,10 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/onllm-dev/onwatch/v2/internal/agentusage"
 	apiintegrations "github.com/onllm-dev/onwatch/v2/internal/api_integrations"
 	"github.com/onllm-dev/onwatch/v2/internal/ingest"
 )
@@ -608,6 +610,7 @@ func storeIngestEvent(tx *sql.Tx, deviceID string, event ingest.Event, now time.
 			return result, err
 		}
 		metadata, storedMetadata := normalizedAPIIntegrationMetadata(eventRecord)
+		fillMissingAgentUsageCost(eventRecord, metadata)
 		insert, err := tx.Exec(`INSERT OR IGNORE INTO api_integration_usage_events (
 			captured_at, integration_name, provider, account_name, model, request_id, prompt_tokens, completion_tokens,
 			total_tokens, cost_usd, latency_ms, metadata_json, session_id, reasoning_effort, mode, speed_mode,
@@ -954,6 +957,49 @@ func jsonEqual(left, right any) bool {
 	leftJSON, _ := json.Marshal(left)
 	rightJSON, _ := json.Marshal(right)
 	return subtle.ConstantTimeCompare(leftJSON, rightJSON) == 1
+}
+
+var centralAgentPricing = sync.OnceValues(agentusage.DefaultPricingMap)
+
+func fillMissingAgentUsageCost(event *apiintegrations.UsageEvent, metadata apiIntegrationNormalizedMetadata) {
+	if event.CostUSD != nil {
+		return
+	}
+	switch metadata.Source {
+	case "claude":
+		if event.Integration != "Claude Code" || event.Provider != "anthropic" {
+			return
+		}
+	case "codex":
+		if event.Integration != "Codex CLI" || event.Provider != "openai" {
+			return
+		}
+	case "gemini":
+		if event.Integration != "Gemini CLI" || event.Provider != "gemini" {
+			return
+		}
+	case "antigravity":
+		if event.Integration != "Antigravity" {
+			return
+		}
+	default:
+		return
+	}
+	pricing, err := centralAgentPricing()
+	if err != nil {
+		return
+	}
+	counts := agentusage.TokenCounts{
+		InputTokens:           normalizedTokenValue(metadata.InputTokens, event.PromptTokens),
+		CachedInputTokens:     normalizedTokenValue(metadata.CachedInputTokens, 0),
+		CacheCreationTokens:   normalizedTokenValue(metadata.CacheCreationInputTokens, 0),
+		CacheCreation1hTokens: normalizedTokenValue(metadata.CacheCreation1hTokens, 0),
+		OutputTokens:          normalizedTokenValue(metadata.OutputTokens, event.CompletionTokens),
+		ReasoningTokens:       normalizedTokenValue(metadata.ReasoningOutputTokens, 0),
+	}
+	if cost := pricing.EstimateLoggedCost(event.Integration, event.Model, metadata.SpeedMode, event.Timestamp, counts); cost > 0 {
+		event.CostUSD = &cost
+	}
 }
 
 func enrichUsageEvent(tx *sql.Tx, targetID, deviceID string, event ingest.Event) error {

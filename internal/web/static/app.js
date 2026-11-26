@@ -282,7 +282,7 @@ function updateChartWhenChanged(signatureKey, renderState, update) {
 }
 
 const API_INTEGRATIONS_CURRENT_CACHE_KEY = 'onwatch-api-integrations-current-v1';
-const PLATFORM_COST_HISTORY_CACHE_KEY = 'onwatch-platform-cost-history-v2';
+const PLATFORM_COST_HISTORY_CACHE_KEY = 'onwatch-platform-cost-history-v3';
 const PROVIDER_DATA_CACHE_KEY = 'onwatch-provider-data-cache-v4';
 const API_INTEGRATIONS_CURRENT_CACHE_TTL_MS = 120000;
 const PLATFORM_COST_HISTORY_CACHE_TTL_MS = 120000;
@@ -7648,122 +7648,22 @@ function normalizePlatformCostMetric(metric) {
   return platformCostMetricMeta[metric] ? metric : 'totalCostUsd';
 }
 
-const tokenCostTypeMeta = {
-  inputTokens: { label: 'Input', rateKey: 'input', tokenKey: 'inputTokens' },
-  cachedInputTokens: { label: 'Cached Input', rateKey: 'cached', tokenKey: 'cachedInputTokens' },
-  cacheCreationInputTokens: { label: 'Cache Write', rateKey: 'cacheWrite', tokenKey: 'cacheCreationInputTokens' },
-  outputTokens: { label: 'Output', rateKey: 'output', tokenKey: 'outputTokens' },
-  reasoningTokens: { label: 'Reasoning Output', rateKey: 'output', tokenKey: 'reasoningTokens' },
+const platformTokenTypes = {
+  inputTokens: 'Uncached Input',
+  cachedInputTokens: 'Cached Input',
+  cacheCreationInputTokens: 'Cache Write',
+  outputTokens: 'Output',
+  reasoningTokens: 'Reasoning',
 };
-
-const platformPricingPerMillion = {
-  'claude-sonnet-4-5': { input: 3, cached: 0.30, cacheWrite: 3.75, output: 15 },
-  'claude-sonnet-4-20250514': { input: 3, cached: 0.30, cacheWrite: 3.75, output: 15 },
-  'claude-sonnet-4-6': { input: 3, cached: 0.30, cacheWrite: 3.75, output: 15 },
-  'claude-opus-4-7': { input: 5, cached: 0.50, cacheWrite: 6.25, output: 25 },
-  'claude-haiku-4-5-20251001': { input: 1, cached: 0.10, cacheWrite: 1.25, output: 5 },
-  'gpt-5.5': { input: 5, cached: 0.50, cacheWrite: 5, output: 30 },
-  'gpt-5.4': { input: 2.50, cached: 0.25, cacheWrite: 2.50, output: 15 },
-  'gpt-5.3-codex': { input: 1.75, cached: 0.175, cacheWrite: 1.75, output: 14 },
-  'gpt-5.2-codex': { input: 1.75, cached: 0.175, cacheWrite: 1.75, output: 14 },
-  'google/gemini-2.5-pro': { input: 1.25, cached: 0.125, cacheWrite: 1.5625, output: 10 },
-  'gemini-2.5-pro': { input: 1.25, cached: 0.125, cacheWrite: 1.5625, output: 10 },
-  'gemini-2.5-flash': { input: 0.30, cached: 0.03, cacheWrite: 0.375, output: 2.50 },
-};
-
-function normalizeModelPricingKey(model) {
-  return String(model || '').trim().toLowerCase();
-}
-
-function getPlatformPricing(model) {
-  const key = normalizeModelPricingKey(model);
-  if (platformPricingPerMillion[key]) return platformPricingPerMillion[key];
-  if (platformPricingPerMillion[`google/${key}`]) return platformPricingPerMillion[`google/${key}`];
-  const foundKey = Object.keys(platformPricingPerMillion).find(candidate => candidate.endsWith(`/${key}`));
-  return foundKey ? platformPricingPerMillion[foundKey] : null;
-}
-
-function reasoningIncludedInOutput(model) {
-  const key = normalizeModelPricingKey(model);
-  return key.startsWith('gpt-') || key.startsWith('o1') || key.startsWith('o3') || key.startsWith('o4');
-}
-
-function computeRowCostBreakdown(row) {
-  const pricing = getPlatformPricing(row.model);
-  const totalCost = row.totalCostUsd != null ? Number(row.totalCostUsd || 0) : null;
-  const result = {
-    inputTokens: { tokens: Number(row.inputTokens || 0), ratePerMillion: null, cost: null },
-    cachedInputTokens: { tokens: Number(row.cachedInputTokens || 0), ratePerMillion: null, cost: null },
-    cacheCreationInputTokens: { tokens: Number(row.cacheCreationInputTokens || 0), ratePerMillion: null, cost: null },
-    outputTokens: { tokens: Number(row.outputTokens || 0), ratePerMillion: null, cost: null },
-    reasoningTokens: { tokens: Number(row.reasoningTokens || 0), ratePerMillion: null, cost: null },
-    totalCost,
-    blendedRatePerMillion: null,
-    multiplier: 1,
-    priced: Boolean(pricing),
-  };
-  if (!pricing) {
-    if (totalCost != null && Number(row.totalTokens || 0) > 0) {
-      result.blendedRatePerMillion = totalCost / Number(row.totalTokens || 0) * 1000000;
-    }
-    return result;
-  }
-  let baseCost = 0;
-  Object.entries(tokenCostTypeMeta).forEach(([type, meta]) => {
-    const tokens = result[type].tokens;
-    const rate = Number(pricing[meta.rateKey] || 0);
-    result[type].ratePerMillion = rate;
-    if (type === 'reasoningTokens' && reasoningIncludedInOutput(row.model)) {
-      result[type].ratePerMillion = 0;
-      result[type].cost = 0;
-      return;
-    }
-    result[type].cost = tokens * rate / 1000000;
-    baseCost += result[type].cost;
-  });
-  const multiplier = totalCost != null && baseCost > 0 ? totalCost / baseCost : 1;
-  result.multiplier = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
-  Object.keys(tokenCostTypeMeta).forEach((type) => {
-    if (result[type].ratePerMillion != null) {
-      result[type].ratePerMillion *= result.multiplier;
-      result[type].cost *= result.multiplier;
-    }
-  });
-  if (totalCost != null && Number(row.totalTokens || 0) > 0) {
-    result.blendedRatePerMillion = totalCost / Number(row.totalTokens || 0) * 1000000;
-  }
-  return result;
-}
 
 function formatRatePerMillion(value) {
   return value == null || !Number.isFinite(Number(value)) ? '--' : `${formatCurrencyUSD(Number(value))} / 1M`;
 }
 
-function buildTokenTypeCostRows(modelRows) {
-  const totals = Object.entries(tokenCostTypeMeta).map(([type, meta]) => ({
-    type,
-    label: meta.label,
-    tokens: 0,
-    cost: 0,
-    hasCost: false,
-  }));
-  modelRows.forEach((row) => {
-    const breakdown = computeRowCostBreakdown(row);
-    totals.forEach((total) => {
-      const part = breakdown[total.type];
-      total.tokens += Number(part.tokens || 0);
-      if (part.cost != null) {
-        total.cost += Number(part.cost || 0);
-        total.hasCost = true;
-      }
-    });
-  });
-  const allCost = totals.reduce((sum, row) => sum + (row.hasCost ? row.cost : 0), 0);
-  return totals.map(row => ({
-    ...row,
-    effectiveRatePerMillion: row.tokens > 0 && row.hasCost ? row.cost / row.tokens * 1000000 : null,
-    share: allCost > 0 && row.hasCost ? row.cost / allCost : null,
-  }));
+function platformCostPerMillion(totalCost, tokens, unpricedTokens, archivedTokens) {
+  if (unpricedTokens == null || archivedTokens !== 0 || totalCost == null) return null;
+  const pricedTokens = tokens - unpricedTokens;
+  return pricedTokens > 0 ? Number(totalCost) / pricedTokens * 1000000 : null;
 }
 
 function getPlatformCostEntry(provider = getCurrentProvider()) {
@@ -7867,14 +7767,11 @@ function renderPlatformCostPanel(provider = getCurrentProvider()) {
 
   const summaryEl = document.getElementById('platform-cost-summary');
   const totalCost = entry.totalCostUsd != null ? Number(entry.totalCostUsd || 0) : null;
-  const costPerMillion = totalCost != null && Number(entry.totalTokens || 0) > 0
-    ? (totalCost / Number(entry.totalTokens || 0)) * 1000000
-    : null;
 
   if (summaryEl) {
     summaryEl.innerHTML = `
       <div class="platform-cost-metric primary">
-        <span class="platform-cost-label">Estimated Cost</span>
+        <span class="platform-cost-label">Priced Usage Subtotal</span>
         <strong>${totalCost != null ? formatCurrencyUSD(totalCost) : '--'}</strong>
       </div>
       <div class="platform-cost-metric">
@@ -7886,8 +7783,8 @@ function renderPlatformCostPanel(provider = getCurrentProvider()) {
         <strong>${formatNumber(Number(entry.requestCount || 0))}</strong>
       </div>
       <div class="platform-cost-metric">
-        <span class="platform-cost-label">Blended Cost / 1M</span>
-        <strong>${formatRatePerMillion(costPerMillion).replace(' / 1M', '')}</strong>
+        <span class="platform-cost-label">Cost / 1M Priced Tokens</span>
+        <strong>--</strong>
       </div>
       <div class="platform-cost-metric">
         <span class="platform-cost-label">Last Entry</span>
@@ -7937,6 +7834,8 @@ function setPlatformCostChartLoading(loading, message = 'Loading cost history') 
 }
 
 function renderPlatformCostLoadingPanel(range = State.platformCostRange || DEFAULT_CHART_RANGE) {
+  const coverage = document.getElementById('platform-cost-coverage');
+  if (coverage) coverage.hidden = true;
   const summaryEl = document.getElementById('platform-cost-summary');
   const subtitle = document.getElementById('platform-cost-chart-subtitle');
   const label = platformCostLoadingLabel(range);
@@ -7955,7 +7854,7 @@ function renderPlatformCostLoadingPanel(range = State.platformCostRange || DEFAU
         <strong><span class="loading-spinner tiny" aria-hidden="true"></span></strong>
       </div>
       <div class="platform-cost-metric">
-        <span class="platform-cost-label">Blended Cost / 1M</span>
+        <span class="platform-cost-label">Cost / 1M Priced Tokens</span>
         <strong><span class="loading-spinner tiny" aria-hidden="true"></span></strong>
       </div>
       <div class="platform-cost-metric">
@@ -7970,6 +7869,8 @@ function renderPlatformCostLoadingPanel(range = State.platformCostRange || DEFAU
 }
 
 function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
+  const coverage = document.getElementById('platform-cost-coverage');
+  if (coverage) coverage.hidden = true;
   const summaryEl = document.getElementById('platform-cost-summary');
   const subtitle = document.getElementById('platform-cost-chart-subtitle');
   const tableHead = document.getElementById('platform-cost-models-thead');
@@ -7989,7 +7890,7 @@ function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
         <strong>--</strong>
       </div>
       <div class="platform-cost-metric">
-        <span class="platform-cost-label">Blended Cost / 1M</span>
+        <span class="platform-cost-label">Cost / 1M Priced Tokens</span>
         <strong>--</strong>
       </div>
       <div class="platform-cost-metric">
@@ -8085,11 +7986,8 @@ function renderPlatformCostBreakdown(provider = getCurrentProvider()) {
     tableHead.innerHTML = `<tr>
       <th>Token Type</th>
       <th>Tokens</th>
-      <th>Effective Rate</th>
-      <th>Total Cost</th>
-      <th>Cost Share</th>
     </tr>`;
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><span class="loading-spinner inline" aria-hidden="true"></span>Loading cost telemetry...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="2" class="empty-state"><span class="loading-spinner inline" aria-hidden="true"></span>Loading cost telemetry...</td></tr>';
     setPlatformCostBreakdownRangeControlsLoading(range, true);
     return;
   }
@@ -8112,17 +8010,13 @@ function renderPlatformCostBreakdownTable(rows, tableHead, tbody) {
       <th>Speed</th>
       <th>Requests</th>
       <th>Total Tokens</th>
-      <th>Total Cost</th>
-      <th>Cost / 1M</th>
-      <th>Input Cost</th>
-      <th>Cached Cost</th>
-      <th>Cache Write Cost</th>
-      <th>Output Cost</th>
-      <th>Reasoning Cost</th>
+      <th>Priced Cost</th>
+      <th>Unpriced Tokens</th>
+      <th>Cost / 1M Priced Tokens</th>
       <th>Last Seen</th>
     </tr>`;
     tbody.innerHTML = rows.map(row => {
-      const breakdown = computeRowCostBreakdown(row);
+      const rate = platformCostPerMillion(row.totalCostUsd, row.totalTokens, row.unpricedTokens, row.archivedTokens);
       return `<tr>
         <td><code>${escapeHTML(row.model || '--')}</code></td>
         <td>${escapeHTML(row.reasoningEffort || 'unknown')}</td>
@@ -8130,31 +8024,18 @@ function renderPlatformCostBreakdownTable(rows, tableHead, tbody) {
         <td>${formatNumber(Number(row.requestCount || 0))}</td>
         <td>${formatNumber(Number(row.totalTokens || 0))}</td>
         <td>${row.totalCostUsd != null ? formatCurrencyUSD(Number(row.totalCostUsd || 0)) : '--'}</td>
-        <td>${formatRatePerMillion(breakdown.blendedRatePerMillion)}</td>
-        <td>${breakdown.inputTokens.cost != null ? formatCurrencyUSD(breakdown.inputTokens.cost) : '--'}</td>
-        <td>${breakdown.cachedInputTokens.cost != null ? formatCurrencyUSD(breakdown.cachedInputTokens.cost) : '--'}</td>
-        <td>${breakdown.cacheCreationInputTokens.cost != null ? formatCurrencyUSD(breakdown.cacheCreationInputTokens.cost) : '--'}</td>
-        <td>${breakdown.outputTokens.cost != null ? formatCurrencyUSD(breakdown.outputTokens.cost) : '--'}</td>
-        <td>${breakdown.reasoningTokens.cost != null ? formatCurrencyUSD(breakdown.reasoningTokens.cost) : '--'}</td>
+        <td>${row.archivedTokens === 0 && row.unpricedTokens != null ? formatNumber(row.unpricedTokens) : '--'}</td>
+        <td>${formatRatePerMillion(rate)}</td>
         <td>${row.lastCapturedAt ? escapeHTML(formatDateTime(row.lastCapturedAt)) : '--'}</td>
       </tr>`;
     }).join('');
     return;
   }
 
-  tableHead.innerHTML = `<tr>
-    <th>Token Type</th>
-    <th>Tokens</th>
-    <th>Effective Rate</th>
-    <th>Total Cost</th>
-    <th>Cost Share</th>
-  </tr>`;
-  tbody.innerHTML = buildTokenTypeCostRows(rows).map(row => `<tr>
-    <td>${escapeHTML(row.label)}</td>
-    <td>${formatNumber(Number(row.tokens || 0))}</td>
-    <td>${formatRatePerMillion(row.effectiveRatePerMillion)}</td>
-    <td>${row.hasCost ? formatCurrencyUSD(row.cost) : '--'}</td>
-    <td>${row.share != null ? `${(row.share * 100).toFixed(1)}%` : '--'}</td>
+  tableHead.innerHTML = '<tr><th>Token Type</th><th>Tokens</th></tr>';
+  tbody.innerHTML = Object.entries(platformTokenTypes).map(([type, label]) => `<tr>
+    <td>${escapeHTML(label)}</td>
+    <td>${formatNumber(rows.reduce((sum, row) => sum + Number(row[type] || 0), 0))}</td>
   </tr>`).join('');
 }
 
@@ -8178,16 +8059,18 @@ function renderPlatformCostAccessibleSummary(costPoints, tokenPoints, range, mod
   const minTokens = tokenValues.length > 0 ? Math.min(...tokenValues) : 0;
   const maxTokens = tokenValues.length > 0 ? Math.max(...tokenValues) : 0;
   const modeLabel = isPeriodGraphMode(mode) ? 'per period' : 'cumulative';
+  const costSummary = costValues.length > 0
+    ? `Priced cost first ${formatCurrencyUSD(costValues[0])}, last ${formatCurrencyUSD(costValues[costValues.length - 1])}, minimum ${formatCurrencyUSD(minCost)}, maximum ${formatCurrencyUSD(maxCost)}. `
+    : 'No priced cost for this period. ';
   summary.textContent = `Cost chart for ${platformCostRangeLabel(range)} in ${modeLabel} mode. `
-    + `Cost first ${formatCurrencyUSD(costValues[0] || 0)}, last ${formatCurrencyUSD(costValues[costValues.length - 1] || 0)}, `
-    + `minimum ${formatCurrencyUSD(minCost)}, maximum ${formatCurrencyUSD(maxCost)}. `
+    + costSummary
     + `Tokens first ${formatNumber(tokenValues[0] || 0)}, last ${formatNumber(tokenValues[tokenValues.length - 1] || 0)}, `
     + `minimum ${formatNumber(minTokens)}, maximum ${formatNumber(maxTokens)}.`;
 }
 
 function renderPlatformCostChart(provider = getCurrentProvider(), range = State.platformCostRange || DEFAULT_CHART_RANGE) {
   const canvas = document.getElementById('platform-cost-chart');
-  if (!canvas || typeof Chart === 'undefined' || !supportsPlatformCost(provider)) return;
+  if (!canvas || !supportsPlatformCost(provider)) return;
   range = normalizePlatformCostRange(range);
   State.platformCostRange = range;
   const integration = platformCostIntegrationNames[provider];
@@ -8252,6 +8135,10 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   setPlatformCostChartLoading(false);
   setPlatformCostRangeControlsLoading(range, false);
   updatePlatformCostSummaryForRange(provider, range, rows);
+  if (typeof Chart === 'undefined') {
+    setChartEmptyState('platform-cost-chart', true, 'Chart unavailable.');
+    return;
+  }
   if (!hasUsageInRange && !hasPeriodCostPoints) {
     renderPlatformCostAccessibleSummary([], [], range, graphMode);
     setChartEmptyState('platform-cost-chart', true, emptyCostMessage);
@@ -8282,7 +8169,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const activeMaxTokens = periodMode ? bucketed.maxTokens : cumulative.maxTokens;
   const yMaxCost = niceAxisMax(activeMaxCost * 1.18);
   const yMaxTokens = niceAxisMax(activeMaxTokens * 1.18);
-  const costPoints = periodMode ? bucketed.cost : cumulative.cost;
+  const costPoints = rangeTotals?.cost == null ? [] : (periodMode ? bucketed.cost : cumulative.cost);
   const tokenPoints = periodMode ? bucketed.tokens : cumulative.tokens;
   renderPlatformCostAccessibleSummary(costPoints, tokenPoints, range, graphMode);
   const renderState = {
@@ -8301,7 +8188,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     datasets: [
         {
           type: chartType,
-          label: periodMode ? 'Cost per Period' : 'Cumulative Cost',
+          label: periodMode ? 'Priced Cost per Period' : 'Cumulative Priced Cost',
           data: costPoints,
           yAxisID: 'y',
           borderColor: costColor,
@@ -8637,12 +8524,26 @@ function updatePlatformCostSummaryForRange(provider, range, rows) {
   if (!summaryEl) return;
   const totals = getPlatformCostRangeTotals(provider, range, rows);
   if (!totals) return;
-  const costPerMillion = totals.tokens > 0 ? totals.cost / totals.tokens * 1000000 : null;
+  const costPerMillion = platformCostPerMillion(totals.cost, totals.tokens, totals.unpricedTokens, totals.archivedTokens);
+  const incomplete = totals.unpricedTokens > 0 || totals.archivedTokens > 0 || totals.unpricedTokens == null;
+  const costLabel = incomplete && totals.cost != null ? 'Priced Usage Subtotal' : 'Estimated Cost';
+  const coverage = document.getElementById('platform-cost-coverage');
+  if (coverage) {
+    const messages = [];
+    if (totals.unpricedTokens > 0) messages.push(`${formatNumber(totals.unpricedTokens)} tokens have no price.`);
+    if (totals.archivedTokens > 0) {
+      messages.push('Archived usage has unknown pricing coverage.');
+    } else if (totals.unpricedTokens == null && totals.tokens > 0) {
+      messages.push('Pricing coverage is unavailable.');
+    }
+    coverage.textContent = messages.join(' ');
+    coverage.hidden = messages.length === 0;
+  }
   const label = platformCostRangeLabel(range);
   summaryEl.innerHTML = `
     <div class="platform-cost-metric primary">
-      <span class="platform-cost-label">Estimated Cost (${escapeHTML(label)})</span>
-      <strong>${formatCurrencyUSD(totals.cost)}</strong>
+      <span class="platform-cost-label">${costLabel} (${escapeHTML(label)})</span>
+      <strong>${totals.cost != null ? formatCurrencyUSD(totals.cost) : '--'}</strong>
     </div>
     <div class="platform-cost-metric">
       <span class="platform-cost-label">Tokens (${escapeHTML(label)})</span>
@@ -8653,7 +8554,7 @@ function updatePlatformCostSummaryForRange(provider, range, rows) {
       <strong>${formatNumber(totals.requests)}</strong>
     </div>
     <div class="platform-cost-metric">
-      <span class="platform-cost-label">Blended Cost / 1M</span>
+      <span class="platform-cost-label">Cost / 1M Priced Tokens</span>
       <strong>${formatRatePerMillion(costPerMillion).replace(' / 1M', '')}</strong>
     </div>
     <div class="platform-cost-metric">
@@ -8700,7 +8601,9 @@ function getPlatformCostRangeTotals(provider, range, rows) {
     : null;
   if (rangeTotals) {
     return {
-      cost: Number(rangeTotals.totalCostUsd || 0),
+      cost: rangeTotals.totalCostUsd == null ? null : Number(rangeTotals.totalCostUsd),
+      unpricedTokens: rangeTotals.unpricedTokens ?? null,
+      archivedTokens: rangeTotals.archivedTokens ?? null,
       tokens: Number(rangeTotals.totalTokens || 0),
       requests: Number(rangeTotals.requestCount || 0),
       lastSeen: rangeTotals.lastCapturedAt || null,
@@ -8708,7 +8611,9 @@ function getPlatformCostRangeTotals(provider, range, rows) {
   }
   if (selectedRange === 'all') {
     return {
-      cost: Number(entry.totalCostUsd || 0),
+      cost: entry.totalCostUsd == null ? null : Number(entry.totalCostUsd),
+      unpricedTokens: null,
+      archivedTokens: null,
       tokens: Number(entry.totalTokens || 0),
       requests: Number(entry.requestCount || 0),
       lastSeen: entry.lastCapturedAt || null,
@@ -8716,12 +8621,12 @@ function getPlatformCostRangeTotals(provider, range, rows) {
   }
   const selectedRows = Array.isArray(rows) ? rows : [];
   return selectedRows.reduce((acc, row) => {
-    acc.cost += Number(row.totalCostUsd || 0);
+    if (row.totalCostUsd != null) acc.cost = Number(acc.cost || 0) + Number(row.totalCostUsd);
     acc.tokens += Number(row.totalTokens || 0);
     acc.requests += Number(row.requestCount || 0);
     acc.lastSeen = laterDateString(acc.lastSeen, row.lastCapturedAt || row.capturedAt);
     return acc;
-  }, { cost: 0, tokens: 0, requests: 0, lastSeen: null });
+  }, { cost: null, unpricedTokens: null, archivedTokens: null, tokens: 0, requests: 0, lastSeen: null });
 }
 
 function platformCostRefreshSelectionKey(range, scope) {

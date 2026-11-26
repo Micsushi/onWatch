@@ -65,7 +65,13 @@ Retention notes:
 
 ### Historical Pricing
 
-Agent usage is priced using the event timestamp, not the date when the log is imported. Once a cost is stored in SQLite, it is treated as historical data: changing the built-in pricing table or a custom pricing file does not rewrite that cost. The maintenance backfill only fills rows where `cost_usd` is `NULL`.
+onWatch picks the published rate in effect at the event timestamp. Importing a log later uses the same rate it would have used on the day of the event. Updating a rate table leaves stored cost values intact. The dashboard shows a priced subtotal and counts tokens without a price. An archived hour preserves its total cost but may lack enough detail to reconstruct pricing coverage.
+
+The maintenance command previews missing prices. Add `--correct-legacy` to also check known legacy Codex rate errors. It matches the original collector calculation before replacing a stored Codex estimate. Source-reported costs and hourly aggregates are preserved. After taking a verified backup, use `--apply` to apply the reviewed changes in one transaction.
+
+```bash
+go run scripts/backfill_costs.go --db /path/to/onwatch.db --dry-run
+```
 
 Flat LiteLLM-compatible overrides remain supported. To describe a price change, use ordered or unordered `history` entries with RFC3339 `effective_from` timestamps:
 
@@ -90,12 +96,14 @@ Flat LiteLLM-compatible overrides remain supported. To describe a price change, 
 
 The newest entry effective at the event timestamp is used. Events older than the first entry use the earliest known price; events without a timestamp use the latest price.
 
-The built-in OpenAI entries reflect the published launch prices:
+The date-based rate table retains published price changes:
 
 - GPT-5.5, effective 2026-04-23: $5 per million input tokens, $0.50 per million cached input tokens, and $30 per million output tokens. Fast/Priority processing is 2.5x the standard price.
-- GPT-5.6 Sol, effective 2026-06-26: $5/$0.50/$30 per million input/cached/output tokens.
-- GPT-5.6 Terra, effective 2026-06-26: $2.50/$0.25/$15 per million input/cached/output tokens.
-- GPT-5.6 Luna, effective 2026-06-26: $1/$0.10/$6 per million input/cached/output tokens.
+- GPT-5.6 Sol launched at $5/$0.50/$30 per million input/cached/output tokens. The August 21 promotion reduced those rates to $4/$0.40/$20.
+- GPT-5.6 Terra and Luna launched at $2.50/$0.25/$15 and $1/$0.10/$6. The July 30 change reduced them to $2/$0.20/$12 and $0.20/$0.02/$1.20. [OpenAI July price change](https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/) and [August change](https://developers.openai.com/api/docs/changelog?mw_entry=2026-09-10-f35b72a1a7114c5e).
+- GPT-6.2 Astra and Sol use $8/$0.40/$40 and $2/$0.10/$10 from November 17. Requests over 272,000 input tokens use 2x input and cache rates and 1.5x output rates. Fast processing uses 2x the applicable rate. [OpenAI GPT-6.2 introduction](https://openai.com/index/introducing-gpt-6-2-astra-sol/) and [API pricing](https://developers.openai.com/api/docs/pricing).
+- Claude Sonnet 5 keeps its $2/$0.20/$10 launch rates. Anthropic canceled the planned September 1 increase. Claude Opus 5.5, Sonnet 5.5, Haiku 5.5 and Opus 4.6 use their published input, output and cache rates. [Anthropic Sonnet 5 announcement](https://www.anthropic.com/news/claude-sonnet-5) and [Claude pricing](https://platform.claude.com/docs/en/about-claude/pricing).
+- Gemini 4 Carbon and Argon have distinct November and December rates. Gemini 3.8 and 3.6 Flash keep the introductory prices through December 31. Antigravity's 3.8 Flash tiered variant uses the 3.8 Flash API equivalent. Router models without a verified API equivalent, such as Codex Auto Review, remain unpriced. [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing/).
 
 GPT-5.6 requests above 272,000 prompt tokens are billed at 2x input and 1.5x output for the full request. Fast/Priority processing is 2x standard pricing and is not available for those long-context requests. OpenAI's published record describes Terra as 2x cheaper than GPT-5.5; it does not describe a retroactive GPT-5.5 price cut. The GPT-5.6 date is the limited-preview date when those prices were first published; general availability followed on 2026-07-09. Sources: [Introducing GPT-5.5](https://openai.com/index/introducing-gpt-5-5/), [GPT-5.5 model pricing](https://developers.openai.com/api/docs/models/gpt-5.5), [Previewing GPT-5.6](https://openai.com/index/previewing-gpt-5-6-sol/), [GPT-5.6 Sol model pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [Priority processing](https://openai.com/api-priority-processing/), and [Introducing GPT-5.6](https://openai.com/index/gpt-5-6/).
 

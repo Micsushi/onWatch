@@ -543,13 +543,15 @@ func (h *Handler) buildAPIIntegrationsSessions(start, end time.Time, integration
 			"promptTokens":             row.PromptTokens,
 			"completionTokens":         row.CompletionTokens,
 			"totalTokens":              row.TotalTokens,
+			"unpricedTokens":           row.UnpricedTokens,
+			"archivedTokens":           row.ArchivedTokens,
 			"inputTokens":              row.InputTokens,
 			"cachedInputTokens":        row.CachedTokens,
 			"cacheCreationInputTokens": row.CacheCreateTokens,
 			"outputTokens":             row.OutputTokens,
 			"reasoningTokens":          row.ReasoningTokens,
 		}
-		if row.TotalCostUSD > 0 {
+		if row.TotalCostUSD > 0 || row.PricedRequests > 0 {
 			entry["totalCostUsd"] = row.TotalCostUSD
 		}
 		if !row.LastCapturedAt.IsZero() {
@@ -570,6 +572,8 @@ func (h *Handler) buildAPIIntegrationsSessions(start, end time.Time, integration
 			"promptTokens":             row.PromptTokens,
 			"completionTokens":         row.CompletionTokens,
 			"totalTokens":              row.TotalTokens,
+			"unpricedTokens":           row.UnpricedTokens,
+			"archivedTokens":           row.ArchivedTokens,
 			"inputTokens":              row.InputTokens,
 			"cachedInputTokens":        row.CachedTokens,
 			"cacheCreationInputTokens": row.CacheCreateTokens,
@@ -577,7 +581,7 @@ func (h *Handler) buildAPIIntegrationsSessions(start, end time.Time, integration
 			"reasoningTokens":          row.ReasoningTokens,
 			"lastCapturedAt":           row.LastCapturedAt.UTC().Format(time.RFC3339),
 		}
-		if row.TotalCostUSD > 0 {
+		if row.TotalCostUSD > 0 || row.PricedRequests > 0 {
 			entry["totalCostUsd"] = row.TotalCostUSD
 		}
 		modelsByIntegration[row.IntegrationName] = append(modelsByIntegration[row.IntegrationName], entry)

@@ -174,7 +174,7 @@ func (c *Collector) warnUnpricedModel(event UsageEvent) {
 		return
 	}
 	c.unpricedWarned[model] = struct{}{}
-	c.logger.Warn("agent usage collector found unpriced model (cost counted as $0)",
+	c.logger.Warn("agent usage collector found tokens without a model price",
 		"model", model, "provider", event.Provider, "source", event.Source)
 }
 
@@ -577,10 +577,7 @@ func (c *Collector) antigravityDeltaEvent(states map[string]antigravityUsageStat
 	event.OutputTokens = delta.OutputTokens
 	event.ReasoningTokens = delta.ReasoningTokens
 	event.TotalTokens = delta.TotalTokens
-	event.CostUSD = c.pricing.CalculateCostAt(event.Model, event.Timestamp, delta, CostOptions{
-		ReasoningBilledAsOutput: true,
-		ProviderPrefixes:        []string{"google", "vertex_ai", "openrouter/google", "anthropic", "openai"},
-	})
+	event.CostUSD = c.pricing.CalculateCostAt(event.Model, event.Timestamp, delta, GoogleFamilyCostOptions(event.Model, delta))
 	return &event
 }
 

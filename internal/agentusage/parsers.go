@@ -86,19 +86,16 @@ func ParseClaudeUsageLine(line []byte, sourcePath string, pricing *PricingMap) (
 	if event.RequestID == "" {
 		event.RequestID = firstString(message, "id")
 	}
-	costOptions := CostOptions{}
+	fast := false
 	if speedMode, known := claudeUsageSpeed(usage); known {
 		fastMode := speedMode == "fast"
 		event.FastMode = &fastMode
 		event.SpeedMode = speedMode
 		event.SpeedSource = "claude_usage"
-		if fastMode {
-			if multiplier := claudeFastModeCostMultiplier(event.Model); multiplier > 0 {
-				costOptions.CostMultiplier = multiplier
-				event.SpeedMultiplier = multiplier
-			}
-		}
+		fast = fastMode
 	}
+	costOptions := ClaudeCostOptions(event.Model, counts, fast)
+	event.SpeedMultiplier = costOptions.CostMultiplier
 	if event.CostUSD <= 0 {
 		event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, costOptions)
 	}
@@ -137,6 +134,19 @@ func claudeFastModeCostMultiplier(model string) float64 {
 	default:
 		return 0
 	}
+}
+
+// ClaudeCostOptions applies the same per-request rules during collection and backfills.
+func ClaudeCostOptions(model string, counts TokenCounts, fast bool) CostOptions {
+	var opts CostOptions
+	if fast {
+		opts.CostMultiplier = claudeFastModeCostMultiplier(model)
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude-haiku-5-5") &&
+		counts.InputTokens+counts.CachedInputTokens+counts.CacheCreationTokens > 100_000 {
+		opts.InputMultiplier, opts.OutputMultiplier = 5, 5
+	}
+	return opts
 }
 
 type codexParseState struct {
@@ -507,7 +517,7 @@ func codexUsageSignature(usage map[string]any) string {
 func codexFastModeCostMultiplier(model string) float64 {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	switch {
-	case strings.HasPrefix(normalized, "gpt-6-astra"), strings.HasPrefix(normalized, "gpt-5.6"):
+	case isCodexGPT6(normalized), strings.HasPrefix(normalized, "gpt-5.6"):
 		return 2
 	case strings.HasPrefix(normalized, "gpt-5.5"):
 		return 2.5
@@ -518,16 +528,25 @@ func codexFastModeCostMultiplier(model string) float64 {
 	}
 }
 
+func isCodexGPT6(model string) bool {
+	for _, base := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-astra", "gpt-6.2-sol"} {
+		if model == base || strings.HasPrefix(model, base+"-") {
+			return true
+		}
+	}
+	return false
+}
+
 // CodexCostOptions shares request-size and speed pricing with historical backfills.
 func CodexCostOptions(model string, counts TokenCounts, fast bool) CostOptions {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	requestInput := counts.InputTokens + counts.CachedInputTokens + counts.CacheCreationTokens
-	astra := strings.HasPrefix(normalized, "gpt-6-astra")
+	gpt6 := isCodexGPT6(normalized)
 	opts := CostOptions{}
-	if (astra || strings.HasPrefix(normalized, "gpt-5.6")) && requestInput > 272_000 {
+	if (gpt6 || strings.HasPrefix(normalized, "gpt-5.6")) && requestInput > 272_000 {
 		opts.InputMultiplier, opts.OutputMultiplier = 2, 1.5
 	}
-	if fast && (astra || opts.InputMultiplier == 0) {
+	if fast && (gpt6 || opts.InputMultiplier == 0) {
 		opts.CostMultiplier = codexFastModeCostMultiplier(model)
 	}
 	return opts
@@ -605,10 +624,7 @@ func ParseAntigravitySettingsFile(path string, pricing *PricingMap) (*UsageEvent
 		TotalTokens:         counts.TotalTokens,
 		SourcePath:          path,
 	}
-	event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, CostOptions{
-		ReasoningBilledAsOutput: true,
-		ProviderPrefixes:        []string{"google", "vertex_ai", "openrouter/google", "anthropic", "openai"},
-	})
+	event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, GoogleFamilyCostOptions(event.Model, counts))
 	return &event, nil
 }
 
@@ -853,10 +869,8 @@ func parseGeminiJSONL(data []byte, path, source, provider string, pricing *Prici
 		if event.Model == "" {
 			event.Model = currentModel
 		}
-		event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, geminiCounts(tokens), CostOptions{
-			ReasoningBilledAsOutput: true,
-			ProviderPrefixes:        []string{"google", "gemini", "vertex_ai", "openrouter/google"},
-		})
+		counts := geminiCounts(tokens)
+		event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, GoogleFamilyCostOptions(event.Model, counts))
 		if event.TotalTokens > 0 {
 			events = append(events, event)
 		}
@@ -897,10 +911,7 @@ func geminiEventFromTokens(tokens, obj map[string]any, path, source, provider st
 		TotalTokens:         counts.TotalTokens,
 		SourcePath:          path,
 	}
-	event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, CostOptions{
-		ReasoningBilledAsOutput: true,
-		ProviderPrefixes:        []string{"google", "gemini", "vertex_ai", "openrouter/google"},
-	})
+	event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, GoogleFamilyCostOptions(event.Model, counts))
 	return event
 }
 
@@ -924,6 +935,17 @@ func codexCounts(usage map[string]any) TokenCounts {
 		counts.TotalTokens = inputRaw + counts.OutputTokens
 	}
 	return counts
+}
+
+// GoogleFamilyCostOptions prices thinking tokens and the published Pro context tier.
+func GoogleFamilyCostOptions(model string, counts TokenCounts) CostOptions {
+	opts := CostOptions{ReasoningBilledAsOutput: true, ProviderPrefixes: GoogleFamilyProviderPrefixes}
+	model = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "google/")
+	if (model == "gemini-2.5-pro" || strings.HasPrefix(model, "gemini-3.1-pro-preview")) &&
+		counts.InputTokens+counts.CachedInputTokens+counts.CacheCreationTokens > 200_000 {
+		opts.InputMultiplier, opts.OutputMultiplier = 2, 1.5
+	}
+	return opts
 }
 
 func geminiCounts(tokens map[string]any) TokenCounts {

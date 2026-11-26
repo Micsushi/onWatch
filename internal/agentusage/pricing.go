@@ -127,6 +127,41 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_input_token_cost": 0.00000375,
 			"cache_creation_1h_input_token_cost": 0.000006
 		},
+		"claude-opus-4-6": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"cache_read_input_token_cost": 0.0000005,
+			"cache_creation_input_token_cost": 0.00000625,
+			"cache_creation_1h_input_token_cost": 0.00001
+		},
+		"claude-opus-5-5": {
+			"input_cost_per_token": 0.000004,
+			"output_cost_per_token": 0.00002,
+			"cache_read_input_token_cost": 0.0000002,
+			"cache_creation_input_token_cost": 0.000005,
+			"cache_creation_1h_input_token_cost": 0.000008
+		},
+		"claude-sonnet-5-5": {
+			"input_cost_per_token": 0.000002,
+			"output_cost_per_token": 0.00001,
+			"cache_read_input_token_cost": 0.0000001,
+			"cache_creation_input_token_cost": 0.0000025,
+			"cache_creation_1h_input_token_cost": 0.000004
+		},
+		"claude-haiku-5-5": {
+			"input_cost_per_token": 0.0000001,
+			"output_cost_per_token": 0.0000005,
+			"cache_read_input_token_cost": 0.00000001,
+			"cache_creation_input_token_cost": 0.000000125,
+			"cache_creation_1h_input_token_cost": 0.0000002
+		},
+		"claude-fable-5-2": {
+			"input_cost_per_token": 0.000008,
+			"output_cost_per_token": 0.00004,
+			"cache_read_input_token_cost": 0.0000002,
+			"cache_creation_input_token_cost": 0.00001,
+			"cache_creation_1h_input_token_cost": 0.000016
+		},
 		"claude-opus-4-7": {
 			"input_cost_per_token": 0.000005,
 			"output_cost_per_token": 0.000025,
@@ -163,20 +198,11 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_1h_input_token_cost": 0.000002
 		},
 		"claude-sonnet-5": {
-			"history": [{
-				"input_cost_per_token": 0.000002,
-				"output_cost_per_token": 0.00001,
-				"cache_read_input_token_cost": 0.0000002,
-				"cache_creation_input_token_cost": 0.0000025,
-				"cache_creation_1h_input_token_cost": 0.000004
-			}, {
-				"effective_from": "2026-09-01T00:00:00Z",
-				"input_cost_per_token": 0.000003,
-				"output_cost_per_token": 0.000015,
-				"cache_read_input_token_cost": 0.0000003,
-				"cache_creation_input_token_cost": 0.00000375,
-				"cache_creation_1h_input_token_cost": 0.000006
-			}]
+			"input_cost_per_token": 0.000002,
+			"output_cost_per_token": 0.00001,
+			"cache_read_input_token_cost": 0.0000002,
+			"cache_creation_input_token_cost": 0.0000025,
+			"cache_creation_1h_input_token_cost": 0.000004
 		},
 		"claude-fable-5": {
 			"input_cost_per_token": 0.00001,
@@ -185,6 +211,45 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_input_token_cost": 0.0000125,
 			"cache_creation_1h_input_token_cost": 0.00002
 		},
+		"gpt-6.2-astra": {
+			"effective_from": "2026-11-17T00:00:00Z",
+			"input_cost_per_token": 0.000008,
+			"output_cost_per_token": 0.00004,
+			"cache_read_input_token_cost": 0.0000004,
+			"cache_creation_input_token_cost": 0.00001
+		},
+		"gpt-6.2-sol": {
+			"effective_from": "2026-11-17T00:00:00Z",
+			"input_cost_per_token": 0.000002,
+			"output_cost_per_token": 0.00001,
+			"cache_read_input_token_cost": 0.0000001,
+			"cache_creation_input_token_cost": 0.0000025
+		},
+		"gpt-6.1-sol": {
+			"effective_from": "2026-09-29T00:00:00Z",
+			"input_cost_per_token": 0.000002,
+			"output_cost_per_token": 0.00001,
+			"cache_read_input_token_cost": 0.0000001,
+			"cache_creation_input_token_cost": 0.0000025
+		},
+		"gpt-6.1-terra": {
+			"input_cost_per_token": 0.000001,
+			"output_cost_per_token": 0.000005,
+			"cache_read_input_token_cost": 0.00000005,
+			"cache_creation_input_token_cost": 0.00000125
+		},
+		"gpt-6-sol": {
+			"input_cost_per_token": 0.000002,
+			"output_cost_per_token": 0.00001,
+			"cache_read_input_token_cost": 0.0000002,
+			"cache_creation_input_token_cost": 0.0000025
+		},
+		"gpt-6-luna": {
+			"input_cost_per_token": 0.0000001,
+			"output_cost_per_token": 0.0000005,
+			"cache_read_input_token_cost": 0.00000001,
+			"cache_creation_input_token_cost": 0.000000125
+		},
 		"gpt-6-astra": {
 			"input_cost_per_token": 0.00001,
 			"output_cost_per_token": 0.00005,
@@ -192,31 +257,58 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_creation_input_token_cost": 0.0000125
 		},
 		"gpt-5.6-sol": {
-			"history": [{
-				"effective_from": "2026-06-26T00:00:00Z",
-				"input_cost_per_token": 0.000005,
-				"output_cost_per_token": 0.00003,
-				"cache_read_input_token_cost": 0.0000005,
-				"cache_creation_input_token_cost": 0.00000625
-			}]
+			"history": [
+				{
+					"effective_from": "2026-06-26T00:00:00Z",
+					"input_cost_per_token": 0.000005,
+					"output_cost_per_token": 0.00003,
+					"cache_read_input_token_cost": 0.0000005,
+					"cache_creation_input_token_cost": 0.00000625
+				},
+				{
+					"effective_from": "2026-08-21T00:00:00Z",
+					"input_cost_per_token": 0.000004,
+					"output_cost_per_token": 0.00002,
+					"cache_read_input_token_cost": 0.0000004,
+					"cache_creation_input_token_cost": 0.000005
+				}
+			]
 		},
 		"gpt-5.6-terra": {
-			"history": [{
-				"effective_from": "2026-06-26T00:00:00Z",
-				"input_cost_per_token": 0.0000025,
-				"output_cost_per_token": 0.000015,
-				"cache_read_input_token_cost": 0.00000025,
-				"cache_creation_input_token_cost": 0.000003125
-			}]
+			"history": [
+				{
+					"effective_from": "2026-06-26T00:00:00Z",
+					"input_cost_per_token": 0.0000025,
+					"output_cost_per_token": 0.000015,
+					"cache_read_input_token_cost": 0.00000025,
+					"cache_creation_input_token_cost": 0.000003125
+				},
+				{
+					"effective_from": "2026-07-30T00:00:00Z",
+					"input_cost_per_token": 0.000002,
+					"output_cost_per_token": 0.000012,
+					"cache_read_input_token_cost": 0.0000002,
+					"cache_creation_input_token_cost": 0.0000025
+				}
+			]
 		},
 		"gpt-5.6-luna": {
-			"history": [{
-				"effective_from": "2026-06-26T00:00:00Z",
-				"input_cost_per_token": 0.000001,
-				"output_cost_per_token": 0.000006,
-				"cache_read_input_token_cost": 0.0000001,
-				"cache_creation_input_token_cost": 0.00000125
-			}]
+			"history": [
+				{
+					"effective_from": "2026-06-26T00:00:00Z",
+					"input_cost_per_token": 0.000001,
+					"output_cost_per_token": 0.000006,
+					"cache_read_input_token_cost": 0.0000001,
+					"cache_creation_input_token_cost": 0.00000125
+				},
+				{
+					"effective_from": "2026-07-30T00:00:00Z",
+					"input_cost_per_token": 0.0000002,
+					"output_cost_per_token": 0.0000012,
+					"cache_read_input_token_cost": 0.00000002,
+					"cache_creation_input_token_cost": 0.00000025
+				}
+			]
 		},
 		"gpt-5.5": {
 			"history": [{
@@ -233,12 +325,6 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"cache_read_input_token_cost": 0.00000025,
 			"cache_creation_input_token_cost": 0.0000025
 		},
-		"gpt-5.3-codex-spark": {
-			"input_cost_per_token": 0.00000175,
-			"output_cost_per_token": 0.000014,
-			"cache_read_input_token_cost": 0.000000175,
-			"cache_creation_input_token_cost": 0.00000175
-		},
 		"gpt-5.3-codex": {
 			"input_cost_per_token": 0.00000175,
 			"output_cost_per_token": 0.000014,
@@ -250,6 +336,91 @@ func DefaultPricingMap() (*PricingMap, error) {
 			"output_cost_per_token": 0.000014,
 			"cache_read_input_token_cost": 0.000000175,
 			"cache_creation_input_token_cost": 0.00000175
+		},
+		"gpt-5.4-mini": {
+			"input_cost_per_token": 0.00000075,
+			"output_cost_per_token": 0.0000045,
+			"cache_read_input_token_cost": 0.000000075
+		},
+		"gemini-4-hydrogen": {
+			"input_cost_per_token": 0.0000015,
+			"output_cost_per_token": 0.0000075,
+			"cache_read_input_token_cost": 0.000000075
+		},
+		"gemini-4-argon": {
+			"history": [
+				{
+					"input_cost_per_token": 0.000002,
+					"output_cost_per_token": 0.00001,
+					"cache_read_input_token_cost": 0.0000001
+				},
+				{
+					"effective_from": "2026-12-01T00:00:00Z",
+					"input_cost_per_token": 0.000004,
+					"output_cost_per_token": 0.00002,
+					"cache_read_input_token_cost": 0.0000002
+				}
+			]
+		},
+		"gemini-4-carbon": {
+			"history": [
+				{
+					"input_cost_per_token": 0.000002,
+					"output_cost_per_token": 0.00001,
+					"cache_read_input_token_cost": 0.0000001
+				},
+				{
+					"effective_from": "2026-12-01T00:00:00Z",
+					"input_cost_per_token": 0.000004,
+					"output_cost_per_token": 0.00002,
+					"cache_read_input_token_cost": 0.0000002
+				}
+			]
+		},
+		"gemini-3.8-flash": {
+			"history": [
+				{
+					"input_cost_per_token": 0.00000075,
+					"output_cost_per_token": 0.00000375,
+					"cache_read_input_token_cost": 0.000000075
+				},
+				{
+					"effective_from": "2027-01-01T00:00:00Z",
+					"input_cost_per_token": 0.0000015,
+					"output_cost_per_token": 0.0000075,
+					"cache_read_input_token_cost": 0.00000015
+				}
+			]
+		},
+		"gemini-3.6-flash": {
+			"history": [
+				{
+					"input_cost_per_token": 0.00000075,
+					"output_cost_per_token": 0.00000375,
+					"cache_read_input_token_cost": 0.000000075
+				},
+				{
+					"effective_from": "2027-01-01T00:00:00Z",
+					"input_cost_per_token": 0.0000015,
+					"output_cost_per_token": 0.0000075,
+					"cache_read_input_token_cost": 0.00000015
+				}
+			]
+		},
+		"gemini-3.1-flash-lite": {
+			"input_cost_per_token": 0.00000025,
+			"output_cost_per_token": 0.0000015,
+			"cache_read_input_token_cost": 0.000000025
+		},
+		"gemini-3.1-pro-preview": {
+			"input_cost_per_token": 0.000002,
+			"output_cost_per_token": 0.000012,
+			"cache_read_input_token_cost": 0.0000002
+		},
+		"gemini-3-flash-preview": {
+			"input_cost_per_token": 0.0000005,
+			"output_cost_per_token": 0.000003,
+			"cache_read_input_token_cost": 0.00000005
 		},
 		"gemini-4-neon": {
 			"input_cost_per_token": 0.000003,
@@ -327,6 +498,23 @@ func (p *PricingMap) CalculateCostAt(model string, at time.Time, counts TokenCou
 	return math.Round(cost*1e12) / 1e12
 }
 
+// EstimateLoggedCost prices the normalized token categories from a supported agent log.
+func (p *PricingMap) EstimateLoggedCost(integration, model, speed string, at time.Time, counts TokenCounts) float64 {
+	fast := speed == "fast" || speed == "priority"
+	var opts CostOptions
+	switch integration {
+	case "Codex CLI":
+		opts = CodexCostOptions(model, counts, fast)
+	case "Claude Code":
+		opts = ClaudeCostOptions(model, counts, fast)
+	case "Gemini CLI", "Antigravity":
+		opts = GoogleFamilyCostOptions(model, counts)
+	default:
+		return 0
+	}
+	return p.CalculateCostAt(model, at, counts, opts)
+}
+
 // Known reports whether a price exists for the model under any of the given
 // provider prefixes. Used to flag unpriced models so they do not silently cost $0.
 func (p *PricingMap) Known(model string, prefixes []string) bool {
@@ -341,6 +529,12 @@ func (p *PricingMap) lookup(model string, prefixes []string) ([]pricingPeriod, b
 	key := strings.ToLower(strings.TrimSpace(model))
 	if periods, ok := p.entries[key]; ok && len(periods) > 0 {
 		return periods, true
+	}
+	if key == "gemini-3.8-flash-tiered" {
+		key = "gemini-3.8-flash"
+		if periods := p.entries[key]; len(periods) > 0 {
+			return periods, true
+		}
 	}
 	for _, prefix := range prefixes {
 		prefix = strings.Trim(strings.ToLower(strings.TrimSpace(prefix)), "/")

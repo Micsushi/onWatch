@@ -113,7 +113,7 @@ func parseAntigravityConversation(path string, pricing *PricingMap) ([]UsageEven
 			InputTokens: input, OutputTokens: visible, ReasoningTokens: thinking,
 			CachedInputTokens: cached, CacheCreationTokens: writes, TotalTokens: input + output + writes + cached,
 		}
-		event.CostUSD = pricing.CalculateCostAt(model, at, counts, CostOptions{ReasoningBilledAsOutput: true, ProviderPrefixes: GoogleFamilyProviderPrefixes})
+		event.CostUSD = pricing.CalculateCostAt(model, at, counts, GoogleFamilyCostOptions(model, counts))
 		events = append(events, event)
 	}
 	return events, rows.Err()
