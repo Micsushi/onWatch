@@ -366,6 +366,31 @@ func (h *Handler) codexProfilesList(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{"profiles": profiles})
 }
 
+func (h *Handler) codexDashboardProfiles(visibility map[string]map[string]bool) []map[string]interface{} {
+	var accounts []store.ProviderAccount
+	if h.store != nil {
+		var err error
+		accounts, err = h.store.QueryProviderAccounts("codex")
+		if err != nil {
+			h.logger.Error("failed to query Codex dashboard profiles", "error", err)
+			return nil
+		}
+	}
+	if len(accounts) == 0 {
+		accounts = []store.ProviderAccount{{ID: DefaultCodexAccountID, Name: "default"}}
+	}
+
+	var profiles []map[string]interface{}
+	for _, account := range accounts {
+		key := fmt.Sprintf("codex:%d", account.ID)
+		if !h.providerDashboardVisible(key, visibility) || (account.DeletedAt != nil && !visibility[key]["dashboard"]) {
+			continue
+		}
+		profiles = append(profiles, map[string]interface{}{"id": account.ID, "name": account.Name})
+	}
+	return profiles
+}
+
 // codexProfileSave saves the current Codex auth as a new profile.
 func (h *Handler) codexProfileSave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -2103,6 +2128,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	providers := []string{}
 	subscriptions := []string{}
+	var codexProfiles []map[string]interface{}
 	var subscriptionAccounts []store.ProviderAccount
 	currentProvider := ""
 	hasTools := false
@@ -2110,22 +2136,21 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	if h.config != nil {
 		providers = h.telemetryProviders()
 
-		// Filter by provider_visibility dashboard flag
-		if h.store != nil {
-			if visJSON, _ := h.store.GetSetting("provider_visibility"); visJSON != "" {
-				var vis map[string]map[string]bool
-				if json.Unmarshal([]byte(visJSON), &vis) == nil {
-					filtered := make([]string, 0, len(providers))
-					for _, p := range providers {
-						if pv, ok := vis[p]; ok && !pv["dashboard"] {
-							continue
-						}
-						filtered = append(filtered, p)
-					}
-					providers = filtered
+		vis := h.providerVisibilityMap()
+		filtered := providers[:0]
+		for _, p := range providers {
+			if pv, ok := vis[p]; ok && !pv["dashboard"] {
+				continue
+			}
+			if p == "codex" {
+				codexProfiles = h.codexDashboardProfiles(vis)
+				if len(codexProfiles) == 0 {
+					continue
 				}
 			}
+			filtered = append(filtered, p)
 		}
+		providers = filtered
 		quotaProviderCount := len(providers)
 
 		hasTools = h.config.APIIntegrationsEnabled
@@ -2196,6 +2221,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		"HasAnthropic":    hasAnthropic,
 		"HasCopilot":      hasCopilot,
 		"HasCodex":        hasCodex,
+		"CodexProfiles":   codexProfiles,
 		"HasAntigravity":  hasAntigravity,
 		"HasMiniMax":      hasMiniMax,
 		"HasTools":        hasToolsVisible,

@@ -17,6 +17,9 @@
             {{end}}
         </div>
         {{end}}
+        {{if eq .CurrentProvider "codex"}}
+        <script type="application/json" id="codex-dashboard-profiles">{{.CodexProfiles}}</script>
+        {{end}}
         <div class="codex-profile-dropdown" id="codex-profile-dropdown" style="display: none;">
             <button class="codex-profile-trigger" id="codex-profile-trigger" aria-haspopup="listbox" aria-expanded="false">
                 <span class="codex-profile-label" id="codex-profile-label">Profile</span>

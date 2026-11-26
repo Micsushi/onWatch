@@ -966,29 +966,15 @@ function saveCodexAccount(account) {
   }
 }
 
-async function loadCodexProfiles() {
-  try {
-    const res = await authFetch(`${API_BASE}/api/codex/profiles`);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.profiles && data.profiles.length > 0) {
-      // Filter out deleted profiles and "default" profile for dashboard tabs
-      const activeProfiles = data.profiles.filter(p => !p.deletedAt);
-      const customProfiles = activeProfiles.filter(p => p.name !== 'default');
-      if (customProfiles.length > 0) {
-        State.codexProfiles = customProfiles;
-      } else if (activeProfiles.length > 0) {
-        State.codexProfiles = activeProfiles;
-      } else {
-        // All profiles deleted - no tabs needed
-        State.codexProfiles = [];
-      }
-      populateCodexProfileTabs();
-      updateCodexProfileTabsVisibility();
-    }
-  } catch (e) {
-    // silent - profiles endpoint may not exist on older versions
+function loadCodexProfiles() {
+  const profileData = document.getElementById('codex-dashboard-profiles');
+  if (profileData) {
+    const profiles = JSON.parse(profileData.textContent);
+    const namedProfiles = profiles.filter(profile => profile.name !== 'default');
+    State.codexProfiles = namedProfiles.length > 0 ? namedProfiles : profiles;
+    populateCodexProfileTabs();
   }
+  updateCodexProfileTabsVisibility();
 }
 
 function populateCodexProfileTabs() {
@@ -12251,7 +12237,7 @@ function createCodexProviderSection(profiles, codexStatus, baseVisibility) {
     const isDeleted = !!profile.deletedAt;
     const key = `codex:${profile.id}`;
     const vis = isDeleted
-      ? { polling: false, dashboard: false }
+      ? { polling: false, dashboard: baseVisibility[key]?.dashboard === true }
       : (baseVisibility[key] || baseVisibility.codex || headerVis);
 
     const subRow = createProviderToggleRow({
@@ -14510,11 +14496,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load persisted state (localStorage only - no API calls before auth check)
   loadHiddenQuotas();
   loadCodexAccount();
-  if (getCurrentProvider() === 'codex') {
-    await loadCodexProfiles();
-  } else {
-    updateCodexProfileTabsVisibility();
-  }
+  loadCodexProfiles();
   initCodexProfileTabs();
 
   loadMiniMaxAccount();

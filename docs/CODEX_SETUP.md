@@ -147,6 +147,7 @@ When multiple profiles exist:
 - **Profile tabs** appear in the header next to provider tabs
 - Click a profile tab to switch accounts
 - All data (quotas, charts, cycles, logging history) updates for the selected account
+- If the selected account is hidden in Settings, the Codex tab switches to a visible account on the next load
 - In **All** view, cards for each Codex account are shown with account name headers
 - Deleted profiles are hidden from the dashboard by default
 
