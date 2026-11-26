@@ -1346,8 +1346,7 @@ body.all-density-comfortable .provider-kpi-card {
   background: color-mix(in srgb, var(--accent-teal) 12%, var(--surface-card-alt));
 }
 
-.platform-cost-label,
-.platform-cost-chart-subtitle {
+.platform-cost-label {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
@@ -1579,12 +1578,6 @@ body.all-density-comfortable .provider-kpi-card {
   letter-spacing: 0.04em;
 }
 
-.quota-subtitle {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.4;
-}
 
 .quota-icon {
   width: 18px;
@@ -1860,9 +1853,10 @@ body.all-density-comfortable .provider-kpi-card {
 }
 
 .device-health-summary {
-  margin: 6px 0 0 30px;
+  margin-inline-start: 8px;
   color: var(--text-secondary);
   font-size: 13px;
+  font-weight: 400;
 }
 
 .device-health-list {
@@ -1933,63 +1927,6 @@ body.all-density-comfortable .provider-kpi-card {
   font-size: 13px;
 }
 
-.collection-freshness-note {
-  margin: 0 0 14px;
-  padding: 9px 12px;
-  color: var(--status-warning);
-  background: color-mix(in srgb, var(--status-warning) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--status-warning) 32%, var(--border-default));
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-}
-
-.section-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--border-default);
-  background: var(--surface-card);
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.section-toggle:hover {
-  color: var(--text-primary);
-  border-color: var(--accent-teal);
-  background: var(--surface-card-alt);
-}
-
-.section-toggle-icon {
-  width: 14px;
-  height: 14px;
-  transform: rotate(90deg);
-  transition: transform var(--transition-base);
-}
-
-.section-collapsible.section-collapsed .section-toggle-icon {
-  transform: rotate(0deg);
-}
-
-.section-collapsible .table-wrapper,
-.section-collapsible .table-footer {
-  max-height: 1600px;
-  opacity: 1;
-  overflow: hidden;
-  transition: max-height var(--transition-base), opacity var(--transition-base), margin var(--transition-base), padding var(--transition-base);
-}
-
-.section-collapsible.section-collapsed .table-wrapper,
-.section-collapsible.section-collapsed .table-footer {
-  max-height: 0;
-  opacity: 0;
-  margin-top: 0;
-  padding-top: 0;
-}
 
 /* ═══════════════════════════════════════════
    9. INSIGHTS
@@ -3141,7 +3078,6 @@ body.all-density-comfortable .provider-kpi-card {
     border-radius: var(--radius-md);
   }
   .device-health-row { grid-template-columns: 1fr; gap: 8px; }
-  .device-health-summary { margin-left: 0; }
   .insights-stats { grid-template-columns: 1fr; }
   .platform-cost-summary,
   .usage-summary { grid-template-columns: 1fr; }
@@ -3233,11 +3169,6 @@ body.all-density-comfortable .provider-kpi-card {
   margin: 0;
 }
 
-.settings-subtitle {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin: 2px 0 0;
-}
 
 .beta-tag {
   display: inline-flex;
@@ -4697,6 +4628,11 @@ select.settings-input {
 /* Keep the phone dashboard focused on quota, value and freshness. */
 .dashboard-detail > summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
 .dashboard-detail[open] > summary { margin-bottom: 16px; }
+.dashboard-secondary:not([open]) { padding-block: 8px; }
+.pricing-details { margin-top: 12px; color: var(--text-secondary); font-size: 13px; }
+.pricing-details > summary { cursor: pointer; width: fit-content; }
+.pricing-details p { margin: 8px 0 0; }
+
 .antigravity-primary-quotas, .antigravity-quota-details { grid-column: 1 / -1; }
 .antigravity-primary-quotas { display: grid; gap: inherit; }
 #quota-grid-antigravity > .antigravity-primary-quotas {

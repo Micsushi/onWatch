@@ -9,7 +9,6 @@
             </a>
             <div>
                 <h1 class="settings-title">Settings <span class="beta-tag">Beta</span></h1>
-                <p class="settings-subtitle">Configure notifications, providers, and preferences</p>
             </div>
         </div>
         <div class="settings-header-right">
@@ -40,7 +39,6 @@
         <div class="settings-panel active" id="panel-email" role="tabpanel">
             <div class="settings-section">
                 <h3 class="settings-section-title">SMTP Configuration</h3>
-                <p class="settings-section-desc">Configure your mail server to enable email notifications.</p>
                 <div class="settings-fields">
                     <div class="settings-field">
                         <label for="smtp-host">SMTP Host</label>
@@ -100,7 +98,6 @@
         <div class="settings-panel" id="panel-notifications" role="tabpanel" hidden>
             <div class="settings-section">
                 <h3 class="settings-section-title">Delivery Channels</h3>
-                <p class="settings-section-desc">Choose how to receive quota alerts.</p>
                 <div class="settings-fields">
                     <div class="settings-toggle-row">
                         <div class="settings-toggle-info">
@@ -166,7 +163,6 @@
             <div class="settings-divider"></div>
             <div class="settings-section">
                 <h3 class="settings-section-title">Global Thresholds</h3>
-                <p class="settings-section-desc">Default thresholds that apply to all quotas unless overridden.</p>
                 <div class="settings-fields">
                     <div class="settings-field settings-field-half">
                         <label for="threshold-warning">Warning Threshold (%)</label>
@@ -255,7 +251,6 @@
             <div class="settings-divider"></div>
             <div class="settings-section">
                 <h3 class="settings-section-title">Cooldown</h3>
-                <p class="settings-section-desc">Minimum time between repeated notifications for the same quota and level.</p>
                 <div class="settings-fields">
                     <div class="settings-field settings-field-half">
                         <label for="notify-cooldown">Cooldown (minutes)</label>
@@ -266,7 +261,6 @@
             <div class="settings-divider"></div>
             <div class="settings-section">
                 <h3 class="settings-section-title">Per-Quota Overrides</h3>
-                <p class="settings-section-desc">Override global thresholds for specific quotas.</p>
                 <div id="override-list" class="override-list"></div>
                 <button class="settings-add-btn" id="add-override-btn" type="button">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
@@ -279,7 +273,7 @@
         <div class="settings-panel" id="panel-providers" role="tabpanel" hidden>
             <div class="settings-section">
                 <h3 class="settings-section-title">Provider Controls</h3>
-                <p class="settings-section-desc">Manage telemetry (background data collection) and dashboard visibility for each provider. Hidden providers remain accessible under the "All" tab.</p>
+                <p class="settings-section-desc">Hidden providers remain accessible on All.</p>
                 <div class="settings-fields" id="provider-toggles">
                     <!-- Populated dynamically by JS -->
                 </div>
@@ -317,7 +311,6 @@
                 <div class="menubar-section-heading">
                     <div>
                         <h3 class="settings-section-title">Menubar Companion</h3>
-                        <p class="settings-section-desc">Control the macOS menubar companion, its default view, thresholds, and provider ordering.</p>
                     </div>
                 </div>
 
@@ -363,7 +356,7 @@
 
             <div class="settings-section menubar-section" id="menubar-order-shell" hidden>
                 <h3 class="settings-section-title">Provider Order</h3>
-                <p class="settings-section-desc">Drag providers to choose their order inside the menubar companion. Use Show/Hide to control menubar-only visibility, which is saved in preferences and persists after restart. Codex accounts appear as separate providers when multiple accounts exist.</p>
+                <p class="settings-section-desc">Drag to reorder. Show and Hide apply to the menubar.</p>
                 <ul class="menubar-order-list" id="menubar-provider-order" aria-label="Menubar provider order"></ul>
             </div>
 
@@ -379,14 +372,12 @@
                         <select id="settings-timezone" class="settings-input">
                             <option value="">Browser Default</option>
                         </select>
-                        <span class="settings-field-hint">Affects how times are displayed on the dashboard</span>
                     </div>
                 </div>
             </div>
             <div class="settings-divider"></div>
             <div class="settings-section">
                 <h3 class="settings-section-title">Quota Display</h3>
-                <p class="settings-section-desc">Choose whether quota cards show how much you've used or how much is left. Per-provider settings (e.g. Codex) override this global default.</p>
                 <div class="settings-fields">
                     <div class="settings-field">
                         <label for="settings-display-mode">Display Mode</label>
@@ -401,7 +392,6 @@
             <div class="settings-divider"></div>
             <div class="settings-section">
                 <h3 class="settings-section-title">Fork Preferences</h3>
-                <p class="settings-section-desc">Control the personal fork defaults used by the dashboard.</p>
                 <div class="settings-fields">
                     <div class="settings-field settings-field-half">
                         <label for="settings-default-provider">Default Dashboard</label>
@@ -432,7 +422,6 @@
             <div class="settings-divider"></div>
             <div class="settings-section">
                 <h3 class="settings-section-title">Layout Density</h3>
-                <p class="settings-section-desc">Choose how compact the dashboard cards appear.</p>
                 <div class="settings-fields">
                     <div class="settings-field">
                         <label for="settings-layout-density">Density</label>
@@ -447,7 +436,6 @@
             <div class="settings-divider"></div>
             <div class="settings-section">
                 <h3 class="settings-section-title">Password</h3>
-                <p class="settings-section-desc">Change the dashboard login password.</p>
                 <div class="settings-fields">
                     <div class="settings-field">
                         <label for="settings-current-password">Current Password</label>

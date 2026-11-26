@@ -128,12 +128,15 @@
                 <dd>Subscription Value uses standard short-context API rates for comparison. The dashboard’s cost history uses rates effective when each request occurred.</dd>
             </dl>
         </details>
-        <div class="table-container subscription-comparison-table subscription-capacity-table" role="region" aria-label="Four-week estimates" tabindex="0">
-            <table class="data-table">
-                <thead><tr><th scope="col">Model</th><th scope="col">Effort</th><th scope="col" title="Percent of weekly quota used by one attempt">Quota / attempt</th><th scope="col" id="subscription-capacity-work-column">Solves / $1</th><th scope="col" title="Share of benchmark attempts that passed">Pass rate</th></tr></thead>
-                <tbody id="subscription-capacity-rows"></tbody>
-            </table>
-        </div>
+        <details>
+            <summary>Model estimates</summary>
+            <div class="table-container subscription-comparison-table subscription-capacity-table" role="region" aria-label="Four-week estimates" tabindex="0">
+                <table class="data-table">
+                    <thead><tr><th scope="col">Model</th><th scope="col">Effort</th><th scope="col" title="Percent of weekly quota used by one attempt">Quota / attempt</th><th scope="col" id="subscription-capacity-work-column">Solves / $1</th><th scope="col" title="Share of benchmark attempts that passed">Pass rate</th></tr></thead>
+                    <tbody id="subscription-capacity-rows"></tbody>
+                </table>
+            </div>
+        </details>
         <details>
             <summary>Evidence</summary>
             <div id="subscription-capacity-link" class="subscription-source-links"></div>

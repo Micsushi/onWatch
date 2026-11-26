@@ -4,22 +4,29 @@ const BASE_PATH = (document.querySelector('meta[name="base-path"]') || {}).conte
 const API_BASE = BASE_PATH;
 const REFRESH_INTERVAL = 60000;
 
-// Lazy Loading via IntersectionObserver
-const _lazyLoaded = new Set();
-function lazyLoadOnVisible(selector, callback) {
-  const el = document.querySelector(selector);
-  if (!el) return;
-  if (typeof IntersectionObserver === 'undefined') { callback(); return; }
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting && !_lazyLoaded.has(selector)) {
-        _lazyLoaded.add(selector);
-        observer.unobserve(entry.target);
-        callback();
-      }
+const dashboardDetailFetchers = {
+  '#usage-insights': fetchDeepInsights,
+  '#sessions-section': fetchSessions,
+  '#cycles-section': fetchCycles,
+  '.cycle-overview-section': fetchCycleOverview,
+};
+
+function fetchOpenDashboardDetails(options = {}) {
+  return Object.entries(dashboardDetailFetchers)
+    .filter(([selector]) => document.querySelector(selector)?.open)
+    .map(([, fetchDetail]) => fetchDetail(options));
+}
+
+function bindDashboardDetails() {
+  Object.entries(dashboardDetailFetchers).forEach(([selector, fetchDetail]) => {
+    const section = document.querySelector(selector);
+    section?.addEventListener('toggle', () => {
+      if (section.open) fetchDetail();
     });
-  }, { rootMargin: '200px' });
-  observer.observe(el);
+  });
+  document.getElementById('platform-cost-breakdown-section')?.addEventListener('toggle', (event) => {
+    if (event.currentTarget.open) loadSelectedPlatformCostBreakdown(getCurrentProvider());
+  });
 }
 
 // Auth helper: redirect to login on 401
@@ -1014,10 +1021,8 @@ function refreshAll() {
   const refreshBtn = document.getElementById('refresh-btn');
   if (refreshBtn) refreshBtn.classList.add('spinning');
   setDashboardRefreshState(true, 'Updating saved data...');
-  const tasks = [fetchCurrent(), fetchDeepInsights(), fetchHistory()];
-  if (shouldShowCyclesTable()) tasks.push(fetchCycles());
-  if (shouldShowSessionsTable()) tasks.push(fetchSessions());
-  if (shouldShowOverviewTable()) tasks.push(fetchCycleOverview());
+  const tasks = [fetchCurrent(), fetchHistory(), ...fetchOpenDashboardDetails()];
+  if (getCurrentProvider() === 'both') tasks.push(fetchDeepInsights());
   Promise.allSettled(tasks).finally(() => {
     setDashboardRefreshState(false);
     if (refreshBtn) setTimeout(() => refreshBtn.classList.remove('spinning'), 600);
@@ -1147,6 +1152,7 @@ function initDashboardAccountOverview(overview) {
         ? (periodMode ? 'Blank periods lack enough readings to calculate usage change.' : 'Blank spans mean no readings were collected.')
         : '';
     status.hidden = !status.textContent;
+    status.classList.toggle('sr-only', !plot.hidden);
     if (plot.hidden) return;
     const options = buildChartOptions(getThemeColors(), computeYMax(datasets, null, { cap: !periodMode }), result.range, State.graphMode);
     if (result.range !== 'all') {
@@ -1180,6 +1186,7 @@ function initDashboardAccountOverview(overview) {
         } catch (error) {
           if (controller !== request) return;
           status.hidden = false;
+          status.classList.remove('sr-only');
           status.textContent = 'Could not refresh. Previous readings, if available, are still shown.';
           throw error;
         }
@@ -2819,7 +2826,7 @@ function renderMiniMaxQuotaCards(quotas, containerId) {
             <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
             ${escapeHTML(displayName)}${weeklyBadge}
           </h2>
-          <div class="quota-subtitle" id="${subtitleId}"${subtitle ? '' : ' hidden'}>${escapeHTML(subtitle)}</div>
+          <div class="sr-only" id="${subtitleId}"${subtitle ? '' : ' hidden'}>${escapeHTML(subtitle)}</div>
         </div>
         <span class="countdown" id="${countdownId}">${q.timeUntilResetSeconds > 0 ? formatDuration(q.timeUntilResetSeconds) : '--:--'}</span>
       </header>
@@ -3413,7 +3420,7 @@ function renderOpenRouterCard(credits, containerId) {
           <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
           Credits
         </h2>
-        ${credits.isFreeTier ? '<div class="quota-subtitle">Free Tier</div>' : ''}
+        ${credits.isFreeTier ? '<div class="sr-only">Free Tier</div>' : ''}
       </div>
       <span class="countdown" id="countdown-openrouter-credits" style="display: none">--:--</span>
     </header>
@@ -7200,7 +7207,7 @@ function renderProviderKPIHTML(quotas, cardKey) {
               <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icon}</svg>
               ${escapeHTML(displayName)}
             </h2>
-            ${subtitle ? `<div class="quota-subtitle">${escapeHTML(subtitle)}</div>` : ''}
+            ${subtitle ? `<div class="sr-only">${escapeHTML(subtitle)}</div>` : ''}
           </div>
         </header>
         <div class="antigravity-windows">${antigravityWindowsHTML(keyPrefix, windows)}</div>
@@ -7236,7 +7243,7 @@ function renderProviderKPIHTML(quotas, cardKey) {
             <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icon}</svg>
             ${escapeHTML(displayName)}
           </h2>
-          ${subtitle ? `<div class="quota-subtitle">${escapeHTML(subtitle)}</div>` : ''}
+          ${subtitle ? `<div class="sr-only">${escapeHTML(subtitle)}</div>` : ''}
         </div>
         <span class="countdown"${countdownId}>${escapeHTML(countdown)}</span>
       </header>
@@ -7821,14 +7828,18 @@ function renderPlatformCostPanel(provider = getCurrentProvider()) {
   }
 
   renderPlatformCostBreakdown(provider);
-  const breakdownRange = normalizePlatformCostRange(State.platformCostBreakdownRange || DEFAULT_CHART_RANGE);
-  const costRange = normalizePlatformCostRange(State.platformCostRange || DEFAULT_CHART_RANGE);
+  if (document.getElementById('platform-cost-breakdown-section')?.open) loadSelectedPlatformCostBreakdown(provider);
+  renderPlatformCostChart(provider, selectedPlatformCostRange());
+}
+
+function loadSelectedPlatformCostBreakdown(provider) {
+  const breakdownRange = selectedPlatformCostBreakdownRange();
+  const costRange = selectedPlatformCostRange();
   if (State.platformCostBreakdownHistoryRange !== breakdownRange &&
       (breakdownRange === 'custom' || breakdownRange !== costRange) &&
       !State.platformCostBreakdownLoading && !State.customGraphRefreshControllers.platformCostBreakdown) {
     fetchPlatformCostBreakdownRange(breakdownRange, provider);
   }
-  renderPlatformCostChart(provider, costRange);
 }
 
 function platformCostLoadingLabel(range) {
@@ -7864,7 +7875,6 @@ function renderPlatformCostLoadingPanel(range = State.platformCostRange || DEFAU
   const coverage = document.getElementById('platform-cost-coverage');
   if (coverage) coverage.hidden = true;
   const summaryEl = document.getElementById('platform-cost-summary');
-  const subtitle = document.getElementById('platform-cost-chart-subtitle');
   const label = platformCostLoadingLabel(range);
   if (summaryEl) {
     summaryEl.innerHTML = `
@@ -7890,7 +7900,6 @@ function renderPlatformCostLoadingPanel(range = State.platformCostRange || DEFAU
       </div>
     `;
   }
-  if (subtitle) subtitle.innerHTML = '<span class="loading-spinner inline" aria-hidden="true"></span>Loading cost history';
   setPlatformCostChartLoading(true);
   setPlatformCostRangeControlsLoading(normalizePlatformCostRange(range), true);
 }
@@ -7899,7 +7908,7 @@ function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
   const coverage = document.getElementById('platform-cost-coverage');
   if (coverage) coverage.hidden = true;
   const summaryEl = document.getElementById('platform-cost-summary');
-  const subtitle = document.getElementById('platform-cost-chart-subtitle');
+  const refreshStatus = document.getElementById('platform-cost-refresh-status');
   const tableHead = document.getElementById('platform-cost-models-thead');
   const tbody = document.getElementById('platform-cost-models-tbody');
   if (summaryEl) {
@@ -7926,7 +7935,7 @@ function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
       </div>
     `;
   }
-  if (subtitle) subtitle.textContent = getCurrentProvider() === 'antigravity' ? 'No token records' : message;
+  if (refreshStatus) refreshStatus.hidden = true;
   setPlatformCostChartLoading(false);
   setChartEmptyState('platform-cost-chart', true, message);
   setPlatformCostRangeControlsLoading(State.platformCostRange || DEFAULT_CHART_RANGE, false);
@@ -8116,7 +8125,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   }
   bindPlatformCostRangeControls(range);
   if (range === 'all' && hasLoadedSelectedRange) syncGraphHistoryRangeControl('platformCost');
-  const subtitle = document.getElementById('platform-cost-chart-subtitle');
+  const refreshStatus = document.getElementById('platform-cost-refresh-status');
   const title = document.getElementById('platform-cost-chart-title');
   const gapNote = document.getElementById('platform-cost-chart-gap-note');
   const graphMode = normalizeGraphMode(State.platformCostGraphMode);
@@ -8168,11 +8177,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const plottedPoints = showTokens
     ? (periodMode ? bucketed.tokens : cumulative.tokens)
     : (periodMode ? bucketed.cost : cumulative.cost);
-  if (subtitle) {
-    subtitle.textContent = hasUsageInRange || hasPeriodCostPoints
-      ? `${formatNumber(plottedPoints.filter(point => point.y != null).length)} recorded ${periodMode ? 'periods' : 'samples'}`
-      : (provider === 'antigravity' ? 'No token records' : emptyCostMessage);
-  }
+  if (refreshStatus) refreshStatus.hidden = true;
   setPlatformCostChartLoading(false);
   setPlatformCostRangeControlsLoading(range, false);
   updatePlatformCostSummaryForRange(provider, range, rows);
@@ -8522,27 +8527,27 @@ function updatePlatformCostSummaryForRange(provider, range, rows) {
   const incomplete = totals.unpricedTokens > 0 || totals.archivedTokens > 0 || totals.unpricedTokens == null;
   const costLabel = (incomplete && totals.cost != null) || estimate?.tokens ? 'Priced Usage Subtotal' : 'Estimated Cost';
   const coverage = document.getElementById('platform-cost-coverage');
-  if (coverage) {
+  const notes = document.getElementById('platform-cost-coverage-notes');
+  if (coverage && notes) {
     const messages = [];
     if (estimate?.tokens > 0) {
-      messages.push(`Estimated total ${formatCurrencyUSD((totals.cost || 0) + estimate.costUsd)}, including ${formatCurrencyUSD(estimate.costUsd)} for ${formatNumber(estimate.tokens)} tokens logged without a breakdown.`);
-      messages.push(estimate.providerMixTokens > 0
-        ? 'The estimate uses recorded splits from the same model when available and from other models in the same integration as a fallback.'
-        : 'The estimate uses recorded splits from the same model.');
+      const basis = estimate.providerMixTokens > 0 ? 'model and integration averages' : 'model averages';
+      messages.push(`Estimated total ${formatCurrencyUSD((totals.cost || 0) + estimate.costUsd)}. Includes ${formatCurrencyUSD(estimate.costUsd)} for ${formatNumber(estimate.tokens)} tokens estimated from ${basis}.`);
     }
     const contextTokens = estimate?.likelyContextTokens || 0;
     if (contextTokens > 0) {
-      messages.push(`${formatNumber(contextTokens)} historical tokens appear to be chat-compaction context counts and carry no estimated cost.`);
+      messages.push(`${formatNumber(contextTokens)} tokens flagged as likely chat context and excluded from pricing.`);
     }
     const remaining = (totals.unpricedTokens || 0) - contextTokens - ((estimate?.tokens || 0) - (estimate?.archivedTokens || 0));
-    if (remaining > 0) messages.push(`${formatNumber(remaining)} detailed tokens still have no cost estimate.`);
+    if (remaining > 0) messages.push(`${formatNumber(remaining)} tokens without a cost estimate.`);
     if (totals.archivedTokens > (estimate?.archivedTokens || 0)) {
       messages.push('Archived usage has unknown pricing coverage.');
     } else if (totals.unpricedTokens == null && totals.tokens > 0) {
       messages.push('Pricing coverage is unavailable.');
     }
-    coverage.textContent = messages.join(' ');
-    coverage.hidden = messages.length === 0;
+    notes.textContent = messages.join(' ');
+    notes.hidden = messages.length === 0;
+    coverage.hidden = totals.tokens === 0 && totals.cost == null;
   }
   const label = platformCostRangeLabel(range);
   summaryEl.innerHTML = `
@@ -10856,9 +10861,10 @@ async function reloadGraphHistoryRange(scope) {
   const range = normalizeChartRange(historyScopeWindow(scope).range);
   const provider = getCurrentProvider();
   if (scope === 'platformCost') {
-    const subtitle = document.getElementById('platform-cost-chart-subtitle');
-    if (subtitle && State.platformCostHistoryRange && State.platformCostChart) {
-      subtitle.textContent = `Showing saved ${platformCostRangeLabel(State.platformCostHistoryRange)} data while history loads.`;
+    const refreshStatus = document.getElementById('platform-cost-refresh-status');
+    if (refreshStatus && State.platformCostHistoryRange && State.platformCostChart) {
+      refreshStatus.textContent = `Showing ${platformCostRangeLabel(State.platformCostHistoryRange)} while ${platformCostRangeLabel(range)} loads.`;
+      refreshStatus.hidden = false;
     }
     await fetchPlatformCostHistory(range, provider);
     return;
@@ -11081,45 +11087,6 @@ function setupCycleFilters() {
   }
 }
 
-function initCollapsibleSections() {
-  const storageKey = 'onwatch-collapsed-sections';
-  let stored = {};
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (raw) stored = JSON.parse(raw);
-  } catch (e) {
-    stored = {};
-  }
-
-  const sections = document.querySelectorAll('.section-collapsible');
-  sections.forEach((section) => {
-    const sectionID = section.id;
-    if (!sectionID) return;
-    const toggle = section.querySelector(`.section-toggle[data-section-id="${sectionID}"]`);
-    if (!toggle) return;
-
-    const text = toggle.querySelector('.section-toggle-text');
-    const applyCollapsedState = (collapsed) => {
-      section.classList.toggle('section-collapsed', collapsed);
-      toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-      if (text) text.textContent = collapsed ? 'Expand' : 'Collapse';
-    };
-
-    applyCollapsedState(Boolean(stored[sectionID]));
-
-    toggle.addEventListener('click', () => {
-      const collapsed = !section.classList.contains('section-collapsed');
-      applyCollapsedState(collapsed);
-      stored[sectionID] = collapsed;
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(stored));
-      } catch (e) {
-        // silent
-      }
-    });
-  });
-}
-
 function setupPasswordToggle() {
   const toggle = document.querySelector('.toggle-password');
   const input = document.getElementById('password');
@@ -11210,7 +11177,7 @@ function syncCodexOverviewControls() {
   if (getCurrentProvider() !== 'codex') return;
   setupOverviewControls().then(() => {
     const section = document.querySelector('.cycle-overview-section');
-    if (section && !section.hidden) {
+    if (section?.open) {
       fetchCycleOverview();
     }
   });
@@ -11698,22 +11665,20 @@ function setupHeaderActions() {
       });
       const tasks = [
         fetchCurrent({ force: true }),
-        fetchDeepInsights({ force: true }),
         fetchHistory(undefined, { force: true }),
+        ...fetchOpenDashboardDetails({ force: true }),
       ];
       const provider = getCurrentProvider();
       if (supportsPlatformCost(provider)) {
         const costRange = selectedPlatformCostRange();
         const breakdownRange = selectedPlatformCostBreakdownRange();
         tasks.push(fetchPlatformCostHistory(costRange, provider, { force: true }));
-        if (document.getElementById('platform-cost-breakdown-section') &&
+        if (document.getElementById('platform-cost-breakdown-section')?.open &&
             (breakdownRange === 'custom' || breakdownRange !== costRange)) {
           tasks.push(fetchPlatformCostBreakdownRange(breakdownRange, provider, { force: true }));
         }
       }
-      if (shouldShowCyclesTable()) tasks.push(fetchCycles({ force: true }));
-      if (shouldShowSessionsTable()) tasks.push(fetchSessions({ force: true }));
-      if (shouldShowOverviewTable()) tasks.push(fetchCycleOverview({ force: true }));
+      if (provider === 'both') tasks.push(fetchDeepInsights({ force: true }));
       Promise.all(tasks).then(() => {
         showDashboardToast('Refresh complete.', 'success', 2600);
       }).catch(() => {
@@ -11777,12 +11742,8 @@ function startAutoRefresh() {
   if (State.refreshInterval) clearInterval(State.refreshInterval);
   State.refreshInterval = setInterval(() => {
     setDashboardRefreshState(true, 'Checking for newer data...');
-    // Always refresh above-fold data
-    const tasks = [fetchCurrent(), fetchDeepInsights(), fetchHistory()];
-    // Only refresh below-fold sections that have been loaded
-    if (shouldShowCyclesTable() && _lazyLoaded.has('.cycles-section')) tasks.push(fetchCycles());
-    if (shouldShowOverviewTable() && _lazyLoaded.has('.cycle-overview-section')) tasks.push(fetchCycleOverview());
-    if (shouldShowSessionsTable() && _lazyLoaded.has('.sessions-section')) tasks.push(fetchSessions());
+    const tasks = [fetchCurrent(), fetchHistory(), ...fetchOpenDashboardDetails()];
+    if (getCurrentProvider() === 'both') tasks.push(fetchDeepInsights());
     Promise.allSettled(tasks).finally(() => setDashboardRefreshState(false));
   }, REFRESH_INTERVAL);
 }
@@ -14351,15 +14312,13 @@ function formatCollectorTime(value) {
 function renderDeviceHealth(payload) {
   const list = document.getElementById('device-health-list');
   const summary = document.getElementById('device-health-summary');
-  const freshness = document.getElementById('collection-freshness-note');
   if (!list || !summary) return;
   const devices = Array.isArray(payload?.devices) ? payload.devices : [];
   list.replaceChildren();
   list.setAttribute('aria-busy', 'false');
   if (devices.length === 0) {
-    list.append(deviceHealthElement('div', 'device-health-empty', 'No collectors enrolled. Server polling continues where configured.'));
-    summary.textContent = 'No device collectors enrolled';
-    if (freshness) freshness.hidden = true;
+    list.append(deviceHealthElement('div', 'device-health-empty', 'No collectors enrolled.'));
+    summary.textContent = '';
     return;
   }
   let unhealthy = 0;
@@ -14368,28 +14327,27 @@ function renderDeviceHealth(payload) {
     const row = deviceHealthElement('article', 'device-health-row');
     const identity = deviceHealthElement('div', 'device-health-name');
     identity.append(deviceHealthElement('strong', '', device.name || device.id));
-    identity.append(deviceHealthElement('span', 'device-health-meta', [device.platform, device.collector_version].filter(Boolean).join(' · ') || 'Collector details unavailable'));
+    const version = device.collector_version || '';
+    const meta = [device.platform, /^[a-f0-9]{40}$/i.test(version) ? version.slice(0, 8) : version].filter(Boolean).join(' · ');
+    if (meta) {
+      const build = deviceHealthElement('span', 'device-health-meta', meta);
+      build.title = version;
+      identity.append(build);
+    }
     const state = deviceHealthElement('span', 'device-health-state', device.state || 'unknown');
     state.dataset.state = device.state || 'unknown';
     const queue = deviceHealthElement('div', 'device-health-detail');
     queue.append(deviceHealthElement('strong', '', `${Number(device.pending_events || 0).toLocaleString()} queued`));
-    queue.append(deviceHealthElement('span', '', `${Number(device.queue_bytes || 0).toLocaleString()} bytes`));
-    const assignments = Array.isArray(device.assignments) && device.assignments.length
-      ? device.assignments.map((item) => `${item.provider}: ${item.external_id}`).join(', ')
-      : 'Usage logs only';
-    const assignment = deviceHealthElement('div', 'device-health-assignments', assignments);
-    assignment.title = assignments;
+    if (device.queue_bytes > 0) queue.append(deviceHealthElement('span', '', `${Number(device.queue_bytes).toLocaleString()} bytes`));
+    const assignments = Array.isArray(device.assignments) ? device.assignments : [];
+    const providers = [...new Set(assignments.map(item => item.provider === 'openai' ? 'Codex' : bothProviderNames[item.provider] || item.provider))];
+    const assignment = deviceHealthElement('div', 'device-health-assignments', providers.join(', ') || 'Usage logs only');
+    assignment.title = assignments.map(item => `${item.provider}: ${item.external_id}`).join(', ');
     row.append(identity, state, queue, assignment);
     row.setAttribute('aria-label', `${device.name || device.id}, ${device.state || 'unknown'}, last heartbeat ${formatCollectorTime(device.last_heartbeat_at)}`);
     list.append(row);
   });
-  summary.textContent = unhealthy === 0
-    ? `${devices.length} collector${devices.length === 1 ? '' : 's'} reporting normally`
-    : `${unhealthy} of ${devices.length} collectors need attention`;
-  if (freshness) {
-    freshness.hidden = unhealthy === 0;
-    freshness.textContent = unhealthy === 0 ? '' : 'Some collectors are delayed or stale. Gaps in this graph represent missing observations, not zero usage.';
-  }
+  summary.textContent = unhealthy > 0 ? `${unhealthy} need attention` : '';
 }
 
 async function fetchDeviceHealth() {
@@ -14402,8 +14360,8 @@ async function fetchDeviceHealth() {
     renderDeviceHealth(await response.json());
   } catch (_error) {
     list.setAttribute('aria-busy', 'false');
-    list.replaceChildren(deviceHealthElement('div', 'device-health-empty', 'Collector status is temporarily unavailable. Usage history remains unchanged.'));
-    summary.textContent = 'Unable to load collector status';
+    list.replaceChildren(deviceHealthElement('div', 'device-health-empty', 'Could not load collector status.'));
+    summary.textContent = 'Unavailable';
   }
 }
 
@@ -14478,60 +14436,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupCycleFilters();
   setupPasswordToggle();
   setupTableControls();
-  initCollapsibleSections();
+  bindDashboardDetails();
   await setupOverviewControls();
   setupHeaderActions();
   setupCardModals();
   initNotificationCenter();
-  fetchDeviceHealth();
-  setInterval(fetchDeviceHealth, 60000);
+  if (document.getElementById('device-health-section')) {
+    fetchDeviceHealth();
+    setInterval(fetchDeviceHealth, 60000);
+  }
 
   if (document.getElementById('usage-chart') || document.getElementById('both-view') || document.getElementById('all-providers-container')) {
     initChart();
 
-    // Render saved data first, then refresh every visible section in parallel.
     setDashboardRefreshState(true, 'Updating saved data...');
-    Promise.allSettled([
-      loadHiddenInsights(),
-      fetchCurrent({ force: true }),
-      fetchDeepInsights({ force: true }),
-      fetchHistory(selectedChartRange(), { force: true }),
-    ]).finally(() => setDashboardRefreshState(false));
+    const tasks = [loadHiddenInsights(), fetchCurrent({ force: true }), fetchHistory(selectedChartRange(), { force: true })];
+    if (getCurrentProvider() === 'both') tasks.push(fetchDeepInsights({ force: true }));
+    Promise.allSettled(tasks).finally(() => setDashboardRefreshState(false));
 
-    // Preload providers whose history tables should appear immediately.
-    const activeProvider = getCurrentProvider();
-    const eagerHistoryProviders = new Set(['antigravity', 'minimax', 'gemini', 'cursor']);
-    if (eagerHistoryProviders.has(activeProvider)) {
-      if (shouldShowCyclesTable(activeProvider)) {
-        _lazyLoaded.add('.cycles-section');
-        fetchCycles();
-      }
-      if (shouldShowSessionsTable(activeProvider)) {
-        _lazyLoaded.add('.sessions-section');
-        fetchSessions();
-      }
-      if (shouldShowOverviewTable(activeProvider)) {
-        _lazyLoaded.add('.cycle-overview-section');
-        fetchCycleOverview();
-      }
-    }
-
-    // Hide cycle overview section entirely for Gemini
     const overviewSection = document.querySelector('.cycle-overview-section');
-    if (overviewSection) {
-      overviewSection.style.display = activeProvider === 'gemini' ? 'none' : '';
-    }
-
-    // Below-fold: lazy-load when sections scroll into view
-    if (shouldShowCyclesTable(activeProvider)) {
-      lazyLoadOnVisible('.cycles-section', () => fetchCycles());
-    }
-    if (shouldShowOverviewTable(activeProvider)) {
-      lazyLoadOnVisible('.cycle-overview-section', () => fetchCycleOverview());
-    }
-    if (shouldShowSessionsTable(activeProvider)) {
-      lazyLoadOnVisible('.sessions-section', () => fetchSessions());
-    }
+    if (overviewSection) overviewSection.hidden = getCurrentProvider() === 'gemini';
 
     startCountdowns();
     startAutoRefresh();
