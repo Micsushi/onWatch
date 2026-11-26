@@ -479,12 +479,13 @@ func (h *Handler) APIIntegrationsHistory(w http.ResponseWriter, r *http.Request)
 	version := h.apiIntegrationUsageVersion()
 	now := time.Now()
 	h.setAPIIntegrationArchiveHeaders(w, window.Start, window.End)
-	key := "history:" + window.CacheKey
+	integration := r.URL.Query().Get("integration")
+	key := "history:" + window.CacheKey + ":" + integration
 	if cached, ok := h.apiIntegrationsCache.get(key, version, now); ok {
 		respondJSON(w, http.StatusOK, cached)
 		return
 	}
-	payload := h.buildAPIIntegrationsHistory(window.Start, window.End)
+	payload := h.buildAPIIntegrationsHistory(window.Start, window.End, integration)
 	h.apiIntegrationsCache.set(key, version, now, payload)
 	respondJSON(w, http.StatusOK, payload)
 }
@@ -675,7 +676,7 @@ func (h *Handler) buildAPIIntegrationsSessions(start, end time.Time, integration
 	return response
 }
 
-func (h *Handler) buildAPIIntegrationsHistory(start, end time.Time) map[string]interface{} {
+func (h *Handler) buildAPIIntegrationsHistory(start, end time.Time, integration string) map[string]interface{} {
 	response := map[string]interface{}{}
 	if h.store == nil {
 		return response
@@ -683,7 +684,7 @@ func (h *Handler) buildAPIIntegrationsHistory(start, end time.Time) map[string]i
 
 	duration := end.Sub(start)
 	bucketSize := apiIntegrationHistoryBucketSize(duration)
-	rows, err := h.store.QueryAPIIntegrationUsageBuckets(start, end, bucketSize)
+	rows, err := h.store.QueryAPIIntegrationChartBuckets(start, end, bucketSize, integration, maxChartPoints)
 	if err != nil {
 		h.logger.Error("failed to query API integrations history", "error", err)
 		return response
@@ -691,8 +692,15 @@ func (h *Handler) buildAPIIntegrationsHistory(start, end time.Time) map[string]i
 
 	byIntegration := make(map[string][]map[string]interface{})
 	for _, row := range rows {
+		last := row.LastCapturedAt
+		if !last.Before(end) {
+			last = end.Add(-time.Nanosecond)
+		}
 		entry := map[string]interface{}{
 			"capturedAt":               row.BucketStart.UTC().Format(time.RFC3339),
+			"bucketSeconds":            int64(row.BucketSize / time.Second),
+			"firstCapturedAt":          row.FirstCapturedAt.UTC().Format(time.RFC3339Nano),
+			"lastCapturedAt":           last.UTC().Format(time.RFC3339Nano),
 			"requestCount":             row.RequestCount,
 			"promptTokens":             row.PromptTokens,
 			"completionTokens":         row.CompletionTokens,
@@ -710,20 +718,7 @@ func (h *Handler) buildAPIIntegrationsHistory(start, end time.Time) map[string]i
 	}
 
 	for integrationName, entries := range byIntegration {
-		step := downsampleStep(len(entries), maxChartPoints)
-		if step <= 1 {
-			response[integrationName] = entries
-			continue
-		}
-		downsampled := make([]map[string]interface{}, 0, min(len(entries), maxChartPoints))
-		last := len(entries) - 1
-		for index, entry := range entries {
-			if index != 0 && index != last && index%step != 0 {
-				continue
-			}
-			downsampled = append(downsampled, entry)
-		}
-		response[integrationName] = downsampled
+		response[integrationName] = entries
 	}
 
 	return response

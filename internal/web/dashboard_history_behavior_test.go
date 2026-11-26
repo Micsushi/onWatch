@@ -1112,7 +1112,7 @@ if (formatChartAxisNumber(2500) !== '2,500') {
 `, formatters)
 
 	runDashboardNodeTest(t, script)
-	if !strings.Contains(source, "const formatAxis = showTokens ? formatChartAxisNumber : formatCurrencyUSD;") {
+	if !strings.Contains(source, "const formatAxis = showTokens ? formatChartAxisNumber :") {
 		t.Fatal("platform token cost axis must use compact labels")
 	}
 }

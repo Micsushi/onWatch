@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -282,7 +283,7 @@ func TestHandler_APIIntegrationsCurrent_IncludesEffortBreakdown(t *testing.T) {
 	}
 }
 
-func TestHandler_APIIntegrationsHistory_RangeAndDownsample(t *testing.T) {
+func TestHandler_APIIntegrationsHistory_PreservesTotalsWhenCombiningBuckets(t *testing.T) {
 	t.Parallel()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -290,14 +291,21 @@ func TestHandler_APIIntegrationsHistory_RangeAndDownsample(t *testing.T) {
 	}
 	defer s.Close()
 
-	base := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Minute)
-	for i := 0; i < 520; i++ {
-		line := `{"ts":"` + base.Add(time.Duration(i)*time.Minute).Format(time.RFC3339) + `","integration":"notes","provider":"anthropic","model":"claude-3-7-sonnet","prompt_tokens":1,"completion_tokens":1}`
+	base := time.Now().UTC().Truncate(6 * time.Hour).Add(-180 * 24 * time.Hour)
+	count := maxChartPoints + 20
+	for i := range count {
+		line := fmt.Sprintf(`{"ts":%q,"integration":"notes","provider":"anthropic","model":"claude-3-7-sonnet","prompt_tokens":1,"completion_tokens":1,"cost_usd":2}`,
+			base.Add(time.Duration(i)*6*time.Hour).Format(time.RFC3339))
 		insertAPIIntegrationEventForTest(t, s, line, "/tmp/api-integrations/notes.jsonl")
+	}
+	insertAPIIntegrationEventForTest(t, s, fmt.Sprintf(`{"ts":%q,"integration":"other","provider":"anthropic","model":"claude-3-7-sonnet","prompt_tokens":1}`,
+		base.Format(time.RFC3339)), "/tmp/api-integrations/other.jsonl")
+	if _, err := s.CompactAPIIntegrationUsageEvents(base.Add(30 * 24 * time.Hour)); err != nil {
+		t.Fatal(err)
 	}
 
 	h := NewHandler(s, nil, nil, nil, &config.Config{APIIntegrationsEnabled: true, APIIntegrationsDir: "/tmp/api-integrations"})
-	req := httptest.NewRequest(http.MethodGet, "/api/api-integrations/history?range=30d", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/api-integrations/history?range=all&integration=notes", nil)
 	rr := httptest.NewRecorder()
 
 	h.APIIntegrationsHistory(rr, req)
@@ -308,6 +316,8 @@ func TestHandler_APIIntegrationsHistory_RangeAndDownsample(t *testing.T) {
 
 	var response map[string][]struct {
 		CapturedAt       string  `json:"capturedAt"`
+		FirstCapturedAt  string  `json:"firstCapturedAt"`
+		LastCapturedAt   string  `json:"lastCapturedAt"`
 		RequestCount     int     `json:"requestCount"`
 		PromptTokens     int     `json:"promptTokens"`
 		CompletionTokens int     `json:"completionTokens"`
@@ -319,14 +329,26 @@ func TestHandler_APIIntegrationsHistory_RangeAndDownsample(t *testing.T) {
 	}
 
 	buckets := response["notes"]
-	if len(buckets) == 0 {
-		t.Fatal("expected history buckets for notes")
+	if len(response) != 1 || len(buckets) == 0 {
+		t.Fatal("expected only history buckets for notes")
 	}
 	if len(buckets) > maxChartPoints {
 		t.Fatalf("len(buckets)=%d exceeds maxChartPoints=%d", len(buckets), maxChartPoints)
 	}
-	if buckets[0].RequestCount < 1 || buckets[0].TotalTokens < 2 {
-		t.Fatalf("unexpected first bucket: %+v", buckets[0])
+	var requests, tokens int
+	var cost float64
+	for _, bucket := range buckets {
+		requests += bucket.RequestCount
+		tokens += bucket.TotalTokens
+		cost += bucket.TotalCostUSD
+	}
+	if requests != count || tokens != 2*count || cost != float64(2*count) {
+		t.Fatalf("chart contains %d requests, %d tokens and $%.2f, want %d requests, %d tokens and $%d",
+			requests, tokens, cost, count, 2*count, 2*count)
+	}
+	if buckets[0].FirstCapturedAt != base.Format(time.RFC3339) ||
+		buckets[len(buckets)-1].LastCapturedAt != base.Add(time.Duration(count-1)*6*time.Hour).Format(time.RFC3339) {
+		t.Fatal("chart lost the first or last observation time")
 	}
 }
 

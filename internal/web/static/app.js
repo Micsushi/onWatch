@@ -212,6 +212,7 @@ const State = {
   overviewRequestSeq: 0,
   apiIntegrationsCurrent: null,
   apiIntegrationsHistory: null,
+  platformCostBucketHistory: null,
   apiIntegrationsHealth: null,
   apiIntegrationsCurrentCacheTs: 0,
   apiIntegrationsCurrentLoaded: false,
@@ -284,7 +285,7 @@ function updateChartWhenChanged(signatureKey, renderState, update) {
 }
 
 const API_INTEGRATIONS_CURRENT_CACHE_KEY = 'onwatch-api-integrations-current-v1';
-const PLATFORM_COST_HISTORY_CACHE_KEY = 'onwatch-platform-cost-history-v3';
+const PLATFORM_COST_HISTORY_CACHE_KEY = 'onwatch-platform-cost-history-v4';
 const PROVIDER_DATA_CACHE_KEY = 'onwatch-provider-data-cache-v4';
 const API_INTEGRATIONS_CURRENT_CACHE_TTL_MS = 120000;
 const PLATFORM_COST_HISTORY_CACHE_TTL_MS = 120000;
@@ -862,7 +863,7 @@ function applyPlatformCostHistoryPayload(range, payload) {
   State.platformCostSessionModels = payload.sessionModels || {};
   State.platformCostSessionHistory = payload.sessionHistory || {};
   State.platformCostUsesArchivedData = Boolean(payload.usesArchivedData);
-  if (payload.apiHistory) State.apiIntegrationsHistory = payload.apiHistory;
+  State.platformCostBucketHistory = payload.apiHistory || {};
   State.platformCostHistoryRange = normalizePlatformCostRange(range);
   State.platformCostHistoryWindowStart = payload.windowStart || State.platformCostWindowStart;
   State.platformCostHistoryWindowEnd = payload.windowEnd || State.platformCostWindowEnd;
@@ -915,7 +916,7 @@ async function fetchPlatformCostPayload(provider, range, signal, scope = 'platfo
     const query = queryOverride || platformCostHistoryRequestQuery(range, scope);
     const requests = [
       authFetch(`${API_BASE}/api/api-integrations/sessions?${query}&integration=${encodeURIComponent(integration)}&includeSessions=false`, { signal }),
-      authFetch(`${API_BASE}/api/api-integrations/history?${query}`, { signal }),
+      authFetch(`${API_BASE}/api/api-integrations/history?${query}&integration=${encodeURIComponent(integration)}`, { signal }),
     ];
     const [sessionRes, bucketRes] = await Promise.all(requests);
     if (!sessionRes.ok && !bucketRes.ok) {
@@ -5772,8 +5773,8 @@ function graphBucketRange(
   mode = State.graphMode,
   windowStart = State.historyWindowStart,
   windowEnd = State.historyWindowEnd,
+  intervalMs = graphBucketIntervalMs(range, mode, points, windowStart, windowEnd),
 ) {
-  const intervalMs = graphBucketIntervalMs(range, mode, points, windowStart, windowEnd);
   const maxCount = graphBucketMaxCount(mode);
   const rangeKey = String(range || '6h').toLowerCase();
   const now = Date.now();
@@ -8179,12 +8180,13 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const hasLoadedSelectedRange = State.platformCostHistoryRange === range
     && (range !== 'custom' || (State.platformCostHistoryWindowStart === State.platformCostWindowStart
       && State.platformCostHistoryWindowEnd === State.platformCostWindowEnd));
-  let rows = hasLoadedSelectedRange ? getPlatformCostHistoryRows(integration) : [];
+  const rows = hasLoadedSelectedRange ? getPlatformCostHistoryRows(integration) : [];
   const rangeTotals = getPlatformCostRangeTotals(provider, range, rows);
   if (!hasLoadedSelectedRange && !State.customGraphRefreshControllers.platformCost) {
     fetchPlatformCostHistory(range, provider);
   }
   bindPlatformCostRangeControls(range);
+  if (range === 'all' && hasLoadedSelectedRange) syncGraphHistoryRangeControl('platformCost');
   const subtitle = document.getElementById('platform-cost-chart-subtitle');
   const title = document.getElementById('platform-cost-chart-title');
   const gapNote = document.getElementById('platform-cost-chart-gap-note');
@@ -8287,12 +8289,17 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   }
   const metricColor = showTokens ? '#38BDF8' : '#14B8A6';
   const formatMetric = showTokens ? formatNumber : formatCurrencyUSD;
-  const formatAxis = showTokens ? formatChartAxisNumber : formatCurrencyUSD;
-  const yMax = niceAxisMax((showTokens
-    ? (periodMode ? bucketed.maxTokens : cumulative.maxTokens)
-    : (periodMode ? bucketed.maxCost : cumulative.maxCost)) * 1.08);
+  const peak = plottedPoints.reduce((max, point) => Math.max(max, point.y ?? 0), 0);
+  const roundedStep = niceAxisMax(peak / 8) || 1;
+  const yStep = showTokens ? Math.ceil(roundedStep) : roundedStep;
+  const yMax = Math.max(yStep, Math.ceil((peak * 1.08) / yStep) * yStep);
+  const axisPrice = new Intl.NumberFormat('en-US', {
+    style: 'currency', currency: 'USD', minimumFractionDigits: 0,
+    maximumFractionDigits: Number.isInteger(yStep) ? 0 : Math.min(20, Math.max(1, 1 + Math.ceil(-Math.log10(yStep)))),
+  });
+  const formatAxis = showTokens ? formatChartAxisNumber : value => axisPrice.format(value);
   const renderState = {
-    provider, range, graphMode, metric, plottedPoints, yMax, colors,
+    provider, range, graphMode, metric, plottedPoints, yMax, yStep, colors,
     xBounds: costTimeBounds || costPeriodBounds,
     timeScale,
     timeZone: getEffectiveTimezone(),
@@ -8352,7 +8359,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           max: yMax,
           title: { display: true, text: showTokens ? 'Tokens' : 'Priced cost (USD)', color: colors.text },
           grid: { color: colors.grid, drawBorder: false },
-          ticks: { color: colors.text, callback: value => formatAxis(value) },
+          ticks: { color: colors.text, stepSize: yStep, callback: value => formatAxis(value) },
         },
       },
     };
@@ -8402,7 +8409,7 @@ function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || 
         cost += Number(row.totalCostUsd || 0);
         tokens += Number(row.totalTokens || 0);
       }
-      const x = new Date(row.capturedAt);
+      const x = new Date(row.lastCapturedAt || row.capturedAt);
       costPoints.push({ x, y: cost });
       tokenPoints.push({ x, y: tokens });
     });
@@ -8410,22 +8417,17 @@ function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || 
     costPoints,
     range,
     'bucket',
-    State.platformCostWindowStart,
-    State.platformCostWindowEnd,
+    State.platformCostHistoryWindowStart || State.platformCostWindowStart,
+    State.platformCostHistoryWindowEnd || State.platformCostWindowEnd,
   );
   const tokenSeries = downsamplePointSeriesForCumulative(
     tokenPoints,
     range,
     'bucket',
-    State.platformCostWindowStart,
-    State.platformCostWindowEnd,
+    State.platformCostHistoryWindowStart || State.platformCostWindowStart,
+    State.platformCostHistoryWindowEnd || State.platformCostWindowEnd,
   );
-  return {
-    cost: costSeries,
-    tokens: tokenSeries,
-    maxCost: Math.max(cost, costSeries.reduce((max, point) => Math.max(max, Number(point.y || 0)), 0)),
-    maxTokens: Math.max(tokens, tokenSeries.reduce((max, point) => Math.max(max, Number(point.y || 0)), 0)),
-  };
+  return { cost: costSeries, tokens: tokenSeries };
 }
 
 function downsamplePointSeriesForCumulative(
@@ -8471,6 +8473,7 @@ function downsamplePointSeriesForCumulative(
     ? cleanPoints.filter(point => point.x.getTime() >= selectedStart && point.x.getTime() < selectedEnd)
     : cleanPoints;
   if (visible.length && sampled[0] !== visible[0]) sampled.unshift(visible[0]);
+  if (visible.length > 1 && sampled.at(-1) !== visible.at(-1)) sampled.push(visible.at(-1));
   return sampled;
 }
 
@@ -8492,23 +8495,32 @@ function processCappedDataWithGaps(dataPoints, range = '6h') {
 }
 
 function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h', mode = State.platformCostGraphMode) {
+  const windowStart = State.platformCostHistoryWindowStart || State.platformCostWindowStart;
+  const windowEnd = State.platformCostHistoryWindowEnd || State.platformCostWindowEnd;
+  const selectedStart = range === 'all' ? NaN : Date.parse(windowStart);
   const rowPoints = [...rows]
     .filter(row => row && row.capturedAt)
     .map(row => ({ x: new Date(row.capturedAt) }))
     .filter(point => !Number.isNaN(point.x.getTime()));
-  const intervalMs = graphBucketIntervalMs(
+  const preferredInterval = graphBucketIntervalMs(
     range,
     mode,
     rowPoints,
-    State.platformCostWindowStart,
-    State.platformCostWindowEnd,
+    windowStart,
+    windowEnd,
   );
+  const serverInterval = Number(rows[0]?.bucketSeconds || 0) * 1000;
+  // Period edges must align with the server buckets so a bucket is never assigned to two periods.
+  const intervalMs = serverInterval > 0
+    ? Math.ceil(preferredInterval / serverInterval) * serverInterval
+    : preferredInterval;
   const buckets = new Map(graphBucketRange(
     range,
     rowPoints,
     mode,
-    State.platformCostWindowStart,
-    State.platformCostWindowEnd,
+    windowStart,
+    windowEnd,
+    intervalMs,
   ).map(bucket => [bucket._bucketKey || bucket.periodStart.toISOString(), {
     ...bucket,
     cost: null,
@@ -8517,7 +8529,9 @@ function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h'
   [...rows]
     .filter(row => row && row.capturedAt)
     .forEach((row) => {
-      const bucketStart = graphBucketStart(row.capturedAt, range, mode, intervalMs);
+      const stamp = Date.parse(row.capturedAt);
+      const visibleStamp = Number.isFinite(selectedStart) ? Math.max(stamp, selectedStart) : stamp;
+      const bucketStart = graphBucketStart(new Date(visibleStamp), range, mode, intervalMs);
       if (!bucketStart) return;
       const key = bucketStart.toISOString();
       const bucket = buckets.get(key) || {
@@ -8534,12 +8548,7 @@ function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h'
   const sorted = [...buckets.values()].sort((a, b) => a.x.getTime() - b.x.getTime());
   const cost = sorted.map(bucket => ({ x: bucket.x, y: bucket.cost, periodStart: bucket.periodStart, periodEnd: bucket.periodEnd }));
   const tokens = sorted.map(bucket => ({ x: bucket.x, y: bucket.tokens, periodStart: bucket.periodStart, periodEnd: bucket.periodEnd }));
-  return {
-    cost,
-    tokens,
-    maxCost: cost.reduce((max, point) => Math.max(max, Number(point.y || 0)), 0),
-    maxTokens: tokens.reduce((max, point) => Math.max(max, Number(point.y || 0)), 0),
-  };
+  return { cost, tokens };
 }
 
 function platformCostRangeStartTime(range) {
@@ -8629,12 +8638,11 @@ function updatePlatformCostSummaryForRange(provider, range, rows) {
 function getPlatformCostHistoryRows(integration) {
   const sessionHistory = State.platformCostSessionHistory || {};
   const sessionRows = getPlatformCostIntegrationValue(sessionHistory, integration);
-  const history = State.apiIntegrationsHistory || {};
+  const history = State.platformCostBucketHistory || {};
   const archivedRows = getPlatformCostIntegrationValue(history, integration);
   if (State.platformCostUsesArchivedData && Array.isArray(archivedRows)) return archivedRows;
   if (Array.isArray(sessionRows)) return sessionRows;
-  const rows = getPlatformCostIntegrationValue(history, integration);
-  return Array.isArray(rows) ? rows : [];
+  return Array.isArray(archivedRows) ? archivedRows : [];
 }
 
 function getPlatformCostIntegrationValue(source, integration) {
@@ -10839,7 +10847,17 @@ function syncGraphHistoryRangeControl(scope) {
   });
   const startInput = control.querySelector('[data-history-start]');
   const endInput = control.querySelector('[data-history-end]');
-  if (startInput) startInput.value = windowState.startDate || '';
+  if (startInput) {
+    if (scope === 'platformCost' && windowState.range === 'all') {
+      const integration = platformCostIntegrationNames[getCurrentProvider()];
+      const first = State.platformCostHistoryRange === 'all'
+        ? getPlatformCostHistoryRows(integration)[0]
+        : null;
+      startInput.value = first ? formatHistoryDateInTimezone(first.firstCapturedAt || first.capturedAt) : '';
+    } else {
+      startInput.value = windowState.startDate || '';
+    }
+  }
   if (endInput) endInput.value = windowState.endDate || '';
 }
 

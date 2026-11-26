@@ -67,6 +67,9 @@ type APIIntegrationUsageEffortSummaryRow struct {
 type APIIntegrationUsageBucketRow struct {
 	IntegrationName   string
 	BucketStart       time.Time
+	BucketSize        time.Duration
+	FirstCapturedAt   time.Time
+	LastCapturedAt    time.Time
 	RequestCount      int
 	PromptTokens      int
 	CompletionTokens  int
@@ -973,11 +976,77 @@ func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integ
 
 // QueryAPIIntegrationUsageBuckets groups usage into time buckets over a range.
 func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize time.Duration) ([]APIIntegrationUsageBucketRow, error) {
-	if bucketSize <= 0 {
-		return nil, fmt.Errorf("bucket size must be positive")
+	return s.queryAPIIntegrationUsageBuckets(start, end, bucketSize, "", apiIntegrationUsageBucketsLimit)
+}
+
+// QueryAPIIntegrationChartBuckets widens time buckets before summing to keep every event in the chart.
+func (s *Store) QueryAPIIntegrationChartBuckets(start, end time.Time, bucketSize time.Duration, integration string, maxPoints int) ([]APIIntegrationUsageBucketRow, error) {
+	if bucketSize < time.Second || maxPoints < 2 {
+		return nil, fmt.Errorf("invalid API integration chart bucket size or limit")
+	}
+	intervals := maxPoints - 1
+	// An archived hour may overlap the selection even if its start precedes it.
+	span := end.Sub(start.Truncate(time.Hour))
+	if span > time.Duration(intervals)*bucketSize {
+		filter := ""
+		if integration != "" {
+			filter = " AND integration_name = ?"
+		}
+		startRaw, endRaw := start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)
+		args := []any{startRaw, endRaw}
+		if integration != "" {
+			args = append(args, integration)
+		}
+		args = append(args, endRaw, startRaw)
+		if integration != "" {
+			args = append(args, integration)
+		}
+		var first sql.NullString
+		err := s.db.QueryRow(`SELECT MIN(first_at COLLATE ONWATCH_RFC3339) FROM (
+			SELECT MIN(captured_at COLLATE ONWATCH_RFC3339) AS first_at FROM api_integration_usage_events
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?`+filter+`
+			UNION ALL
+			SELECT MIN(hour_start) FROM api_integration_usage_hourly
+			WHERE hour_start < ? AND last_captured_at COLLATE ONWATCH_RFC3339 >= ?`+filter+`
+		)`, args...).Scan(&first)
+		if err != nil {
+			return nil, fmt.Errorf("query first API integration chart bucket: %w", err)
+		}
+		if !first.Valid {
+			return nil, nil
+		}
+		firstAt, err := time.Parse(time.RFC3339Nano, first.String)
+		if err != nil {
+			return nil, fmt.Errorf("parse first API integration chart bucket: %w", err)
+		}
+		width := time.Duration(intervals) * bucketSize
+		span = end.Sub(firstAt)
+		if span > width {
+			bucketSize *= (span + width - 1) / width
+		}
+	}
+	return s.queryAPIIntegrationUsageBuckets(start, end, bucketSize, integration, -1)
+}
+
+func (s *Store) queryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize time.Duration, integration string, limit int) ([]APIIntegrationUsageBucketRow, error) {
+	if bucketSize < time.Second {
+		return nil, fmt.Errorf("bucket size must be at least one second")
 	}
 
 	bucketSeconds := int64(bucketSize / time.Second)
+	filter := ""
+	if integration != "" {
+		filter = " AND integration_name = ?"
+	}
+	args := []any{bucketSeconds, bucketSeconds, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
+	if integration != "" {
+		args = append(args, integration)
+	}
+	args = append(args, bucketSeconds, bucketSeconds, end.Format(time.RFC3339Nano), start.Format(time.RFC3339Nano))
+	if integration != "" {
+		args = append(args, integration)
+	}
+	args = append(args, limit)
 	rows, err := s.db.Query(`
 		WITH combined AS (
 			SELECT integration_name,
@@ -991,9 +1060,11 @@ func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 			       COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
 			       COALESCE(SUM(output_tokens), 0) AS output_tokens,
 			       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
-			       COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+			       COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
+			       MIN(captured_at COLLATE ONWATCH_RFC3339) AS first_at,
+			       MAX(captured_at COLLATE ONWATCH_RFC3339) AS last_at
 			FROM api_integration_usage_events
-			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?`+filter+`
 			GROUP BY integration_name, bucket_start
 			UNION ALL
 			SELECT integration_name,
@@ -1007,9 +1078,11 @@ func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 			       COALESCE(SUM(cache_creation_input_tokens), 0),
 			       COALESCE(SUM(output_tokens), 0),
 			       COALESCE(SUM(reasoning_output_tokens), 0),
-			       COALESCE(SUM(total_cost_usd), 0)
+			       COALESCE(SUM(total_cost_usd), 0),
+			       MIN(first_captured_at COLLATE ONWATCH_RFC3339),
+			       MAX(last_captured_at COLLATE ONWATCH_RFC3339)
 			FROM api_integration_usage_hourly
-			WHERE hour_start < ? AND last_captured_at COLLATE ONWATCH_RFC3339 >= ?
+			WHERE hour_start < ? AND last_captured_at COLLATE ONWATCH_RFC3339 >= ?`+filter+`
 			GROUP BY integration_name, bucket_start
 		)
 		SELECT integration_name, bucket_start,
@@ -1022,14 +1095,14 @@ func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 		       COALESCE(SUM(cache_creation_input_tokens), 0),
 		       COALESCE(SUM(output_tokens), 0),
 		       COALESCE(SUM(reasoning_output_tokens), 0),
-		       COALESCE(SUM(total_cost_usd), 0)
+		       COALESCE(SUM(total_cost_usd), 0),
+		       MIN(first_at COLLATE ONWATCH_RFC3339),
+		       MAX(last_at COLLATE ONWATCH_RFC3339)
 		FROM combined
 		GROUP BY integration_name, bucket_start
 		ORDER BY integration_name, bucket_start
 		LIMIT ?
-	`, bucketSeconds, bucketSeconds, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano),
-		bucketSeconds, bucketSeconds, end.Format(time.RFC3339Nano), start.Format(time.RFC3339Nano),
-		apiIntegrationUsageBucketsLimit)
+	`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query API integration usage buckets: %w", err)
 	}
@@ -1038,7 +1111,7 @@ func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 	var buckets []APIIntegrationUsageBucketRow
 	for rows.Next() {
 		var row APIIntegrationUsageBucketRow
-		var bucketStart string
+		var bucketStart, firstAt, lastAt string
 		if err := rows.Scan(
 			&row.IntegrationName,
 			&bucketStart,
@@ -1052,10 +1125,15 @@ func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 			&row.OutputTokens,
 			&row.ReasoningTokens,
 			&row.TotalCostUSD,
+			&firstAt,
+			&lastAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan API integration usage bucket: %w", err)
 		}
 		row.BucketStart, _ = time.Parse(time.RFC3339Nano, bucketStart)
+		row.BucketSize = bucketSize
+		row.FirstCapturedAt, _ = time.Parse(time.RFC3339Nano, firstAt)
+		row.LastCapturedAt, _ = time.Parse(time.RFC3339Nano, lastAt)
 		buckets = append(buckets, row)
 	}
 	return buckets, rows.Err()

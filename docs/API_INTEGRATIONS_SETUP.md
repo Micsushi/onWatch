@@ -182,6 +182,8 @@ Codex logs do not currently include the x1.5 speed tier in each `turn_context`. 
 
 Every normalized usage event stores a timestamp in `ts`. onWatch persists that timestamp as `captured_at`, then the dashboard history API buckets it into time windows for graphs. The Cost tab can graph estimated cost, token volume, requests, and accumulated token use. Platform-specific tabs can graph estimated cost, total tokens, input tokens, and output tokens over time when timestamped usage rows exist.
 
+Long ranges combine adjacent time buckets so chart totals include all recorded usage in the selected range. The platform cost chart starts its vertical scale at zero and rounds the top to a gridline above the highest plotted value.
+
 ## Event Format
 
 Write one JSON object per line.
