@@ -1812,8 +1812,8 @@ func TestHandler_Dashboard_CodexView_RestoresProfileTabsAndTables(t *testing.T) 
 	}
 
 	body := rr.Body.String()
-	if !strings.Contains(body, `id="codex-profile-dropdown"`) {
-		t.Error("expected codex profile dropdown container")
+	if !strings.Contains(body, `id="dashboard-account-picker"`) {
+		t.Error("expected Codex accounts picker")
 	}
 	if !strings.Contains(body, `id="quota-grid-codex"`) {
 		t.Error("expected single-account codex quota grid")

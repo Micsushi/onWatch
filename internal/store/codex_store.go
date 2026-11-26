@@ -927,7 +927,7 @@ func (s *Store) QueryProviderAccounts(provider string) ([]ProviderAccount, error
 // QueryActiveProviderAccounts returns only non-deleted accounts for a given provider.
 func (s *Store) QueryActiveProviderAccounts(provider string) ([]ProviderAccount, error) {
 	rows, err := s.db.Query(
-		`SELECT id, provider, name, created_at, COALESCE(metadata, '') FROM provider_accounts WHERE provider = ? AND deleted_at IS NULL ORDER BY id`,
+		`SELECT id, provider, name, created_at, COALESCE(metadata, ''), COALESCE(external_id, '') FROM provider_accounts WHERE provider = ? AND deleted_at IS NULL ORDER BY id`,
 		provider,
 	)
 	if err != nil {
@@ -939,7 +939,7 @@ func (s *Store) QueryActiveProviderAccounts(provider string) ([]ProviderAccount,
 	for rows.Next() {
 		var acc ProviderAccount
 		var createdAt string
-		if err := rows.Scan(&acc.ID, &acc.Provider, &acc.Name, &createdAt, &acc.Metadata); err != nil {
+		if err := rows.Scan(&acc.ID, &acc.Provider, &acc.Name, &createdAt, &acc.Metadata, &acc.ExternalID); err != nil {
 			return nil, fmt.Errorf("failed to scan provider account: %w", err)
 		}
 		acc.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)

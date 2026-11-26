@@ -33,19 +33,16 @@ func runDashboardNodeTest(t *testing.T, script string) {
 
 func TestSingleCodexProfileSelectsItsOwnHistory(t *testing.T) {
 	source := dashboardAppSource(t)
-	populate := dashboardJavaScriptBetween(t, source, "function populateCodexProfileTabs()", "function switchCodexProfile(")
+	populate := dashboardJavaScriptBetween(t, source, "function populateCodexProfileTabs()", "// Refresh all dashboard data")
 	runDashboardNodeTest(t, fmt.Sprintf(`
 const assert=require('assert');
 const State={codexProfiles:[{id:69,name:'Personal'}],codexAccount:1};
-const dropdown={style:{}};
-const document={getElementById:id=>id==='codex-profile-dropdown'?dropdown:{}};
 let saved;
 function saveCodexAccount(id){saved=id;}
 %s
 populateCodexProfileTabs();
 assert.equal(State.codexAccount,69,'single named profile must not show default account history');
 assert.equal(saved,69);
-assert.equal(dropdown.style.display,'none');
 saved=undefined;
 populateCodexProfileTabs();
 assert.equal(saved,undefined,'valid selection must be preserved');

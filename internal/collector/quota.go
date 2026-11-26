@@ -181,6 +181,7 @@ func (r *Runtime) pollQuota(ctx context.Context, assignment ingest.ProviderAssig
 	provider := strings.ToLower(strings.TrimSpace(assignment.Provider))
 	var metrics []ingest.QuotaMetric
 	plan := ""
+	accountLabel := ""
 
 	switch provider {
 	case "codex", "openai":
@@ -201,6 +202,7 @@ func (r *Runtime) pollQuota(ctx context.Context, assignment ingest.ProviderAssig
 			return ingest.Event{}, err
 		}
 		plan = response.PlanType
+		accountLabel = api.ParseIDTokenEmail(credentials.IDToken)
 		for _, quota := range response.ToSnapshot(now).Quotas {
 			metrics = append(metrics, quotaMetric(quota.Name, quota.Utilization, nil, "percent", quota.ResetsAt, quota.Status))
 		}
@@ -337,6 +339,7 @@ func (r *Runtime) pollQuota(ctx context.Context, assignment ingest.ProviderAssig
 			return ingest.Event{}, fmt.Errorf("Antigravity identity does not match configured account binding")
 		}
 		plan = snapshot.PlanName
+		accountLabel = strings.TrimSpace(snapshot.Email)
 		for _, model := range snapshot.Models {
 			metrics = append(metrics, quotaMetric(model.ModelID, 100-model.RemainingPercent, nil, "percent", model.ResetTime, ""))
 		}
@@ -367,7 +370,7 @@ func (r *Runtime) pollQuota(ctx context.Context, assignment ingest.ProviderAssig
 		Kind:       "quota_snapshot",
 		CapturedAt: now,
 		Provider:   provider,
-		Account:    ingest.Account{ExternalID: assignment.ExternalID},
+		Account:    ingest.Account{ExternalID: assignment.ExternalID, Label: accountLabel},
 		Payload:    payload,
 	}
 	return event, event.Validate(now)

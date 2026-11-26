@@ -967,7 +967,8 @@ document.addEventListener('visibilitychange', () => {
 // Codex Profile Persistence (multi-account beta)
 function loadCodexAccount() {
   try {
-    const stored = localStorage.getItem('onwatch-codex-account');
+    const stored = new URLSearchParams(location.search).get('account')
+      || localStorage.getItem('onwatch-codex-account');
     if (stored) {
       const parsed = parseInt(stored, 10);
       State.codexAccount = isNaN(parsed) ? 1 : parsed;
@@ -990,11 +991,9 @@ function loadCodexProfiles() {
   const profileData = document.getElementById('codex-dashboard-profiles');
   if (profileData) {
     const profiles = JSON.parse(profileData.textContent);
-    const namedProfiles = profiles.filter(profile => profile.name !== 'default');
-    State.codexProfiles = namedProfiles.length > 0 ? namedProfiles : profiles;
+    State.codexProfiles = profiles;
     populateCodexProfileTabs();
   }
-  updateCodexProfileTabsVisibility();
 }
 
 function populateCodexProfileTabs() {
@@ -1003,76 +1002,6 @@ function populateCodexProfileTabs() {
     State.codexAccount = State.codexProfiles[0].id;
     saveCodexAccount(State.codexAccount);
   }
-  const dropdown = document.getElementById('codex-profile-dropdown');
-  const menu = document.getElementById('codex-profile-menu');
-  if (!dropdown || !menu) return;
-
-  // Only show dropdown if there are multiple profiles
-  if (State.codexProfiles.length <= 1) {
-    dropdown.style.display = 'none';
-    return;
-  }
-
-  menu.innerHTML = '';
-
-  for (const profile of State.codexProfiles) {
-    const li = document.createElement('li');
-    li.className = 'codex-profile-item' + (profile.id === State.codexAccount ? ' active' : '');
-    li.dataset.accountId = profile.id;
-    li.textContent = profile.name;
-    li.setAttribute('role', 'option');
-    li.setAttribute('aria-selected', profile.id === State.codexAccount ? 'true' : 'false');
-    li.addEventListener('click', () => {
-      switchCodexProfile(profile.id);
-      closeCodexProfileDropdown();
-    });
-    menu.appendChild(li);
-  }
-
-  updateProfileTabsActive();
-}
-
-function switchCodexProfile(accountId) {
-  if (State.codexAccount === accountId) return;
-  if (State.chart) setUsageChartRefreshMessage('Showing the previous account while history loads.');
-  State.codexAccount = accountId;
-  saveCodexAccount(accountId);
-  updateProfileTabsActive();
-  refreshAll();
-}
-
-function updateProfileTabsActive() {
-  const label = document.getElementById('codex-profile-label');
-  const menu = document.getElementById('codex-profile-menu');
-  if (!menu) return;
-
-  const activeProfile = State.codexProfiles.find(p => p.id === State.codexAccount);
-  if (label && activeProfile) {
-    label.textContent = activeProfile.name;
-  }
-
-  menu.querySelectorAll('.codex-profile-item').forEach(item => {
-    const isActive = parseInt(item.dataset.accountId, 10) === State.codexAccount;
-    item.classList.toggle('active', isActive);
-    item.setAttribute('aria-selected', isActive ? 'true' : 'false');
-  });
-}
-
-function closeCodexProfileDropdown() {
-  const trigger = document.getElementById('codex-profile-trigger');
-  const menu = document.getElementById('codex-profile-menu');
-  if (trigger) trigger.setAttribute('aria-expanded', 'false');
-  if (menu) menu.classList.remove('open');
-}
-
-// Show/hide profile dropdown based on current provider and profile count
-function updateCodexProfileTabsVisibility() {
-  const dropdown = document.getElementById('codex-profile-dropdown');
-  if (!dropdown) return;
-
-  const provider = getCurrentProvider();
-  const show = provider === 'codex' && State.codexProfiles.length > 1;
-  dropdown.style.display = show ? '' : 'none';
 }
 
 // Refresh all dashboard data (used when switching profiles)
@@ -1090,33 +1019,176 @@ function refreshAll() {
   });
 }
 
-function initCodexProfileTabs() {
-  // Set up dropdown toggle behavior
-  const trigger = document.getElementById('codex-profile-trigger');
-  const menu = document.getElementById('codex-profile-menu');
-  if (!trigger || !menu) return;
-
-  trigger.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const isOpen = menu.classList.toggle('open');
-    trigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-  });
-
-  // Close on outside click
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('.codex-profile-dropdown')) {
-      closeCodexProfileDropdown();
-    }
-  });
-
-  // Close on Escape
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeCodexProfileDropdown();
-  });
-}
-
 function codexAccountParam() {
   return State.codexAccount ? `&account=${encodeURIComponent(State.codexAccount)}` : '';
+}
+
+function initDashboardAccountPicker() {
+  const picker = document.getElementById('dashboard-account-picker');
+  if (!picker) return false;
+  const provider = getCurrentProvider();
+  const form = document.getElementById('dashboard-account-form');
+  const options = [...form.querySelectorAll('input[name="account"]')];
+  const storageKey = 'onwatch-dashboard-accounts:' + provider;
+  const params = new URLSearchParams(location.search);
+  if (!params.has('account')) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      const valid = Array.isArray(saved) ? options.filter(input => !input.dataset.hidden && saved.includes(input.value)) : [];
+      if (valid.length) {
+        params.set('provider', provider);
+        valid.forEach(input => params.append('account', input.value));
+        location.replace(BASE_PATH + '/?' + params);
+        return true;
+      }
+    } catch (_) { /* The page works without stored preferences. */ }
+    if (provider === 'codex') options.forEach(input => { input.checked = Number(input.value) === State.codexAccount; });
+  }
+  const applied = options.filter(input => input.checked);
+  const summary = document.getElementById('dashboard-account-selection');
+  const description = applied.map(input => input.dataset.label).join(', ');
+  summary.textContent = params.get('account') === 'provider' ? 'Accounts'
+    : applied.length === 1 ? applied[0].dataset.label : applied.length + ' accounts';
+  summary.setAttribute('aria-label', 'Choose accounts' + (description && params.get('account') !== 'provider' ? '. Showing ' + description : ''));
+  const apply = document.getElementById('dashboard-account-apply');
+  form.addEventListener('change', () => { apply.disabled = !options.some(input => input.checked); });
+  form.addEventListener('submit', () => {
+    const selected = options.filter(input => input.checked).map(input => input.value);
+    try { localStorage.setItem(storageKey, JSON.stringify(selected)); } catch (_) { /* optional */ }
+    if (provider === 'codex' && selected.length) saveCodexAccount(Number(selected[0]));
+  });
+  picker.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { picker.open = false; summary.focus(); }
+  });
+  document.addEventListener('click', event => {
+    if (!picker.contains(event.target)) picker.open = false;
+  });
+
+  const edit = document.getElementById('dashboard-account-email-form');
+  const account = document.getElementById('dashboard-account-email-id');
+  const email = document.getElementById('dashboard-account-email');
+  const status = document.getElementById('dashboard-account-email-status');
+  const setEmail = () => { email.value = options.find(input => input.value === account.value)?.dataset.email || ''; };
+  if (applied.length === 1) account.value = applied[0].value;
+  setEmail();
+  account.addEventListener('change', setEmail);
+  edit.addEventListener('submit', async event => {
+    event.preventDefault();
+    const submit = edit.querySelector('button');
+    submit.disabled = true;
+    status.hidden = true;
+    try {
+      const response = await authFetch(API_BASE + '/api/dashboard/account-email', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, account: account.value, email: email.value }),
+      });
+      if (!response.ok) throw new Error('Could not save the email label.');
+      location.reload();
+    } catch (error) {
+      status.textContent = error.message;
+      status.hidden = false;
+      submit.disabled = false;
+    }
+  });
+  return false;
+}
+
+function renderAccountReadings(panel, provider, current) {
+  const quotas = provider === 'codex' ? filterCodexQuotasForPlan(current.quotas || [], current.planType) : current.quotas || [];
+  const readings = quotas.flatMap(quota => (quota.windows?.length ? quota.windows : [quota]).map(window => ({
+    label: [quota.displayName || quota.label || codexDisplayNames[quota.name] || quota.name, window !== quota ? window.label : ''].filter(Boolean).join(' · '),
+    usage: window.usagePercent ?? window.utilization,
+    reset: window.resetsAt || window.resetTime,
+  }))).filter(reading => Number.isFinite(reading.usage));
+  panel.querySelector('[data-account-readings]').innerHTML = readings.map(reading =>
+    '<div><dt>' + escapeHTML(reading.label) + '</dt><dd><strong>' + formatUsagePercent(reading.usage) + '</strong>'
+    + '<progress aria-label="' + escapeHTML(reading.label) + '" max="100" value="' + reading.usage + '"></progress>'
+    + (reading.reset ? '<time datetime="' + escapeHTML(reading.reset) + '">Resets ' + escapeHTML(formatDateTime(reading.reset)) + '</time>' : '')
+    + '</dd></div>').join('');
+  const status = panel.querySelector('[data-account-status]');
+  const plan = current.planName || current.planType;
+  const stale = Date.now() - Date.parse(current.capturedAt) > 30 * 60000;
+  status.textContent = readings.length
+    ? [plan && (provider === 'codex' ? formatCodexPlan(plan) : plan), (stale ? 'Stale reading · ' : 'Last observed ') + formatDateTime(current.capturedAt)].filter(Boolean).join(' · ')
+    : 'No quota readings for this account yet.';
+}
+
+function initDashboardAccountOverview(overview) {
+  const provider = getCurrentProvider();
+  const range = document.getElementById('dashboard-account-range');
+  const panels = [...overview.querySelectorAll('[data-account]')];
+  const history = new Map();
+  const refreshBtn = document.getElementById('refresh-btn');
+  let controller;
+  const draw = (panel, result) => {
+    const plot = panel.querySelector('[data-account-plot]');
+    const canvas = plot.querySelector('canvas');
+    const status = panel.querySelector('[data-account-history]');
+    if (typeof Chart !== 'undefined') Chart.getChart(canvas)?.destroy();
+    const datasets = buildProviderHistoryDatasets(provider, result.range, result.payload).filter(dataset => datasetsHaveFiniteValue([dataset]));
+    for (const dataset of datasets) {
+      if (dataset.data.filter(point => point.y != null).length <= 3) dataset.pointRadius = 3;
+    }
+    plot.hidden = !datasets.length || typeof Chart === 'undefined';
+    status.textContent = !datasets.length ? 'No quota observations in this range.'
+      : typeof Chart === 'undefined' ? 'Chart unavailable.'
+      : datasets.some(dataset => dataset.data.some(point => point.y == null)) ? 'Blank spans mean no readings were collected.' : '';
+    status.hidden = !status.textContent;
+    if (plot.hidden) return;
+    const options = buildChartOptions(getThemeColors(), computeYMax(datasets), result.range);
+    options.scales.x.min = Date.parse(result.start);
+    options.scales.x.max = Date.parse(result.end);
+    options.scales.y.title = { display: true, text: 'Quota used (%)', color: getThemeColors().text };
+    new Chart(canvas, { type: 'line', data: { datasets }, options });
+  };
+  const load = async () => {
+    controller?.abort();
+    controller = new AbortController();
+    const request = controller;
+    const timeout = window.setTimeout(() => request.abort(), DASHBOARD_FOREGROUND_FETCH_TIMEOUT_MS);
+    const selected = range.value;
+    const period = historyRequestWindow(selected, 'chart');
+    const bounds = new URLSearchParams(period);
+    setDashboardRefreshState(true, 'Updating account readings…');
+    const results = await Promise.allSettled(panels.flatMap(panel => {
+      const scope = 'provider=' + provider + '&account=' + encodeURIComponent(panel.dataset.account);
+      const get = async (path, apply, status) => {
+        try {
+          const response = await authFetch(API_BASE + path, { signal: request.signal });
+          if (!response.ok) throw new Error('Account data unavailable.');
+          const payload = await response.json();
+          if (controller === request) apply(payload);
+        } catch (error) {
+          if (controller !== request) return;
+          status.hidden = false;
+          status.textContent = 'Could not refresh. Previous readings, if available, are still shown.';
+          throw error;
+        }
+      };
+      return [
+        get('/api/current?' + scope, payload => renderAccountReadings(panel, provider, payload), panel.querySelector('[data-account-status]')),
+        get('/api/history?' + scope + '&' + bounds, payload => {
+          const result = { payload, range: selected, start: period.start, end: period.end };
+          history.set(panel, result);
+          draw(panel, result);
+        }, panel.querySelector('[data-account-history]')),
+      ];
+    }));
+    window.clearTimeout(timeout);
+    if (controller !== request) return;
+    setDashboardRefreshState(false);
+    setDashboardFreshness({ stale: results.some(result => result.status === 'rejected') });
+  };
+  document.getElementById('scroll-top')?.addEventListener('click', event => {
+    event.preventDefault();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  refreshBtn?.addEventListener('click', load);
+  range.addEventListener('change', load);
+  new MutationObserver(() => history.forEach((result, panel) => draw(panel, result)))
+    .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  setInterval(() => { if (!document.hidden) load(); }, REFRESH_INTERVAL);
+  load();
 }
 
 // MiniMax Account Persistence (multi-account)
@@ -3739,7 +3811,7 @@ function renderCodexQuotaCardsForAccount(quotas, container, accountName, planTyp
   const header = document.createElement('div');
   header.className = 'codex-account-header';
   header.innerHTML = `
-    <span class="codex-account-name">${accountName}</span>
+    <span class="codex-account-name">${escapeHTML(accountName)}</span>
     <span class="codex-account-plan">${formatCodexPlan(planType)}</span>
   `;
   container.appendChild(header);
@@ -3765,7 +3837,7 @@ function renderCodexQuotaCardsForAccount(quotas, container, accountName, planTyp
     const statusLabel = statusLabelFor(q);
     const cardKey = `codex-${safeAccountId}-${q.name}`;
 
-    return `<article class="quota-card codex-card${q.isStale ? ' stale-card' : ''}" id="card-${cardKey}" data-quota="${q.name}" data-provider="codex" data-account-id="${accountId}" aria-label="${accountName} ${displayName}" style="animation-delay: ${i * 60}ms">
+    return `<article class="quota-card codex-card${q.isStale ? ' stale-card' : ''}" id="card-${cardKey}" data-quota="${q.name}" data-provider="codex" data-account-id="${accountId}" aria-label="${escapeHTML(accountName)} ${escapeHTML(displayName)}" style="animation-delay: ${i * 60}ms">
       <header class="card-header">
         <h2 class="quota-title">
           <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icon}</svg>
@@ -14331,7 +14403,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadHiddenQuotas();
   loadCodexAccount();
   loadCodexProfiles();
-  initCodexProfileTabs();
+  if (initDashboardAccountPicker()) return;
 
   loadMiniMaxAccount();
   if (getCurrentProvider() === 'minimax') {
@@ -14347,6 +14419,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   initLayoutToggle();
   initTimezoneBadge();
   setupProviderSelector();
+  const accountOverview = document.getElementById('dashboard-account-overview');
+  if (accountOverview) {
+    initNotificationCenter();
+    initDashboardAccountOverview(accountOverview);
+    return;
+  }
   setupGraphHistoryRangeControls();
   setupAPIIntegrationsMetricSelector();
   setupChartModeSelector();

@@ -62,6 +62,7 @@ func NewServer(port int, handler *Handler, logger *slog.Logger, username, passwo
 	mux.HandleFunc(p("/api/current"), handler.Current)
 	mux.HandleFunc(p("/api/history"), handler.History)
 	mux.HandleFunc(p("/api/subscription-value"), handler.SubscriptionValue)
+	mux.HandleFunc(p("/api/dashboard/account-email"), handler.DashboardAccountEmail)
 	mux.HandleFunc(p("/api/cycles"), handler.Cycles)
 	mux.HandleFunc(p("/api/summary"), handler.Summary)
 	mux.HandleFunc(p("/api/capabilities"), handler.Capabilities)

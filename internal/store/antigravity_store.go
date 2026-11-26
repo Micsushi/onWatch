@@ -189,23 +189,27 @@ func (s *Store) QueryLatestAntigravity() (*api.AntigravitySnapshot, error) {
 
 // QueryAntigravityRange returns Antigravity snapshots within a time range.
 func (s *Store) QueryAntigravityRange(start, end time.Time, limit ...int) ([]*api.AntigravitySnapshot, error) {
+	maxSnapshots := 0
+	if len(limit) > 0 {
+		maxSnapshots = limit[0]
+	}
+	return s.queryAntigravityRange(start, end, "", maxSnapshots)
+}
+
+func (s *Store) queryAntigravityRange(start, end time.Time, email string, limit int) ([]*api.AntigravitySnapshot, error) {
 	// Order by ASC for chronological chart display (oldest to newest, left to right)
 	query := `SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
-		FROM antigravity_snapshots
-		WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ? ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
+		FROM antigravity_snapshots WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?`
 	args := []interface{}{start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
-	if len(limit) > 0 && limit[0] > 0 {
-		query = `SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
-			FROM (
-				SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count
-				FROM antigravity_snapshots
-				WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?
-				ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC
-				LIMIT ?
-			) recent
-			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
-		args = append(args, limit[0])
+	if email != "" {
+		query += ` AND trim(email)=?`
+		args = append(args, email)
 	}
+	if limit > 0 {
+		query = `SELECT * FROM (` + query + ` ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC,id DESC LIMIT ?)`
+		args = append(args, limit)
+	}
+	query += ` ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC,id ASC`
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {

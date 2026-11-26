@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"strings"
 	"time"
@@ -161,39 +162,53 @@ func ParseIDTokenExpiry(idToken string) time.Time {
 // OpenAI places this under the nested "https://api.openai.com/auth" claim object.
 // Returns empty string if parsing fails or claim is missing.
 func ParseIDTokenUserID(idToken string) string {
-	if idToken == "" {
-		return ""
-	}
-
-	parts := strings.Split(idToken, ".")
-	if len(parts) != 3 {
-		return ""
-	}
-
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		payload, err = base64.StdEncoding.DecodeString(parts[1])
-		if err != nil {
-			return ""
-		}
-	}
-
-	var claims map[string]interface{}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return ""
-	}
-
+	claims := codexIdentityClaims(idToken)
 	authClaims, ok := claims["https://api.openai.com/auth"].(map[string]interface{})
 	if !ok {
 		return ""
 	}
-
 	if userID, ok := authClaims["chatgpt_user_id"].(string); ok {
 		return strings.TrimSpace(userID)
 	}
 	if userID, ok := authClaims["user_id"].(string); ok {
 		return strings.TrimSpace(userID)
 	}
-
 	return ""
+}
+
+// ParseIDTokenEmail reads a label from a locally held Codex ID token.
+// Callers use the established account ID to bind the observation.
+func ParseIDTokenEmail(idToken string) string {
+	value, _ := codexIdentityClaims(idToken)["email"].(string)
+	value = strings.TrimSpace(value)
+	address, err := mail.ParseAddress(value)
+	if err != nil || address.Name != "" || address.Address != value || len(value) > 254 {
+		return ""
+	}
+	return value
+}
+
+func codexIdentityClaims(idToken string) map[string]interface{} {
+	if idToken == "" {
+		return nil
+	}
+
+	parts := strings.Split(idToken, ".")
+	if len(parts) != 3 {
+		return nil
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, err = base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return nil
+		}
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil
+	}
+	return claims
 }

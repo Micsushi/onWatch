@@ -1,0 +1,64 @@
+{{define "dashboard-account-picker"}}
+<details class="dashboard-account-picker" id="dashboard-account-picker">
+    <summary id="dashboard-account-selection">Accounts</summary>
+    <div class="dashboard-account-menu">
+        <form id="dashboard-account-form" action="{{.BasePath}}/" method="get">
+            <input type="hidden" name="provider" value="{{.CurrentProvider}}">
+            <fieldset>
+                <legend>Show accounts</legend>
+                {{range .DashboardAccounts}}
+                <label class="dashboard-account-option">
+                    <input type="checkbox" name="account" value="{{.ID}}" data-label="{{if .Email}}{{.Email}}{{else}}{{.Name}}{{end}}" data-email="{{.Email}}" {{if .Hidden}}data-hidden="true"{{end}} {{if .Checked}}checked{{end}}>
+                    <span>{{if .Email}}{{.Email}} <small>{{.Name}}</small>{{else}}{{.Name}}{{end}}{{if .Hidden}} <small>Hidden in Settings</small>{{end}}</span>
+                </label>
+                {{end}}
+            </fieldset>
+            <button class="btn" type="submit" id="dashboard-account-apply">Show selected</button>
+        </form>
+        <details class="dashboard-account-labels">
+            <summary>Edit email labels</summary>
+            <form id="dashboard-account-email-form">
+                <label>Account <select id="dashboard-account-email-id">
+                    {{range .DashboardAccounts}}<option value="{{.ID}}">{{.Name}}{{if .Email}} · {{.Email}}{{end}}</option>{{end}}
+                </select></label>
+                <label>Email <input id="dashboard-account-email" type="email" maxlength="254" autocomplete="off"></label>
+                <button class="btn" type="submit">Save label</button>
+                <p role="status" id="dashboard-account-email-status" hidden></p>
+            </form>
+        </details>
+    </div>
+</details>
+{{end}}
+
+{{define "dashboard-account-overview"}}
+<section id="dashboard-account-overview" class="dashboard-account-overview" aria-labelledby="dashboard-account-title">
+    <header class="history-chart-heading">
+        <h1 id="dashboard-account-title">{{if eq .CurrentProvider "codex"}}Codex{{else}}Antigravity{{end}} accounts</h1>
+        <label class="dashboard-account-range" for="dashboard-account-range">Quota history
+            <select id="dashboard-account-range">
+                <option value="6h">Last 6 hours</option>
+                <option value="24h">Last 24 hours</option>
+                <option value="7d" selected>Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+            </select>
+        </label>
+    </header>
+    <div class="dashboard-account-panels">
+        {{range .SelectedDashboardAccounts}}
+        <article class="chart-section history-chart dashboard-account-panel" data-account="{{.ID}}" aria-labelledby="dashboard-account-{{.ID}}">
+            <header class="history-chart-heading">
+                <h2 class="history-chart-title" id="dashboard-account-{{.ID}}">{{if .Email}}{{.Email}}{{else}}{{.Name}}{{end}}</h2>
+                {{if eq $.CurrentProvider "codex"}}<a href="{{$.BasePath}}/?provider=codex&amp;account={{.ID}}">Open account dashboard</a>{{end}}
+            </header>
+            <p class="history-chart-note" data-account-status role="status">Loading quota readings…</p>
+            <dl class="dashboard-account-readings" data-account-readings></dl>
+            <p class="history-chart-note" data-account-history role="status">Loading history…</p>
+            <div class="history-chart-plot" data-account-plot hidden><canvas role="img" aria-label="Quota history for {{if .Email}}{{.Email}}{{else}}{{.Name}}{{end}}"></canvas></div>
+        </article>
+        {{end}}
+    </div>
+    {{if eq .CurrentProvider "antigravity"}}
+    <a class="dashboard-account-provider-link" href="{{.BasePath}}/?provider=antigravity&amp;account=provider">Provider-wide cost and history</a>
+    {{end}}
+</section>
+{{end}}

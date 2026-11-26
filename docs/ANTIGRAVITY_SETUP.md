@@ -135,6 +135,16 @@ connected to Antigravity language server port=63516 protocol=https
 
 Open http://localhost:9211 and click the **antigravity** tab.
 
+Use the account picker to show one or several accounts. The choices come from
+local quota observations with an email and central collector assignments or
+recorded account IDs. Each selected account has its own quota history. The
+picker uses the recorded or configured email when available. **Edit email
+labels** gives an account a display label for the dashboard.
+
+**Provider-wide cost and history** opens the existing provider dashboard,
+including legacy usage without a known account. To add a new monitored account,
+assign a collector and bind it to the signed-in email as described above.
+
 You'll see quota cards for each model, including:
 - Claude Sonnet
 - Gemini Pro

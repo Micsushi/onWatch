@@ -366,7 +366,7 @@ func (h *Handler) codexProfilesList(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{"profiles": profiles})
 }
 
-func (h *Handler) codexDashboardProfiles(visibility map[string]map[string]bool) []map[string]interface{} {
+func (h *Handler) codexDashboardProfiles(visibility map[string]map[string]bool, includeHidden bool) []map[string]interface{} {
 	var accounts []store.ProviderAccount
 	if h.store != nil {
 		var err error
@@ -383,10 +383,12 @@ func (h *Handler) codexDashboardProfiles(visibility map[string]map[string]bool) 
 	var profiles []map[string]interface{}
 	for _, account := range accounts {
 		key := fmt.Sprintf("codex:%d", account.ID)
-		if !h.providerDashboardVisible(key, visibility) || (account.DeletedAt != nil && !visibility[key]["dashboard"]) {
+		visible := h.providerDashboardVisible(key, visibility)
+		if (!visible && !includeHidden) || (account.DeletedAt != nil && !visibility[key]["dashboard"]) {
 			continue
 		}
-		profiles = append(profiles, map[string]interface{}{"id": account.ID, "name": account.Name})
+		profiles = append(profiles, map[string]interface{}{"id": account.ID, "name": account.Name, "hidden": !visible,
+			"email": h.codexDashboardAccountEmail(account)})
 	}
 	return profiles
 }
@@ -666,7 +668,11 @@ func (h *Handler) codexUsageAccounts() []map[string]interface{} {
 	for _, acc := range accounts {
 		usage := h.buildCodexCurrent(acc.ID)
 		usage["accountId"] = acc.ID
-		usage["accountName"] = acc.Name
+		label := h.codexDashboardAccountEmail(acc)
+		if label == "" {
+			label = acc.Name
+		}
+		usage["accountName"] = label
 		usage["id"] = acc.ID
 		usage["name"] = acc.Name
 		usages = append(usages, usage)
@@ -781,7 +787,7 @@ func NewHandler(store *store.Store, tracker *tracker.Tracker, logger *slog.Logge
 		data, _ := staticFS.ReadFile("static/" + name)
 		return fmt.Sprintf("%x", sha256.Sum256(data))
 	}}
-	dashboardTmpl, err := template.New("").Funcs(assets).ParseFS(templatesFS, "templates/layout.html", "templates/dashboard.html", "templates/subscription.html")
+	dashboardTmpl, err := template.New("").Funcs(assets).ParseFS(templatesFS, "templates/layout.html", "templates/dashboard.html", "templates/dashboard_accounts.html", "templates/subscription.html")
 	if err != nil {
 		logger.Error("failed to parse dashboard template", "error", err)
 		dashboardTmpl = template.New("empty")
@@ -2143,7 +2149,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if p == "codex" {
-				codexProfiles = h.codexDashboardProfiles(vis)
+				codexProfiles = h.codexDashboardProfiles(vis, false)
 				if len(codexProfiles) == 0 {
 					continue
 				}
@@ -2228,6 +2234,27 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		"ToolsVisible":    toolsVisible,
 		"PollIntervalSec": h.getPollIntervalSec(),
 		"BasePath":        h.getBasePath(),
+	}
+	if currentProvider == "codex" || currentProvider == "antigravity" {
+		roster := codexProfiles
+		requested := r.URL.Query()["account"]
+		if currentProvider == "codex" {
+			roster = h.codexDashboardProfiles(h.providerVisibilityMap(), true)
+		}
+		accounts := h.dashboardAccounts(currentProvider, roster)
+		selected := selectDashboardAccounts(accounts, requested)
+		if currentProvider == "codex" && len(requested) > 0 && len(selected) == 1 {
+			// Explicitly selecting a hidden account is local to this dashboard URL.
+			for _, profile := range roster {
+				if fmt.Sprint(profile["id"]) == selected[0].ID {
+					data["CodexProfiles"] = []map[string]interface{}{profile}
+					break
+				}
+			}
+		}
+		data["DashboardAccounts"] = accounts
+		data["SelectedDashboardAccounts"] = selected
+		data["AccountOverview"] = len(selected) > 1 || (currentProvider == "antigravity" && len(selected) > 0 && r.URL.Query().Get("account") != "provider")
 	}
 	if currentProvider == "subscription-value" {
 		data["Title"] = "Subscription Value"
@@ -8341,26 +8368,43 @@ func codexQuotaDisplayOrder(name string) int {
 
 // currentAntigravity returns current Antigravity quota status.
 func (h *Handler) currentAntigravity(w http.ResponseWriter, r *http.Request) {
+	if id := r.URL.Query().Get("account"); id != "" {
+		account, ok := h.antigravityDashboardAccount(id)
+		if !ok {
+			respondError(w, http.StatusNotFound, "Account unavailable")
+			return
+		}
+		latest, err := h.latestAntigravityDashboardAccount(account)
+		if err != nil {
+			h.logger.Error("failed to query Antigravity account", "error", err)
+			respondError(w, http.StatusInternalServerError, "Could not load account quota")
+			return
+		}
+		respondJSON(w, http.StatusOK, h.antigravityCurrentSnapshot(latest, false))
+		return
+	}
 	respondJSON(w, http.StatusOK, h.buildAntigravityCurrent())
 }
 
 // buildAntigravityCurrent builds the Antigravity current quota response map.
 func (h *Handler) buildAntigravityCurrent() map[string]interface{} {
+	var latest *api.AntigravitySnapshot
+	if h.store != nil {
+		var err error
+		latest, err = h.store.QueryLatestAntigravity()
+		if err != nil {
+			h.logger.Error("failed to query latest Antigravity snapshot", "error", err)
+		}
+	}
+	return h.antigravityCurrentSnapshot(latest, true)
+}
+
+func (h *Handler) antigravityCurrentSnapshot(latest *api.AntigravitySnapshot, providerWide bool) map[string]interface{} {
 	now := time.Now().UTC()
 	response := map[string]interface{}{
 		"capturedAt": now.Format(time.RFC3339),
 		"quotas":     []interface{}{},
 		"pools":      []interface{}{},
-	}
-
-	if h.store == nil {
-		return response
-	}
-
-	latest, err := h.store.QueryLatestAntigravity()
-	if err != nil {
-		h.logger.Error("failed to query latest Antigravity snapshot", "error", err)
-		return response
 	}
 
 	if latest == nil {
@@ -8378,7 +8422,9 @@ func (h *Handler) buildAntigravityCurrent() map[string]interface{} {
 	if planName == "Pro" {
 		planName = "Google AI Pro"
 	}
-	h.addSubscriptionPlan(response, "antigravity", 0, planName)
+	if providerWide {
+		h.addSubscriptionPlan(response, "antigravity", 0, planName)
+	}
 	if latest.PromptCredits > 0 || latest.MonthlyCredits > 0 {
 		response["promptCredits"] = latest.PromptCredits
 		response["monthlyCredits"] = latest.MonthlyCredits
@@ -8398,7 +8444,7 @@ func (h *Handler) buildAntigravityCurrent() map[string]interface{} {
 		quotas = make([]map[string]interface{}, 0, len(groups))
 		for _, g := range groups {
 			qMap := antigravityGroupedQuotaToMap(g, mode)
-			if h.antigravityTracker != nil {
+			if providerWide && h.antigravityTracker != nil {
 				groupRate := 0.0
 				groupProjected := 0.0
 				for _, modelID := range g.ModelIDs {
@@ -8834,7 +8880,17 @@ func (h *Handler) historyAntigravity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshots, err := h.store.QueryAntigravityRange(window.Start, window.End)
+	var snapshots []*api.AntigravitySnapshot
+	if id := r.URL.Query().Get("account"); id != "" {
+		account, ok := h.antigravityDashboardAccount(id)
+		if !ok {
+			respondError(w, http.StatusNotFound, "Account unavailable")
+			return
+		}
+		snapshots, err = h.store.QueryAntigravityAccountRange(account.Source, window.Start, window.End, -1)
+	} else {
+		snapshots, err = h.store.QueryAntigravityRange(window.Start, window.End)
+	}
 	if err != nil {
 		h.logger.Error("failed to query antigravity history", "error", err)
 		respondError(w, http.StatusInternalServerError, "Could not load Antigravity history")

@@ -145,10 +145,10 @@ onwatch codex profile refresh <profile-name>
 
 When multiple profiles exist:
 - **Profile tabs** appear in the header next to provider tabs
-- Click a profile tab to switch accounts
-- All data (quotas, charts, cycles, logging history) updates for the selected account
-- If the selected account is hidden in Settings, the Codex tab switches to a visible account on the next load
-- In **All** view, cards for each Codex account are shown with account name headers
+- Open the account picker on the Codex tab, check one or more accounts, and choose **Show selected**. One account opens its full quota dashboard. Several accounts show independent quota panels and charts for the same date range.
+- onWatch uses a captured account email when present. **Edit email labels** sets a display label for a saved account. It does not change the account's login or quota attribution.
+- Accounts hidden in Settings are unchecked by default. You can select one explicitly for the current view.
+- In **All** view, account names or email labels appear on the Codex cards. Estimated token cost covers the logged provider usage and remains provider-wide.
 - Deleted profiles are hidden from the dashboard by default
 
 ### Settings

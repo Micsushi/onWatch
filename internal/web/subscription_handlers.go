@@ -31,6 +31,9 @@ func (h *Handler) subscriptionCodexAccounts() []store.ProviderAccount {
 	for _, account := range accounts {
 		if codexAccountTelemetryEnabled(visibility, account.ID) &&
 			h.providerDashboardVisible(fmt.Sprintf("codex:%d", account.ID), dashboard) {
+			if email := h.codexDashboardAccountEmail(account); email != "" {
+				account.Name = email
+			}
 			visible = append(visible, account)
 		}
 	}

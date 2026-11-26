@@ -20,13 +20,7 @@
         {{if eq .CurrentProvider "codex"}}
         <script type="application/json" id="codex-dashboard-profiles">{{.CodexProfiles}}</script>
         {{end}}
-        <div class="codex-profile-dropdown" id="codex-profile-dropdown" style="display: none;">
-            <button class="codex-profile-trigger" id="codex-profile-trigger" aria-haspopup="listbox" aria-expanded="false">
-                <span class="codex-profile-label" id="codex-profile-label">Profile</span>
-                <svg class="codex-profile-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-            </button>
-            <ul class="codex-profile-menu" id="codex-profile-menu" role="listbox" aria-label="Select Codex profile"></ul>
-        </div>
+        {{if .DashboardAccounts}}{{template "dashboard-account-picker" .}}{{end}}
         <div class="codex-profile-dropdown" id="minimax-profile-dropdown" style="display: none;">
             <button class="codex-profile-trigger" id="minimax-profile-trigger" aria-haspopup="listbox" aria-expanded="false">
                 <span class="codex-profile-label" id="minimax-profile-label">Account</span>
@@ -101,9 +95,11 @@
     <main id="main-content" class="main-content">
         {{if eq .CurrentProvider "subscription-value"}}
         {{template "subscription-value-page" .}}
+        {{else if .AccountOverview}}
+        {{template "dashboard-account-overview" .}}
         {{else}}
         <div class="welcome-banner">
-            <h1 class="welcome-title">Dashboard</h1>
+            <h1 class="welcome-title">{{if and .DashboardAccounts (eq .CurrentProvider "antigravity")}}Antigravity provider dashboard{{else}}Dashboard{{end}}</h1>
         </div>
 
         {{if eq .CurrentProvider "both"}}
@@ -453,7 +449,7 @@
                     </svg>
                     Estimated Token Cost
                 </h3>
-                <span class="table-legend">API list-price estimate from local token logs</span>
+                <span class="table-legend">{{if or (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}}Provider-wide estimate from local token logs{{else}}API list-price estimate from local token logs{{end}}</span>
             </header>
             <div class="platform-cost-summary" id="platform-cost-summary">
                 <div class="platform-cost-metric primary">
