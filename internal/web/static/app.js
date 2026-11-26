@@ -8845,7 +8845,7 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
 }
 
 const apiIntegrationsMetricTitle = {
-  tokenPerCall: 'Tokens per call',
+  tokenPerCall: 'Tokens per request',
   requestCount: 'API requests',
   accumulatedTokens: 'Accumulated tokens',
   totalCostUsd: 'Cost (USD)',
