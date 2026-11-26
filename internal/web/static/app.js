@@ -8096,8 +8096,10 @@ function renderPlatformCostBreakdown(provider = getCurrentProvider()) {
 
 function renderPlatformCostBreakdownTable(rows, tableHead, tbody) {
   const view = State.platformCostBreakdownView === 'models' ? 'models' : 'types';
+  const hasEstimates = rows.some(row => row.estimatedSplit?.tokens > 0);
+  const hasContextMarkers = rows.some(row => row.estimatedSplit?.likelyContextTokens > 0);
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No cost telemetry yet.</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${tableHead.querySelectorAll('th').length || 2}" class="empty-state">No cost telemetry yet.</td></tr>`;
     return;
   }
   if (view === 'models') {
@@ -8108,12 +8110,17 @@ function renderPlatformCostBreakdownTable(rows, tableHead, tbody) {
       <th>Requests</th>
       <th>Total Tokens</th>
       <th>Priced Cost</th>
-      <th>Unpriced Tokens</th>
+      ${hasEstimates ? '<th>Missing-Split Estimate</th>' : ''}
+      ${hasContextMarkers ? '<th>Likely Context Tokens</th>' : ''}
+      <th>Tokens Without Cost</th>
       <th>Cost / 1M Priced Tokens</th>
       <th>Last Seen</th>
     </tr>`;
     tbody.innerHTML = rows.map(row => {
       const rate = platformCostPerMillion(row.totalCostUsd, row.totalTokens, row.unpricedTokens, row.archivedTokens);
+      const estimate = row.estimatedSplit;
+      const contextTokens = estimate?.likelyContextTokens || 0;
+      const remaining = Math.max(0, (row.unpricedTokens || 0) - contextTokens - ((estimate?.tokens || 0) - (estimate?.archivedTokens || 0)));
       return `<tr>
         <td><code>${escapeHTML(row.model || '--')}</code></td>
         <td>${escapeHTML(row.reasoningEffort || 'unknown')}</td>
@@ -8121,7 +8128,9 @@ function renderPlatformCostBreakdownTable(rows, tableHead, tbody) {
         <td>${formatNumber(Number(row.requestCount || 0))}</td>
         <td>${formatNumber(Number(row.totalTokens || 0))}</td>
         <td>${row.totalCostUsd != null ? formatCurrencyUSD(Number(row.totalCostUsd || 0)) : '--'}</td>
-        <td>${row.archivedTokens === 0 && row.unpricedTokens != null ? formatNumber(row.unpricedTokens) : '--'}</td>
+        ${hasEstimates ? `<td>${estimate?.tokens ? `${formatCurrencyUSD(estimate.costUsd)} · ${formatNumber(estimate.tokens)} tokens` : '--'}</td>` : ''}
+        ${hasContextMarkers ? `<td>${formatNumber(contextTokens)}</td>` : ''}
+        <td>${row.archivedTokens === (estimate?.archivedTokens || 0) && row.unpricedTokens != null ? formatNumber(remaining) : '--'}</td>
         <td>${formatRatePerMillion(rate)}</td>
         <td>${row.lastCapturedAt ? escapeHTML(formatDateTime(row.lastCapturedAt)) : '--'}</td>
       </tr>`;
@@ -8129,10 +8138,11 @@ function renderPlatformCostBreakdownTable(rows, tableHead, tbody) {
     return;
   }
 
-  tableHead.innerHTML = '<tr><th>Token Type</th><th>Tokens</th></tr>';
+  tableHead.innerHTML = `<tr><th>Token Type</th><th>Recorded Tokens</th>${hasEstimates ? '<th>Estimated Tokens</th>' : ''}</tr>`;
   tbody.innerHTML = Object.entries(platformTokenTypes).map(([type, label]) => `<tr>
     <td>${escapeHTML(label)}</td>
     <td>${formatNumber(rows.reduce((sum, row) => sum + Number(row[type] || 0), 0))}</td>
+    ${hasEstimates ? `<td>${formatNumber(rows.reduce((sum, row) => sum + Number(row.estimatedSplit?.[type] || 0), 0))}</td>` : ''}
   </tr>`).join('');
 }
 
@@ -8565,13 +8575,25 @@ function updatePlatformCostSummaryForRange(provider, range, rows) {
   const totals = getPlatformCostRangeTotals(provider, range, rows);
   if (!totals) return;
   const costPerMillion = platformCostPerMillion(totals.cost, totals.tokens, totals.unpricedTokens, totals.archivedTokens);
+  const estimate = totals.estimatedSplit;
   const incomplete = totals.unpricedTokens > 0 || totals.archivedTokens > 0 || totals.unpricedTokens == null;
-  const costLabel = incomplete && totals.cost != null ? 'Priced Usage Subtotal' : 'Estimated Cost';
+  const costLabel = (incomplete && totals.cost != null) || estimate?.tokens ? 'Priced Usage Subtotal' : 'Estimated Cost';
   const coverage = document.getElementById('platform-cost-coverage');
   if (coverage) {
     const messages = [];
-    if (totals.unpricedTokens > 0) messages.push(`${formatNumber(totals.unpricedTokens)} tokens have no price.`);
-    if (totals.archivedTokens > 0) {
+    if (estimate?.tokens > 0) {
+      messages.push(`Estimated total ${formatCurrencyUSD((totals.cost || 0) + estimate.costUsd)}, including ${formatCurrencyUSD(estimate.costUsd)} for ${formatNumber(estimate.tokens)} tokens logged without a breakdown.`);
+      messages.push(estimate.providerMixTokens > 0
+        ? 'The estimate uses recorded splits from the same model when available and from other models in the same integration as a fallback.'
+        : 'The estimate uses recorded splits from the same model.');
+    }
+    const contextTokens = estimate?.likelyContextTokens || 0;
+    if (contextTokens > 0) {
+      messages.push(`${formatNumber(contextTokens)} historical tokens appear to be chat-compaction context counts and carry no estimated cost.`);
+    }
+    const remaining = (totals.unpricedTokens || 0) - contextTokens - ((estimate?.tokens || 0) - (estimate?.archivedTokens || 0));
+    if (remaining > 0) messages.push(`${formatNumber(remaining)} detailed tokens still have no cost estimate.`);
+    if (totals.archivedTokens > (estimate?.archivedTokens || 0)) {
       messages.push('Archived usage has unknown pricing coverage.');
     } else if (totals.unpricedTokens == null && totals.tokens > 0) {
       messages.push('Pricing coverage is unavailable.');
@@ -8644,6 +8666,7 @@ function getPlatformCostRangeTotals(provider, range, rows) {
   if (rangeTotals) {
     return {
       cost: rangeTotals.totalCostUsd == null ? null : Number(rangeTotals.totalCostUsd),
+      estimatedSplit: rangeTotals.estimatedSplit,
       unpricedTokens: rangeTotals.unpricedTokens ?? null,
       archivedTokens: rangeTotals.archivedTokens ?? null,
       tokens: Number(rangeTotals.totalTokens || 0),

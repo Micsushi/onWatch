@@ -536,6 +536,23 @@ func (h *Handler) buildAPIIntegrationsSessions(start, end time.Time, integration
 		}
 	}
 
+	var splitEstimates map[store.APIIntegrationUsageGroup]store.APIIntegrationSplitEstimate
+	for _, row := range totals {
+		if row.UnpricedTokens > 0 || row.ArchivedTokens > 0 {
+			splitEstimates, err = h.store.EstimateAPIIntegrationMissingSplits(start, end, integration)
+			if err != nil {
+				h.logger.Error("failed to estimate missing API token splits", "error", err)
+			}
+			break
+		}
+	}
+	estimatesByIntegration := make(map[string]store.APIIntegrationSplitEstimate)
+	for group, estimate := range splitEstimates {
+		total := estimatesByIntegration[group.IntegrationName]
+		total.Add(estimate)
+		estimatesByIntegration[group.IntegrationName] = total
+	}
+
 	totalsByIntegration := make(map[string]interface{})
 	for _, row := range totals {
 		entry := map[string]interface{}{
@@ -553,6 +570,9 @@ func (h *Handler) buildAPIIntegrationsSessions(start, end time.Time, integration
 		}
 		if row.TotalCostUSD > 0 || row.PricedRequests > 0 {
 			entry["totalCostUsd"] = row.TotalCostUSD
+		}
+		if estimate, ok := estimatesByIntegration[row.IntegrationName]; ok {
+			entry["estimatedSplit"] = estimate
 		}
 		if !row.LastCapturedAt.IsZero() {
 			entry["lastCapturedAt"] = row.LastCapturedAt.UTC().Format(time.RFC3339)
@@ -583,6 +603,13 @@ func (h *Handler) buildAPIIntegrationsSessions(start, end time.Time, integration
 		}
 		if row.TotalCostUSD > 0 || row.PricedRequests > 0 {
 			entry["totalCostUsd"] = row.TotalCostUSD
+		}
+		group := store.APIIntegrationUsageGroup{
+			IntegrationName: row.IntegrationName, Provider: row.Provider, AccountName: row.AccountName,
+			Model: row.Model, ReasoningEffort: row.ReasoningEffort, Mode: row.Mode, SpeedMode: row.SpeedMode,
+		}
+		if estimate, ok := splitEstimates[group]; ok {
+			entry["estimatedSplit"] = estimate
 		}
 		modelsByIntegration[row.IntegrationName] = append(modelsByIntegration[row.IntegrationName], entry)
 	}

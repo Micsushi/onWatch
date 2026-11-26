@@ -156,6 +156,8 @@ type codexParseState struct {
 	currentMode            string
 	currentFastMode        *bool
 	currentSpeedSource     string
+	lastCodexUsageTotal    TokenCounts
+	contextCompacted       bool
 	partial                []byte
 	fileInfo               os.FileInfo
 	checkpoint             [sha256.Size]byte
@@ -218,6 +220,9 @@ func parseCodexUsageFile(path string, pricing *PricingMap, state codexParseState
 			return nil, state, fmt.Errorf("%s: %w", path, err)
 		}
 		payload := object(obj["payload"])
+		if firstString(obj, "type") == "compacted" || firstString(payload, "type") == "context_compacted" {
+			next.contextCompacted = true
+		}
 		if typ := firstString(obj, "type"); typ == "turn_context" {
 			if model := firstString(payload, "model", "model_name"); model != "" {
 				next.currentModel = model
@@ -254,11 +259,26 @@ func parseCodexUsageFile(path string, pricing *PricingMap, state codexParseState
 		usage := map[string]any(nil)
 		usageSignature := ""
 		contentSignature := ""
+		counterAdvanced := false
 		if firstString(obj, "type") == "event_msg" && firstString(payload, "type") == "token_count" {
 			info := object(payload["info"])
 			usage = object(info["last_token_usage"])
 			if len(usage) == 0 {
 				usage = object(info["total_token_usage"])
+			}
+			total := codexCounts(object(info["total_token_usage"]))
+			counts := codexCounts(usage)
+			totalOnly := counts.TotalTokens > 0 &&
+				counts.InputTokens+counts.CachedInputTokens+counts.CacheCreationTokens+counts.OutputTokens+counts.ReasoningTokens == 0
+			// After compaction, Codex can report the retained context size with unchanged usage counters.
+			isContextSize := totalOnly && next.contextCompacted && total.TotalTokens > 0 && total == next.lastCodexUsageTotal
+			counterAdvanced = totalOnly && next.lastCodexUsageTotal.TotalTokens > 0 && total.TotalTokens > next.lastCodexUsageTotal.TotalTokens
+			if total.TotalTokens > 0 {
+				next.lastCodexUsageTotal = total
+				next.contextCompacted = false
+			}
+			if isContextSize {
+				continue
 			}
 			usageSignature = codexTokenCountSignature(info, usage)
 			contentSignature = usageSignature
@@ -332,6 +352,7 @@ func parseCodexUsageFile(path string, pricing *PricingMap, state codexParseState
 			UsageSignature:      contentSignature,
 		}
 		event.QuotaTelemetry = codexQuotaTelemetry(object(payload["rate_limits"]))
+		event.CodexCounterAdvanced = counterAdvanced
 		costOptions := CodexCostOptions(event.Model, counts, speedMode == "fast")
 		event.SpeedMultiplier = costOptions.CostMultiplier
 		event.CostUSD = pricing.CalculateCostAt(event.Model, event.Timestamp, counts, costOptions)

@@ -31,6 +31,7 @@ type CostOptions struct {
 
 type UsageEvent struct {
 	QuotaTelemetry        map[string]any
+	CodexCounterAdvanced  bool
 	Timestamp             time.Time
 	Source                string
 	Provider              string
@@ -118,6 +119,9 @@ func (e UsageEvent) ToAPIIntegrationLine() ([]byte, error) {
 
 	if len(e.QuotaTelemetry) > 0 {
 		metadata["quota_telemetry"] = e.QuotaTelemetry
+	}
+	if e.CodexCounterAdvanced {
+		metadata["codex_usage_counter_advanced"] = true
 	}
 	wire := struct {
 		TS               string         `json:"ts"`

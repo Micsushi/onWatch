@@ -65,7 +65,11 @@ Retention notes:
 
 ### Historical Pricing
 
-onWatch picks the published rate in effect at the event timestamp. Importing a log later uses the same rate it would have used on the day of the event. Updating a rate table leaves stored cost values intact. The dashboard shows a priced subtotal and counts tokens without a price. An archived hour preserves its total cost but may lack enough detail to reconstruct pricing coverage.
+onWatch picks the published rate in effect at the event timestamp. Importing a log later uses the same rate it would have used on the day of the event. Updating a rate table leaves stored cost values intact.
+
+When a record contains only a token total, onWatch estimates the split from other records for the same model in the same or an adjacent UTC month. If those records are unavailable, it uses the split from the same integration over that time. It applies the rate for the recorded model on the original usage date. The dashboard shows this estimate alongside the priced subtotal, with estimated amounts by model and token type. Usage with no matching model rate or reference split remains without an estimate. Archived hours can be estimated when the whole hour is missing its breakdown. Mixed archived hours retain their stored cost and have unknown pricing coverage.
+
+Codex can report the size of the retained chat context after compaction while its cumulative usage counters stay the same. The collector skips these context markers. Older Codex records with only a total and quota metadata are shown as likely context markers and excluded from the cost estimate. The original historical token counts remain available.
 
 The maintenance command previews missing prices. Add `--correct-legacy` to also check known legacy Codex rate errors. It matches the original collector calculation before replacing a stored Codex estimate. Source-reported costs and hourly aggregates are preserved. After taking a verified backup, use `--apply` to apply the reviewed changes in one transaction.
 

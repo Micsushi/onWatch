@@ -337,6 +337,33 @@ func TestCodexCountsSeparatesCacheWritesFromUncachedInput(t *testing.T) {
 	}
 }
 
+func TestParseCodexUsageSkipsContextSizeAfterCompaction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	first := `{"type":"turn_context","payload":{"model":"gpt-6.2-astra"}}
+{"timestamp":"2026-11-23T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105},"total_token_usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105}}}}
+{"type":"compacted"}
+{"type":"turn_context","payload":{"model":"gpt-6.2-sol"}}
+`
+	if err := os.WriteFile(path, []byte(first), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pricing := testPricing(t)
+	events, state, err := parseCodexUsageFileIncremental(path, pricing, codexParseState{})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("first batch = %v, %v", events, err)
+	}
+	second := `{"timestamp":"2026-11-23T10:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":30},"total_token_usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105}}}}
+{"timestamp":"2026-11-23T10:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":40},"total_token_usage":{"input_tokens":100,"output_tokens":5,"total_tokens":145}}}}
+`
+	if err := os.WriteFile(path, []byte(first+second), 0600); err != nil {
+		t.Fatal(err)
+	}
+	events, _, err = parseCodexUsageFileIncremental(path, pricing, state)
+	if err != nil || len(events) != 1 || events[0].TotalTokens != 40 || events[0].Model != "gpt-6.2-sol" || !events[0].CodexCounterAdvanced {
+		t.Fatalf("second batch = %v, %v", events, err)
+	}
+}
+
 func TestParseCodexUsageFileParsesCompleteFinalRecordWithoutNewline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout-no-final-newline.jsonl")
 	body := `{"type":"turn_context","timestamp":"2026-05-25T12:00:00Z","payload":{"model":"gpt-5.5","effort":"medium"}}` + "\n" +

@@ -3,12 +3,57 @@ package store
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
 
 	apiintegrations "github.com/onllm-dev/onwatch/v2/internal/api_integrations"
 )
+
+func TestStore_EstimateAPIIntegrationMissingSplitsUsesHistoricalRates(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, line := range []string{
+		`{"ts":"2026-11-30T22:00:00Z","integration":"Gemini CLI","provider":"gemini","model":"gemini-4-carbon","total_tokens":100,"metadata":{"input_tokens":100},"cost_usd":0.0002}`,
+		`{"ts":"2026-11-30T23:00:00Z","integration":"Gemini CLI","provider":"gemini","model":"gemini-4-carbon","total_tokens":100}`,
+		`{"ts":"2026-12-01T00:00:00Z","integration":"Gemini CLI","provider":"gemini","model":"gemini-4-carbon","total_tokens":100}`,
+		`{"ts":"2026-12-01T00:00:00Z","integration":"Gemini CLI","provider":"gemini","model":"unknown-fixture","total_tokens":100}`,
+		`{"ts":"2026-12-01T00:00:00Z","integration":"Codex CLI","provider":"openai","model":"gpt-6.2-sol","total_tokens":200,"metadata":{"quota_telemetry":{"plan_type":"pro"}}}`,
+	} {
+		insertAPIIntegrationUsageEventForTest(t, s, line, "fixture.jsonl")
+	}
+	start := time.Date(2026, 11, 30, 22, 30, 0, 0, time.UTC)
+	end := start.Add(3 * time.Hour)
+	results, err := s.EstimateAPIIntegrationMissingSplits(start, end, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("estimated groups = %v", results)
+	}
+	for group, row := range results {
+		switch group.Model {
+		case "gemini-4-carbon":
+			if row.Tokens != 200 || row.InputTokens != 200 || math.Abs(row.CostUSD-0.0006) > 1e-12 || row.ProviderMixTokens != 0 {
+				t.Fatalf("dated estimate = %+v", row)
+			}
+		case "gpt-6.2-sol":
+			if row.LikelyContextTokens != 200 || row.Tokens != 0 || row.CostUSD != 0 {
+				t.Fatalf("context marker = %+v", row)
+			}
+		default:
+			t.Fatalf("unexpected model %q", group.Model)
+		}
+	}
+	totals, err := s.QueryAPIIntegrationUsageTotals(start, end, "Gemini CLI")
+	if err != nil || len(totals) != 1 || totals[0].TotalCostUSD != 0 || totals[0].UnpricedTokens != 300 {
+		t.Fatalf("stored totals changed: %+v, %v", totals, err)
+	}
+}
 
 func insertAPIIntegrationUsageEventForTest(t *testing.T, s *Store, line, sourcePath string) {
 	t.Helper()
