@@ -1140,7 +1140,9 @@ function initDashboardAccountOverview(overview) {
     const datasets = applyGraphModeToDatasets(source, result.range, State.graphMode, result.start, result.end)
       .filter(dataset => datasetsHaveFiniteValue([dataset]));
     for (const dataset of datasets) {
-      if (!periodMode && dataset.data.filter(point => point.y != null).length <= 3) dataset.pointRadius = 3;
+      if (!periodMode && dataset.data.filter(point => point.y != null && !point.lineExtension).length <= 3) {
+        dataset.pointRadius = dataset.data.map(point => point.lineExtension ? 0 : 3);
+      }
     }
     plot.hidden = !datasets.length || typeof Chart === 'undefined';
     status.textContent = !datasets.length
@@ -1149,7 +1151,7 @@ function initDashboardAccountOverview(overview) {
         : 'No quota observations in this range.')
       : typeof Chart === 'undefined' ? 'Chart unavailable.'
       : datasets.some(dataset => dataset.data.some(point => point.y == null))
-        ? (periodMode ? 'Blank periods lack enough readings to calculate usage change.' : 'Blank spans mean no readings were collected.')
+        ? (periodMode ? 'Dashed links cross periods with insufficient readings.' : 'Dashed links cross gaps in the readings.')
         : '';
     status.hidden = !status.textContent;
     status.classList.toggle('sr-only', !plot.hidden);
@@ -2566,7 +2568,7 @@ async function loadQuotaModalChart(provider, readSeries) {
           pointRadius: observed.length === 1 ? 3 : processed.pointRadii,
           pointHoverRadius: 5,
           fill: false,
-          spanGaps: false,
+          spanGaps: true,
           segment: getSegmentStyle(processed.gapSegments, color),
         }],
       },
@@ -5676,6 +5678,9 @@ function graphBucketRange(
 }
 
 function formatPeriodTooltipTitle(point) {
+  if (point?.raw?.lineExtension) {
+    return `${formatDateTime(point.raw.x)} · ${point.raw.lineExtension}`;
+  }
   if (!point || !point.raw || !point.raw.periodStart || !point.raw.periodEnd) {
     return point?.raw?.x != null ? formatDateTime(point.raw.x) : (point?.label || '');
   }
@@ -5801,8 +5806,31 @@ function graphLineStyle(periodMode) {
     borderWidth: 2,
     pointRadius: 2,
     pointHoverRadius: 4,
-    spanGaps: false,
+    spanGaps: true,
   };
+}
+
+function extendHistoryLine(points, min, max, cumulativeTotal = false) {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min >= max) return points;
+  const observed = points.filter(point => point.y != null && +point.x >= min && +point.x <= max);
+  if (observed.length === 0) return points;
+  const first = observed[0];
+  const last = observed.at(-1);
+  const extension = (x, y, lineExtension) => ({ x: new Date(x), y, lineExtension });
+  const line = points.filter(point => +point.x >= min && +point.x <= max);
+  if (cumulativeTotal) {
+    if (+first.x > min) {
+      const firstActivity = Math.max(min, Math.min(+first.x, +(first.observedFrom || first.x)));
+      line.unshift(extension(min, 0, 'Start of range'));
+      if (firstActivity > min) {
+        line.splice(line.indexOf(first), 0, extension(firstActivity, 0, 'Before first recorded activity'));
+      }
+    }
+  } else if (+first.x > min && observed.every(point => point.y === first.y)) {
+    line.unshift(extension(min, first.y, 'First reading shown earlier'));
+  }
+  if (+last.x < max) line.push(extension(max, last.y, 'Last reading carried forward'));
+  return line;
 }
 
 function applyGraphModeToDatasets(
@@ -5814,19 +5842,29 @@ function applyGraphModeToDatasets(
 ) {
   const graphMode = normalizeGraphMode(mode);
   return (datasets || []).map((dataset) => {
+    const color = dataset.borderColor || dataset.backgroundColor || '#14B8A6';
     if (!isPeriodGraphMode(graphMode)) {
+      const raw = dataset.data || [];
+      const cumulativeTotal = dataset._barStrategy === 'sum';
+      const data = range === 'all' ? raw
+        : extendHistoryLine(raw, Date.parse(windowStart), Date.parse(windowEnd), cumulativeTotal);
+      const originalRadii = Array.isArray(dataset.pointRadius)
+        ? new Map(raw.map((point, index) => [point, dataset.pointRadius[index]]))
+        : null;
       return {
         ...dataset,
         type: 'line',
-        data: dataset.data || [],
+        data,
         ...graphLineStyle(false),
-        fill: dataset.fill !== undefined ? dataset.fill : true,
+        fill: (dataset.fill !== false) && !data.some(point => point.y == null || point.lineExtension),
         tension: 0,
-        pointRadius: dataset.pointRadius !== undefined ? dataset.pointRadius : 2,
+        pointRadius: data.map(point => point.lineExtension ? 0
+          : (originalRadii ? originalRadii.get(point) : dataset.pointRadius) ?? 2),
         pointHoverRadius: dataset.pointHoverRadius !== undefined ? dataset.pointHoverRadius : 4,
+        segment: cumulativeTotal ? undefined
+          : data === raw && dataset.segment ? dataset.segment : getSegmentStyle(null, color, data),
       };
     }
-    const color = dataset.borderColor || dataset.backgroundColor || '#14B8A6';
     const bucketData = aggregateDatasetForBuckets(dataset, range, graphMode, windowStart, windowEnd);
     return {
       ...dataset,
@@ -5837,7 +5875,7 @@ function applyGraphModeToDatasets(
       backgroundColor: dataset.backgroundColor || color,
       pointRadius: bucketData.map(point => point.resetObserved ? 5 : 2),
       pointBorderWidth: bucketData.map(point => point.resetObserved ? 2 : 1),
-      segment: undefined,
+      segment: getSegmentStyle(null, color),
     };
   });
 }
@@ -6033,7 +6071,7 @@ function renderUsageCoverageNote(datasets, mode = State.graphMode) {
     .some(point => point?.y === null));
   note.hidden = !hasCollectionGap;
   note.textContent = hasCollectionGap
-    ? (isPeriodGraphMode(mode) ? 'Blank periods lack enough readings to calculate usage change.' : 'Blank spans mean no samples were collected.')
+    ? (isPeriodGraphMode(mode) ? 'Dashed links cross periods with insufficient readings.' : 'Dashed links cross gaps in the readings.')
     : '';
 }
 
@@ -6042,7 +6080,7 @@ function renderUsageAccessibleSummary(datasets, range, mode = State.graphMode) {
   if (!summary) return;
   const series = (datasets || []).map((dataset) => {
     const points = (dataset.data || [])
-      .filter(point => point?.y != null && Number.isFinite(Number(point.y)))
+      .filter(point => point?.y != null && !point.lineExtension && Number.isFinite(Number(point.y)))
       .map(point => ({
         value: Number(point.y),
         time: new Date(point.periodStart || point.x),
@@ -8218,8 +8256,8 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     const last = plottedPoints.findLastIndex(point => point.y != null);
     gapNote.hidden = !plottedPoints.some((point, index) => index > first && index < last && point.y == null);
     if (!gapNote.hidden) {
-      gapNote.textContent = showTokens ? 'Blank periods have no recorded token usage.'
-        : 'Blank periods have no recorded priced cost.';
+      gapNote.textContent = showTokens ? 'Dashed links cross periods without recorded tokens.'
+        : 'Dashed links cross periods without recorded priced cost.';
     }
   }
   const metricColor = showTokens ? '#38BDF8' : '#14B8A6';
@@ -8240,14 +8278,18 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     timeZone: getEffectiveTimezone(),
     theme: document.documentElement.getAttribute('data-theme') || 'dark',
   };
+  const linePoints = !periodMode && costTimeBounds
+    ? extendHistoryLine(plottedPoints, costTimeBounds.min, costTimeBounds.max, true)
+    : plottedPoints;
   const chartData = {
     datasets: [{
       label: metric,
-      data: plottedPoints,
+      data: linePoints,
       borderColor: metricColor,
       backgroundColor: metricColor,
       ...graphLineStyle(periodMode),
-      spanGaps: !periodMode,
+      segment: periodMode ? getSegmentStyle(null, metricColor) : undefined,
+      pointRadius: linePoints.map(point => point.lineExtension ? 0 : 2),
       fill: false,
     }],
   };
@@ -8344,8 +8386,9 @@ function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || 
         tokens += Number(row.totalTokens || 0);
       }
       const x = new Date(row.lastCapturedAt || row.capturedAt);
-      costPoints.push({ x, y: cost });
-      tokenPoints.push({ x, y: tokens });
+      const observedFrom = new Date(row.firstCapturedAt || row.lastCapturedAt || row.capturedAt);
+      costPoints.push({ x, y: cost, observedFrom });
+      tokenPoints.push({ x, y: tokens, observedFrom });
     });
   const costSeries = downsamplePointSeriesForCumulative(
     costPoints,
@@ -8885,7 +8928,11 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
         y: period[metric],
         weight: metric === 'tokenPerCall' ? requestCount : 1,
       });
-      return { x: new Date(row.lastCapturedAt || row.capturedAt), y: cumulative[metric] };
+      return {
+        x: new Date(row.lastCapturedAt || row.capturedAt),
+        y: cumulative[metric],
+        observedFrom: new Date(row.firstCapturedAt || row.lastCapturedAt || row.capturedAt),
+      };
     });
     const processed = {
       data: rawData,
@@ -9583,18 +9630,20 @@ function processDataWithGaps(dataPoints, range = '6h') {
   return { data, gapSegments, pointRadii };
 }
 
-// Retained for dataset compatibility; null gap points prevent these segments from rendering.
-function getSegmentStyle(gapSegments, baseColor) {
+function getSegmentStyle(gapSegments, baseColor, points = []) {
+  const uncertain = ({ p0, p1, p0DataIndex, p1DataIndex }) =>
+    p0.skip || p1.skip || p1DataIndex > p0DataIndex + 1 || gapSegments?.has(p0DataIndex)
+    || points[p0DataIndex]?.lineExtension || points[p1DataIndex]?.lineExtension;
   let fadedColor = baseColor;
   if (baseColor.startsWith('#')) {
     const r = parseInt(baseColor.slice(1, 3), 16);
     const g = parseInt(baseColor.slice(3, 5), 16);
     const b = parseInt(baseColor.slice(5, 7), 16);
-    fadedColor = `rgba(${r}, ${g}, ${b}, 0.35)`;
+    fadedColor = `rgba(${r}, ${g}, ${b}, 0.72)`;
   }
   return {
-    borderColor: ctx => gapSegments.has(ctx.p0DataIndex) ? fadedColor : baseColor,
-    borderDash: ctx => gapSegments.has(ctx.p0DataIndex) ? [5, 3] : []
+    borderColor: ctx => uncertain(ctx) ? fadedColor : baseColor,
+    borderDash: ctx => uncertain(ctx) ? [5, 3] : []
   };
 }
 

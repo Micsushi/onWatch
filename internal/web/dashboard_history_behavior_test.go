@@ -565,13 +565,13 @@ func TestUsageAndCostGraphsShareLineRendering(t *testing.T) {
 const cumulative = graphLineStyle(false);
 if (!cumulative.fill || cumulative.tension !== 0 || cumulative.borderWidth !== 2
     || cumulative.pointRadius !== 2 || cumulative.pointHoverRadius !== 4
-    || cumulative.spanGaps !== false) {
+    || cumulative.spanGaps !== true) {
   throw new Error('cumulative usage and cost graphs must share the same line rendering');
 }
 const period = graphLineStyle(true);
 if (period.fill || period.tension !== 0 || period.borderWidth !== 2
     || period.pointRadius !== 2 || period.pointHoverRadius !== 4
-    || period.spanGaps !== false) {
+    || period.spanGaps !== true) {
   throw new Error('period usage and cost graphs must share the same line rendering');
 }
 `, style)
@@ -625,10 +625,10 @@ if (short.fill !== true || short.pointRadius.join(',') !== '2,2') {
 
 	runDashboardNodeTest(t, script)
 	if !strings.Contains(template, `id="usage-chart-coverage-note"`) {
-		t.Fatal("usage graph must provide an inline explanation for blank coverage")
+		t.Fatal("usage graph must explain how it represents missing readings")
 	}
-	if !strings.Contains(source, "Blank spans mean no samples were collected.") {
-		t.Fatal("usage graph must explain blank collection spans")
+	if !strings.Contains(source, "Dashed links cross gaps in the readings.") {
+		t.Fatal("usage graph must explain dashed links across missing readings")
 	}
 	if !strings.Contains(styles, ".chart-coverage-note") {
 		t.Fatal("usage graph coverage explanation must use the dashboard visual system")
@@ -1012,13 +1012,9 @@ if (!postReset || postReset.y !== 5) {
 	runDashboardNodeTest(t, script)
 }
 
-func TestQuotaGraphLeavesCollectionGapsBlank(t *testing.T) {
+func TestQuotaGraphPreservesMissingReadings(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
-	lineStyle := dashboardJavaScriptBetween(t, source, "function graphLineStyle(", "function applyGraphModeToDatasets(")
-	if !strings.Contains(lineStyle, "spanGaps: false") {
-		t.Fatal("the common quota chart style must leave collection gaps visible")
-	}
 	gapProcessing := dashboardJavaScriptBetween(t, source, "function processDataWithGaps(", "function getSegmentStyle(")
 
 	script := fmt.Sprintf(`
@@ -1033,7 +1029,7 @@ const afterGap = { x: new Date('2026-08-29T20:25:45.041Z'), y: 35 };
 for (const range of ['1h', '6h', '24h', '7d', '30d', 'all', 'custom']) {
   const rangeResult = processDataWithGaps([beforeGap, afterGap], range);
   if (rangeResult.data.length !== 3 || rangeResult.data[1].y !== null) {
-    throw new Error(range + ' must leave the observed collection gap blank');
+    throw new Error(range + ' must preserve the missing reading as null');
   }
 }
 const result = processDataWithGaps([beforeGap, afterGap], '7d');
@@ -1047,7 +1043,7 @@ const breakPoint = result.data[1];
 if (breakPoint.y !== null
     || breakPoint.x.getTime() <= beforeGap.x.getTime()
     || breakPoint.x.getTime() >= afterGap.x.getTime()) {
-  throw new Error('the inserted point must break the line inside the unobserved interval');
+  throw new Error('the inserted point must mark the unobserved interval');
 }
 if (result.pointRadii.join(',') !== '2,0,2') {
   throw new Error('the gap marker must stay invisible while observed samples stay visible');
@@ -1071,7 +1067,7 @@ const missingBucket = processDataWithGaps([
   { x: new Date(beforeGap.x.getTime() + (3.2 * 60 * 60 * 1000)), y: 1 },
 ], '7d');
 if (missingBucket.data.length !== 3 || missingBucket.data[1].y !== null) {
-  throw new Error('a gap beyond the selected bucket width must remain blank');
+  throw new Error('a gap beyond the selected bucket width must retain its missing marker');
 }
 `, gapProcessing)
 
