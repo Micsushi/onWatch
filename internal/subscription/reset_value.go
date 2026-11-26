@@ -70,7 +70,7 @@ func weeklyResetValue(cycles []Cycle) []WeeklyValue {
 				fraction = min(remaining, delta) / delta
 				remaining = max(0, remaining-delta)
 			}
-			if !after.matched {
+			if !after.Matched {
 				value.SkippedIntervals++
 				continue
 			}

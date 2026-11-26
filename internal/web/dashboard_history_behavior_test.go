@@ -73,7 +73,7 @@ const apiIntegrationsChartColorFallback=[{border:'#fff',bg:'#000'}];
 %s
 %s
 const rows=[{capturedAt:'2026-09-01T00:03:00Z',totalCostUsd:1,totalTokens:100,requestCount:1},{capturedAt:'2026-09-01T00:47:00Z',totalCostUsd:2,totalTokens:900,requestCount:9}];
-const points=buildPlatformCumulativeSeries(rows,'custom').cost;
+const points=buildPlatformCumulativeSeries(rows,'custom').cost.filter(point=>point.y!=null);
 assert.deepEqual(points.map(p=>p.x.toISOString()),rows.map(r=>new Date(r.capturedAt).toISOString()));
 assert.deepEqual(points.map(p=>p.y),[1,3]);
 const costs=buildAPIIntegrationsChartDatasets({Tool:rows},'custom','totalCostUsd')[0];
@@ -97,6 +97,8 @@ const modal={hidden:false},status={setAttribute(){}};
 const canvas={isConnected:true,parentElement:{querySelector(){return status}},getContext(){return this}};
 const document={getElementById(id){return id==='detail-modal'?modal:canvas}};
 function getThemeColors(){return {}}
+function chartTimeTick(value){return value}
+function computeYMax(){return 100}
 function historyRequestQuery(){return 'range=7d'}
 function codexAccountParam(){return ''}
 function processCappedDataWithGaps(data){return {data,pointRadii:[],gapSegments:new Set()}}
@@ -416,6 +418,29 @@ if (costSeries[0].x.getTime() >= Date.parse('2026-06-06T00:00:00.000Z')) {
 	runDashboardNodeTest(t, script)
 }
 
+func TestPeriodCostAndTokenBucketsPreservePricingCoverage(t *testing.T) {
+	t.Parallel()
+	source := dashboardAppSource(t)
+	buckets := dashboardJavaScriptBetween(t, source, "const graphBucketTargets =", "function formatPeriodTooltipTitle(")
+	build := dashboardJavaScriptBetween(t, source, "function buildPlatformBucketSeries(", "function platformCostRangeStartTime(")
+	runDashboardNodeTest(t, fmt.Sprintf(`
+const assert = require('node:assert/strict');
+const State = {
+  platformCostWindowStart: '2026-08-29T00:00:00.000Z',
+  platformCostWindowEnd: '2026-08-29T01:00:00.000Z',
+};
+function normalizeGraphMode(value) { return value || 'bucket'; }
+%s
+%s
+const priced = { capturedAt: '2026-08-29T00:05:00.000Z', totalCostUsd: 2, totalTokens: 100 };
+const unpriced = { capturedAt: '2026-08-29T00:45:00.000Z', totalCostUsd: null, totalTokens: 200 };
+const recorded = buildPlatformBucketSeries([priced, unpriced], 'custom', 'bucket');
+assert.deepEqual(recorded.cost.filter(point => point.y != null).map(point => point.y), [2]);
+assert.deepEqual(recorded.tokens.filter(point => point.y != null).map(point => point.y), [100, 200]);
+assert.ok(recorded.tokens.some(point => point.y == null), 'unobserved time must stay blank');
+`, buckets, build))
+}
+
 func TestCustomCumulativeCostPointsStayInsideSelectedWindow(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
@@ -506,13 +531,13 @@ func TestUsageAndCostGraphsShareLineRendering(t *testing.T) {
 	script := fmt.Sprintf(`
 %s
 const cumulative = graphLineStyle(false);
-if (!cumulative.fill || cumulative.tension !== 0.4 || cumulative.borderWidth !== 2
+if (!cumulative.fill || cumulative.tension !== 0 || cumulative.borderWidth !== 2
     || cumulative.pointRadius !== 2 || cumulative.pointHoverRadius !== 4
     || cumulative.spanGaps !== false) {
   throw new Error('cumulative usage and cost graphs must share the same line rendering');
 }
 const period = graphLineStyle(true);
-if (period.fill || period.tension !== 0.25 || period.borderWidth !== 2
+if (period.fill || period.tension !== 0 || period.borderWidth !== 2
     || period.pointRadius !== 2 || period.pointHoverRadius !== 4
     || period.spanGaps !== false) {
   throw new Error('period usage and cost graphs must share the same line rendering');
@@ -607,8 +632,8 @@ const observedNonNullTimes = new Set(observations.filter(point => point.y != nul
 if (result.data.some(point => point.y != null && !observedNonNullTimes.has(point.x.toISOString()))) {
   throw new Error('capped quota series must not create synthetic observation timestamps');
 }
-if (!times.includes(observations[2].x.toISOString())) {
-  throw new Error('capped quota series must preserve the last observation in each occupied bucket');
+if (times.length !== observations.length || observations.some(point => !times.includes(point.x.toISOString()))) {
+  throw new Error('quota details must preserve every observation returned by the history endpoint, including intra-bucket peaks');
 }
 if (!result.data.some(point => point.y === null)) {
   throw new Error('capped quota series must retain an explicit unknown observation');
@@ -721,6 +746,7 @@ func TestCustomPlatformCostChartPinsSelectedXAxis(t *testing.T) {
 		"const costPeriodBounds = periodMode && bucketed.cost.length > 0",
 		"min: costTimeBounds?.min ?? costPeriodBounds?.min,",
 		"max: costTimeBounds?.max ?? costPeriodBounds?.max,",
+		"xBounds: costTimeBounds || costPeriodBounds,",
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("platform cost chart must preserve exact selected bounds in both modes: missing %q", expected)
@@ -1088,7 +1114,7 @@ if (formatChartAxisNumber(2500) !== '2,500') {
 `, formatters)
 
 	runDashboardNodeTest(t, script)
-	if !strings.Contains(source, "callback: value => formatChartAxisNumber(Number(value || 0))") {
+	if !strings.Contains(source, "const formatAxis = showTokens ? formatChartAxisNumber : formatCurrencyUSD;") {
 		t.Fatal("platform token cost axis must use compact labels")
 	}
 }
@@ -1164,6 +1190,7 @@ const base = {
   mode: 'cumulative',
   data: [{ x: 1, y: 2 }],
   scale: 100,
+  xBounds: { min: 0, max: 10 },
   theme: 'dark',
   empty: false,
 };
@@ -1175,6 +1202,7 @@ for (const [key, value] of [
   ['mode', 'bucket'],
   ['data', [{ x: 1, y: 3 }]],
   ['scale', 200],
+  ['xBounds', { min: 0, max: 15 }],
   ['theme', 'light'],
   ['empty', true],
 ]) {
@@ -1182,7 +1210,7 @@ for (const [key, value] of [
   updateChartWhenChanged('testSignature', changed, () => { updates += 1; });
   updateChartWhenChanged('testSignature', base, () => { updates += 1; });
 }
-if (updates !== 13) throw new Error('every material render-state change must update');
+if (updates !== 15) throw new Error('every material render-state change must update');
 `, guard)
 	runDashboardNodeTest(t, script)
 }

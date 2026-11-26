@@ -3,11 +3,12 @@ package web
 import (
 	"crypto/sha256"
 	"fmt"
-	"github.com/onllm-dev/onwatch/v2/internal/store"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/onllm-dev/onwatch/v2/internal/store"
 )
 
 func TestSubscriptionScriptInvalidatesOldImmutableCache(t *testing.T) {
@@ -57,7 +58,7 @@ function node(id){if(!nodes.has(id))nodes.set(id,{value:'',innerHTML:'',textCont
 let charts=0,destroyed=0,pending=[],lastChartConfig;
 const storage=new Map(),localStorage={getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)};
 node('subscription-days').value='30';
-const cycle={start:'2026-09-01',end:'2026-09-02',quota:'weekly',complete:true,startUsed:0,endUsed:100,cost:10,per100:10,x1:1,points:[{used:0,cost:0},{used:100,cost:10}]};
+const cycle={start:'2026-09-01',end:'2026-09-02',quota:'weekly',complete:false,startUsed:0,endUsed:100,cost:13,per100:null,points:[{used:0,cost:0,matched:false},{used:25,cost:4,matched:true},{used:50,cost:7,matched:false},{used:100,cost:13,matched:true}]};
 const payload={start:cycle.start,end:cycle.end,basis:'test',report:{requests:1,unknownRequests:0,cost:10,valueMultiple:1,cycles:[cycle],models:[],devices:[],warnings:[],profile:{name:'Saved',monthlyUsd:0,multiplier:1}}};
 const ctx={document:{getElementById:node,documentElement:{getAttribute(){return 'dark'}},activeElement:null},location:{search:''},localStorage,escapeHTML:String,Intl,URLSearchParams,AbortController,API_BASE:'',MutationObserver:class{observe(){}},getComputedStyle(){return {getPropertyValue(){return '#fff'}}},setInterval(){},Chart:class{constructor(_,config){charts++;lastChartConfig=config}destroy(){destroyed++}},authFetch:async()=>({ok:true,json:()=>new Promise(resolve=>pending.push(resolve))})};
 vm.runInNewContext(fs.readFileSync('static/subscription.js','utf8'),ctx);
@@ -66,7 +67,9 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
  await flush();pending.shift()(payload);await flush();
  assert.equal(charts,1);assert.equal(node('subscription-price').value,0);
  assert.equal(lastChartConfig.data.datasets[0].showLine,true);
- assert(storage.get('onwatch-subscription-value-cache-v1').includes('Saved'));
+ assert.equal(lastChartConfig.data.datasets[0].spanGaps,false);
+ assert.deepEqual(Array.from(lastChartConfig.data.datasets[0].data,p=>p.y),[0,4,null,10]);
+ assert(storage.get('onwatch-subscription-value-cache-v2').includes('Saved'));
  node('subscription-plan-name').value='Unsaved';node('subscription-plan-form').listeners.input();
  node('subscription-refresh').listeners.click();await flush();pending.shift()(payload);await flush();
  assert.equal(node('subscription-plan-name').value,'Unsaved');assert.equal(charts,1);assert.equal(destroyed,0);
@@ -75,6 +78,11 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
  pending.shift()({...payload,report:{...payload.report,cost:77}});await flush();
  old({...payload,report:{...payload.report,cost:999}});await flush();
  assert(node('subscription-summary').innerHTML.includes('77.00'));assert(!node('subscription-summary').innerHTML.includes('999.00'));
+ delete ctx.Chart;
+ node('subscription-refresh').listeners.click();await flush();pending.shift()(payload);await flush();
+ assert(node('subscription-chart-empty').textContent.includes('Chart unavailable'));
+ assert(node('subscription-summary').innerHTML.includes('10.00'));
+ assert(!node('subscription-refresh').disabled);
 })().catch(e=>{console.error(e);process.exitCode=1});
 `)
 }
@@ -86,7 +94,7 @@ func TestSubscriptionRestoresSavedGraphBeforeRefreshing(t *testing.T) {
 	}
 	text := string(source)
 	for _, marker := range []string{
-		"const CACHE_KEY='onwatch-subscription-value-cache-v1';",
+		"const CACHE_KEY='onwatch-subscription-value-cache-v2';",
 		"const saved=readCache();",
 		"if(saved){data=saved;render();el('status').textContent+=' Refreshing in the background.';}",
 		"data=next;writeCache(next);render(!!profile && !preserveDraft);",

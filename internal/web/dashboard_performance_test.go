@@ -194,20 +194,17 @@ func TestPlatformCostRequestsAreSharedWithoutLoadingUnselectedRanges(t *testing.
 	}
 }
 
-func TestPlatformCostChartAlwaysConnectsSamples(t *testing.T) {
+func TestPlatformCostChartUsesOneUnitAtATime(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
-	start := strings.Index(source, "function renderPlatformCostChart(")
-	end := strings.Index(source[start:], "\nfunction bindPlatformCostRangeControls")
-	if start < 0 || end < 0 {
-		t.Fatal("could not isolate platform cost chart")
+	chart := dashboardJavaScriptBetween(t, source, "function renderPlatformCostChart(", "function bindPlatformCostRangeControls(")
+	for _, want := range []string{"const plottedPoints = showTokens", "datasets: [{", "'Priced cost (USD)'"} {
+		if !strings.Contains(chart, want) {
+			t.Fatalf("single-unit cost history chart missing %q", want)
+		}
 	}
-	chart := source[start : start+end]
-	if strings.Count(chart, "showLine: true,") != 2 {
-		t.Fatal("cost and token samples are not both connected by visible lines")
-	}
-	if strings.Contains(chart, "showLine: periodMode") {
-		t.Fatal("cumulative cost mode still disables chart lines")
+	if strings.Contains(chart, "yAxisID:") || strings.Contains(chart, "y1:") {
+		t.Fatal("cost and token history must use a single axis for the selected unit")
 	}
 }
 
@@ -524,7 +521,7 @@ func TestDashboardRefreshStatusDoesNotResizeTheStickyHeader(t *testing.T) {
 	}
 }
 
-func TestPlatformCostChartControlsStackOnNarrowScreens(t *testing.T) {
+func TestHistoryChartControlsAdaptToNarrowScreens(t *testing.T) {
 	t.Parallel()
 	styles := dashboardStyleSource(t)
 	mediaStart := strings.Index(styles, "@media (max-width: 768px)")
@@ -537,12 +534,13 @@ func TestPlatformCostChartControlsStackOnNarrowScreens(t *testing.T) {
 	}
 	narrowStyles := styles[mediaStart : mediaStart+mediaEnd]
 	for _, marker := range []string{
-		".platform-cost-chart-header { flex-direction: column; align-items: stretch; }",
-		".platform-cost-chart-controls { width: 100%; align-items: stretch; justify-content: flex-start; }",
-		".platform-cost-chart-subtitle { text-align: left; min-height: 0; }",
+		".history-chart-controls { align-items: stretch; }",
+		".history-chart-controls > * { flex: 1 1 auto; }",
+		".graph-history-presets { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }",
+		".graph-history-dates input { min-height: 44px; }",
 	} {
 		if !strings.Contains(narrowStyles, marker) {
-			t.Errorf("platform cost chart controls can overflow a narrow card: missing %q", marker)
+			t.Errorf("history chart controls can overflow a narrow region: missing %q", marker)
 		}
 	}
 }

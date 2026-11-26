@@ -4,7 +4,7 @@
 <div class="subscription-dashboard" id="subscription-value" data-provider="{{.SubscriptionProvider}}" data-comparison="true" data-benchmark-url="{{.BasePath}}/static/subscription-benchmarks.json?v={{assetHash "subscription-benchmarks.json"}}">
     {{template "subscription-baseline" .}}
     <details class="sessions-section subscription-value">
-        <summary id="subscription-observed-title">Your usage</summary>
+        <summary id="subscription-observed-title">Recorded usage</summary>
         <div class="table-container subscription-comparison-table" role="region" aria-labelledby="subscription-observed-title" tabindex="0">
             <table class="data-table subscription-observed-table">
                 <thead><tr><th scope="col">Provider and plan</th><th scope="col">Monthly fee</th><th scope="col">Recorded API value</th><th scope="col">Output tokens / API $</th></tr></thead>
@@ -40,13 +40,14 @@
             </details>
             <p id="subscription-status" role="status" class="subscription-note">Loading subscription observations...</p>
             <div id="subscription-summary" class="usage-summary"></div>
-            <div class="subscription-controls"><label>Observed allowance <select id="subscription-cycle" aria-describedby="subscription-cycle-note"></select></label></div>
+            <div class="subscription-controls history-chart-toolbar"><label>Observed allowance <select id="subscription-cycle" aria-describedby="subscription-cycle-note"></select></label></div>
             <p id="subscription-cycle-note" class="subscription-note"></p>
-            <div class="subscription-chart"><canvas id="subscription-chart" role="img" aria-label="Observed API value versus quota consumption" aria-describedby="subscription-cycle-note"></canvas><p id="subscription-chart-empty" hidden>No matched cost and quota observations yet.</p></div>
+            <div class="subscription-chart history-chart-plot"><canvas id="subscription-chart" role="img" aria-label="Observed API value versus quota consumption" aria-describedby="subscription-cycle-note" hidden></canvas></div>
+            <p class="subscription-note" id="subscription-chart-empty" role="status" hidden></p>
             <details><summary>Models and efforts</summary>
-                <div class="table-container"><table class="data-table"><thead><tr><th>Model / effort / speed</th><th>API value</th><th>Codex credits</th><th>Priced requests</th><th>Cache hit</th><th>Matched quota</th><th>API / 100%</th><th>Output / 1%</th></tr></thead><tbody id="subscription-models"></tbody></table></div>
+                <div class="table-container" role="region" aria-label="Models and efforts" tabindex="0"><table class="data-table"><thead><tr><th>Model / effort / speed</th><th>API value</th><th>Codex credits</th><th>Priced requests</th><th>Cache hit</th><th>Matched quota</th><th>API / 100%</th><th>Output / 1%</th></tr></thead><tbody id="subscription-models"></tbody></table></div>
             </details>
-            <details><summary>Allowance history</summary><div class="table-container"><table class="data-table"><thead><tr><th>Observed span</th><th>Quota / plan</th><th>Meter movement</th><th>Matched API</th><th>API / 100%</th><th>Evidence</th></tr></thead><tbody id="subscription-cycles"></tbody></table></div></details>
+            <details><summary>Allowance history</summary><div class="table-container" role="region" aria-label="Allowance history" tabindex="0"><table class="data-table"><thead><tr><th>Observed span</th><th>Quota / plan</th><th>Meter movement</th><th>Matched API</th><th>API / 100%</th><th>Evidence</th></tr></thead><tbody id="subscription-cycles"></tbody></table></div></details>
             <details><summary>Devices and data quality</summary><div id="subscription-devices"></div><ul id="subscription-warnings"></ul><p id="subscription-basis" class="subscription-note"></p></details>
         </details>
 
@@ -67,7 +68,8 @@
                 <button type="button" class="btn" id="subscription-refresh">Refresh</button>
             </div>
         </div>
-        <div class="subscription-controls subscription-filters">
+        <p class="subscription-note" id="subscription-comparison-status" role="status" hidden></p>
+        <div class="subscription-controls subscription-filters history-chart-toolbar">
             <select id="subscription-capacity-tier" aria-label="Plan">
                 <option value="base">Base paid (~$20)</option>
                 <option value="mid">Mid-tier (~$100)</option>
@@ -96,7 +98,7 @@
         </div>
         <div class="subscription-note" id="subscription-capacity-status" role="status">Loading…</div>
         <p class="subscription-note" id="subscription-capacity-quality-note" hidden></p>
-        <details id="subscription-capacity-chart-details" open>
+        <details id="subscription-capacity-chart-details" class="history-chart" open>
             <summary><span id="subscription-capacity-chart-title">Quota vs. solves</span> <span id="subscription-capacity-coverage" class="subscription-chart-coverage"></span></summary>
             <div class="subscription-plot-legend">
                 <ul id="subscription-capacity-legend" class="subscription-chart-legend" aria-label="Chart providers" hidden></ul>
@@ -105,11 +107,26 @@
                 </ul>
             </div>
             <div id="subscription-capacity-model-legend" class="subscription-model-legend" aria-label="Chart models" role="group" hidden></div>
-            <div class="subscription-chart subscription-capacity-chart" id="subscription-capacity-chart-wrap" hidden>
-                <span class="subscription-chart-corner" id="subscription-capacity-corner">Less quota + more solves per $1</span>
+            <p class="history-chart-note" id="subscription-capacity-corner" hidden></p>
+            <div class="subscription-chart subscription-capacity-chart history-chart-plot" id="subscription-capacity-chart-wrap" hidden>
                 <canvas id="subscription-capacity-chart" role="img" aria-label="Estimated solves per subscription dollar by percentage of weekly quota per task attempt. Values are also in the table below."></canvas>
             </div>
             <div class="subscription-note" id="subscription-capacity-chart-empty" hidden></div>
+        </details>
+        <details id="subscription-value-method">
+            <summary>How value is calculated</summary>
+            <dl class="subscription-note">
+                <dt><strong>API value per full allowance</strong></dt>
+                <dd>Matched standard API value ÷ measured quota points × 100. A full weekly meter has 100 points. The estimate requires at least five points with reliably matched usage.</dd>
+                <dt><strong>Four-week output capacity</strong></dt>
+                <dd>Matched output tokens ÷ matched quota points × 400 for the same plan, model, effort, and speed. Rows marked as scaled apply a published plan ratio. Modeled rows show their evidence separately.</dd>
+                <dt><strong>Quota per attempt</strong></dt>
+                <dd>400 quota points ÷ projected four-week attempts. Attempts equal four-week output capacity ÷ benchmark output per attempt.</dd>
+                <dt><strong>Solves per subscription dollar</strong></dt>
+                <dd>Four-week output capacity ÷ benchmark output per attempt × benchmark pass rate ÷ monthly plan fee. Combined workloads give each selected benchmark equal weight per attempt. The chart and CSV use the same calculation.</dd>
+                <dt><strong>Price basis</strong></dt>
+                <dd>Subscription Value uses standard short-context API rates for comparison. The dashboard’s cost history uses rates effective when each request occurred.</dd>
+            </dl>
         </details>
         <div class="table-container subscription-comparison-table subscription-capacity-table" role="region" aria-label="Four-week estimates" tabindex="0">
             <table class="data-table">
@@ -120,11 +137,11 @@
         <details>
             <summary>Evidence</summary>
             <div id="subscription-capacity-link" class="subscription-source-links"></div>
-            <div class="table-container"><table class="data-table">
+            <div class="table-container" role="region" aria-label="Benchmark scores" tabindex="0"><table class="data-table">
                 <thead><tr><th scope="col">Model · Effort</th><th scope="col">Suite</th><th scope="col">Passed / Attempts</th><th scope="col">Output / Attempt</th></tr></thead>
                 <tbody id="subscription-capacity-scores"></tbody>
             </table></div>
-            <div class="table-container"><table class="data-table">
+            <div class="table-container" role="region" aria-label="Quota evidence" tabindex="0"><table class="data-table">
                 <thead><tr><th scope="col">Model · Effort</th><th scope="col">Quota source · Samples / Points</th><th scope="col">API $ / 4 wk</th><th scope="col">Input / Output per 4 wk</th><th scope="col">API $ / output vs local</th></tr></thead>
                 <tbody id="subscription-capacity-evidence"></tbody>
             </table></div>
@@ -138,17 +155,17 @@
         <div class="subscription-note" id="subscription-reset-status" role="status">Loading…</div>
         <div class="subscription-reset-charts" id="subscription-reset-charts" hidden>
             <div>
-                <h3 id="subscription-reset-observed-title">With early refills</h3>
-                <div class="subscription-chart"><canvas id="subscription-reset-observed" role="img" aria-labelledby="subscription-reset-observed-title" aria-describedby="subscription-reset-summary"></canvas></div>
+                <h3 id="subscription-reset-observed-title">Observed matched value</h3>
+                <div class="subscription-chart history-chart-plot"><canvas id="subscription-reset-observed" role="img" aria-labelledby="subscription-reset-observed-title" aria-describedby="subscription-reset-summary"></canvas></div>
             </div>
             <div>
                 <h3 id="subscription-reset-standard-title">Without early refills (estimate)</h3>
-                <div class="subscription-chart"><canvas id="subscription-reset-standard" role="img" aria-labelledby="subscription-reset-standard-title" aria-describedby="subscription-reset-summary"></canvas></div>
+                <div class="subscription-chart history-chart-plot"><canvas id="subscription-reset-standard" role="img" aria-labelledby="subscription-reset-standard-title" aria-describedby="subscription-reset-summary"></canvas></div>
             </div>
         </div>
         <div class="table-container subscription-comparison-table" id="subscription-reset-summary" role="region" aria-labelledby="subscription-reset-title" tabindex="0" hidden>
             <table class="data-table">
-                <thead><tr><th scope="col">Provider</th><th scope="col">With refills</th><th scope="col">Without refills</th><th scope="col">Early refills</th><th scope="col">Skipped intervals</th></tr></thead>
+                <thead><tr><th scope="col">Provider</th><th scope="col">Observed API value</th><th scope="col">Without early refills</th><th scope="col">Early refills</th><th scope="col">Skipped intervals</th></tr></thead>
                 <tbody id="subscription-reset-totals"></tbody>
             </table>
         </div>

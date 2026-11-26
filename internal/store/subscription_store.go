@@ -100,15 +100,18 @@ func (s *Store) SubscriptionInputs(ctx context.Context, provider, account string
 	}
 	var events []subscription.Event
 	q := `SELECT captured_at,captured_at,model,reasoning_effort,speed_mode,source_path,1,input_tokens,cached_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,metadata_json,0 FROM api_integration_usage_events WHERE integration_name=? AND account_name=? AND captured_at COLLATE ONWATCH_RFC3339>=? AND captured_at COLLATE ONWATCH_RFC3339<?
- UNION ALL SELECT first_captured_at,last_captured_at,model,reasoning_effort,speed_mode,origin_scope,request_count,input_tokens,cached_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,'{}',1 FROM api_integration_usage_hourly WHERE integration_name=? AND account_name=? AND first_captured_at COLLATE ONWATCH_RFC3339>=? AND last_captured_at COLLATE ONWATCH_RFC3339<?`
+ UNION ALL SELECT first_captured_at,last_captured_at,model,reasoning_effort,speed_mode,origin_scope,request_count,input_tokens,cached_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,'{}',1 FROM api_integration_usage_hourly WHERE integration_name=? AND account_name=? AND last_captured_at COLLATE ONWATCH_RFC3339>=? AND first_captured_at COLLATE ONWATCH_RFC3339<?`
 	bounds := []any{integration, account, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano)}
 	args := append(append([]any{}, bounds...), bounds...)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, nil, err
 	}
-	current := subscription.Prices()
-	fallback, _ := agentusage.DefaultPricingMap()
+	pricing, err := agentusage.DefaultPricingMap()
+	if err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
 	for rows.Next() {
 		var e subscription.Event
 		var at, last, path, metadata string
@@ -132,14 +135,29 @@ func (s *Store) SubscriptionInputs(ctx context.Context, provider, account string
 			return nil, nil, err
 		}
 		e.Archived = archived == 1
+		e.OutsideRange = e.Archived && (e.At.Before(start) || !e.End.Before(end))
 		e.Tokens = counts.TotalTokens
 		e.Input = counts.InputTokens + counts.CachedInputTokens + counts.CacheCreationTokens
 		e.Cached = counts.CachedInputTokens
 		e.CacheWrite = counts.CacheCreationTokens
-		if provider == "antigravity" && strings.HasPrefix(e.Model, "gemini-") {
-			counts.OutputTokens += counts.ReasoningTokens
-		}
+		var standard agentusage.CostOptions
+		priceModel := e.Model
 		e.Output = counts.OutputTokens
+		if provider == "antigravity" {
+			standard.ProviderPrefixes = agentusage.GoogleFamilyProviderPrefixes
+			if strings.HasPrefix(e.Model, "gemini-") {
+				standard.ReasoningBilledAsOutput = true
+				e.Output += counts.ReasoningTokens
+				// Some Gemini logs append a reasoning effort to the priced model ID.
+				if !pricing.Known(priceModel, standard.ProviderPrefixes) {
+					last := strings.LastIndexByte(priceModel, '-')
+					switch priceModel[last+1:] {
+					case "low", "medium", "high", "xhigh":
+						priceModel = priceModel[:last]
+					}
+				}
+			}
+		}
 		var meta struct {
 			SpeedSource string `json:"speed_source"`
 			Cache1h     int    `json:"cache_creation_1h_input_tokens"`
@@ -150,18 +168,16 @@ func (s *Store) SubscriptionInputs(ctx context.Context, provider, account string
 		_ = json.Unmarshal([]byte(metadata), &meta)
 		e.Plan = meta.Quota.Plan
 		counts.CacheCreation1hTokens = meta.Cache1h
-		price := fallback
-		if current.Known(e.Model, nil) {
-			price = current
+		// Archives retain total cache writes, but omit the five-minute / one-hour split.
+		if !e.Archived || e.CacheWrite == 0 {
+			e.Cost = pricing.CalculateCost(priceModel, counts, standard)
+			e.Priced = e.Cost > 0
 		}
-		e.Priced = price.Known(e.Model, nil)
-		e.Cost = price.CalculateCost(e.Model, counts, agentusage.CostOptions{})
-		speed := e.Speed
 		if meta.SpeedSource == "codex_config" {
-			speed = "unknown"
+			e.Speed = "unknown"
 		}
-		if provider == "codex" {
-			e.Credits, e.CreditsKnown = subscription.CodexCredits(e.Model, speed, counts)
+		if provider == "codex" && e.Input+e.Output > 0 {
+			e.Credits, e.CreditsKnown = subscription.CodexCredits(e.Model, e.Speed, counts)
 		}
 		switch {
 		case strings.Contains(path, "/Users/"):

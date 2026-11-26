@@ -152,3 +152,63 @@ func TestSubscriptionRetainsHistoricalPlansWithoutPollSnapshot(t *testing.T) {
 		}
 	}
 }
+
+func TestSubscriptionBenchmarkUsesCanonicalStandardRateAndRequiresTokenBreakdown(t *testing.T) {
+	s := newTransferTestStore(t)
+	at := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for _, event := range []agentusage.UsageEvent{
+		{Timestamp: at, Model: "gpt-5.6-sol", InputTokens: 1000000, TotalTokens: 1000000, CostUSD: 5, SpeedMode: "fast"},
+		{Timestamp: at.Add(time.Minute), Model: "gpt-5.6-sol", TotalTokens: 1000000, CostUSD: 9},
+	} {
+		event.Source, event.Provider = "codex", "openai"
+		line, err := event.ToAPIIntegrationLine()
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := ai.ParseUsageEventLine(line, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.InsertAPIIntegrationUsageEvent(parsed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, _, err := s.SubscriptionInputs(context.Background(), "codex", "default", 1, at, at.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2", len(events))
+	}
+	report := subscription.Analyze(events, nil, subscription.Profile{MonthlyUSD: 20})
+	if report.Cost != 4 || report.UnknownRequests != 1 || report.ValueMultiple != nil {
+		t.Fatalf("benchmark coverage or pricing incorrect: %+v", report)
+	}
+	var stored float64
+	if err := s.db.QueryRow("SELECT SUM(cost_usd) FROM api_integration_usage_events").Scan(&stored); err != nil || stored != 14 {
+		t.Fatalf("stored cost = %v, err = %v; want $14 and no error", stored, err)
+	}
+}
+
+func TestSubscriptionArchiveBoundaryIsReportedWithoutChargingWholeBucket(t *testing.T) {
+	s := newTransferTestStore(t)
+	for _, line := range []string{
+		`{"ts":"2026-01-15T12:05:00Z","integration":"Codex CLI","provider":"openai","account":"default","model":"gpt-5.6-sol","prompt_tokens":100,"total_tokens":100,"cost_usd":0.25}`,
+		`{"ts":"2026-01-15T12:45:00Z","integration":"Codex CLI","provider":"openai","account":"default","model":"gpt-5.6-sol","prompt_tokens":50,"total_tokens":50,"cost_usd":0.15}`,
+	} {
+		insertAPIIntegrationUsageEventForTest(t, s, line, "/tmp/boundary.jsonl")
+	}
+	at := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	end := at.Add(time.Hour)
+	if result, err := s.CompactAPIIntegrationUsageEvents(end); err != nil || result.HourlyRows != 1 {
+		t.Fatalf("compaction: %+v, %v", result, err)
+	}
+	events, _, err := s.SubscriptionInputs(context.Background(), "codex", "default", 1, at.Add(15*time.Minute), end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := subscription.Analyze(events, nil, subscription.Profile{})
+	if report.ExcludedArchiveBuckets != 1 || report.Requests != 0 || report.Cost != 0 {
+		t.Fatalf("partial hour must be disclosed without counting the entire hour: %+v", report)
+	}
+}

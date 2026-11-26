@@ -223,6 +223,7 @@ const State = {
   platformCostChartRenderSignature: null,
   platformCostMetric: 'totalCostUsd',
   platformCostGraphMode: 'cumulative',
+  platformCostChartMetric: 'cost',
   platformCostBreakdownView: 'types',
   platformCostRange: '7d',
   platformCostWindowStart: null,
@@ -235,7 +236,6 @@ const State = {
   platformCostBreakdownStartDate: null,
   platformCostBreakdownEndDate: null,
   platformCostHistoryRange: null,
-  platformCostHistoryLoading: false,
   platformCostHistoryInflightKey: null,
   platformCostSessionHistory: null,
   platformCostSessionTotals: null,
@@ -260,6 +260,8 @@ const State = {
   dashboardRefreshCount: 0,
   dashboardRefreshMessage: 'Updating data...',
   dashboardToastTimer: null,
+  currentChartSelection: null,
+  currentChartAccount: null,
   currentChartWindowStart: null,
   currentChartWindowEnd: null,
   platformCostHistoryWindowStart: null,
@@ -517,22 +519,27 @@ function clearGraphFallbackTimer(key) {
 function showBestSavedGraphFallback(job) {
   if (!graphJobIsCurrent(job) || job.range === 'custom') return;
   if (job.kind === 'cost') {
+    if (!platformCostJobIsSelected(job)) return;
     const cached = getStalePlatformCostHistory(job.provider, job.range, job.scope);
     if (cached) {
-      applyPlatformCostHistoryPayload(job.range, cached);
-      if (getCurrentProvider() === job.provider) renderPlatformCostPanel(job.provider);
+      if (job.scope === 'platformCostBreakdown') {
+        State.platformCostBreakdownSessionModels = cached.sessionModels || {};
+        State.platformCostBreakdownHistoryRange = job.range;
+        State.platformCostBreakdownHistoryWindowStart = cached.windowStart;
+        State.platformCostBreakdownHistoryWindowEnd = cached.windowEnd;
+        renderPlatformCostBreakdown(job.provider);
+      } else {
+        applyPlatformCostHistoryPayload(job.range, cached);
+        renderPlatformCostPanel(job.provider);
+      }
     }
     setPlatformCostChartLoading(false);
     return;
   }
-  const cached = getStaleProviderHistory(job.provider, job.range, job.selectionKey);
+  if (!usageGraphJobIsSelected(job)) return;
+  const cached = getStaleProviderHistory(job.provider, job.range, job.selectionKey, job.accountKey);
   if (!cached || !cached.data || getCurrentProvider() !== job.provider) return;
-  if (cached.chartDatasets && job.provider !== 'api-integrations' && job.provider !== 'both') {
-    if (!State.chart) initChart();
-    setMainChartDatasets(cached.chartDatasets, job.range, { preserveExistingOnEmpty: true });
-  } else if (job.provider === 'api-integrations' || job.provider === 'both') {
-    applyProviderHistoryPayload(job.provider, job.range, cached.data, cached.apiIntegrationsHistory || null);
-  }
+  applyUsageGraphJob(job, cached, { stale: true, ts: cached.ts });
 }
 
 function schedulePresetGraphFallback(job) {
@@ -564,13 +571,15 @@ function restoreDisplayedUsageGraphSelection(job) {
   if (selectedChartRange() !== job.range || State.currentChartProvider !== job.provider) return;
 
   const displayedRange = normalizeChartRange(State.currentChartRange || job.range);
-  if (displayedRange !== job.range) {
+  const displayedWindowChanged = job.range === 'custom'
+    && (State.currentChartWindowStart !== job.windowStart || State.currentChartWindowEnd !== job.windowEnd);
+  if (displayedRange !== job.range || displayedWindowChanged) {
     State.currentRange = displayedRange;
     if (State.currentChartWindowStart && State.currentChartWindowEnd) {
       State.historyWindowStart = State.currentChartWindowStart;
       State.historyWindowEnd = State.currentChartWindowEnd;
       State.historyStartDate = formatHistoryDateInTimezone(new Date(State.currentChartWindowStart));
-      State.historyEndDate = formatHistoryDateInTimezone(new Date(State.currentChartWindowEnd));
+      State.historyEndDate = formatHistoryDateInTimezone(new Date(Date.parse(State.currentChartWindowEnd) - 1));
       saveChartRange(displayedRange);
       persistHistoryWindow('chart');
     } else {
@@ -585,7 +594,12 @@ function restoreDisplayedUsageGraphSelection(job) {
   syncGraphModeButtons('chart-mode-select', State.graphMode);
   const shownLabel = platformCostRangeLabel(displayedRange);
   const failedLabel = platformCostRangeLabel(job.range);
-  const message = displayedRange === job.range
+  const showingPreviousAccount = State.currentChartAccount !== job.accountKey;
+  const message = showingPreviousAccount
+    ? 'Could not load this account. Showing the previous account.'
+    : displayedWindowChanged
+    ? 'Could not load these dates. Showing usage for the previous dates.'
+    : displayedRange === job.range
     ? `Could not refresh ${failedLabel} usage. Showing saved data.`
     : `Could not load ${failedLabel} usage. Showing saved ${shownLabel} data.`;
   setGraphHistoryRangeError('chart', message);
@@ -603,7 +617,11 @@ function restoreDisplayedCostGraphSelection(job) {
   const displayedRange = normalizePlatformCostRange(job.scope === 'platformCostBreakdown'
     ? State.platformCostBreakdownHistoryRange
     : State.platformCostHistoryRange);
-  if (displayedRange !== job.range) {
+  const displayedWindowChanged = job.range === 'custom'
+    && (job.scope === 'platformCostBreakdown'
+      ? State.platformCostBreakdownHistoryWindowStart !== job.windowStart || State.platformCostBreakdownHistoryWindowEnd !== job.windowEnd
+      : State.platformCostHistoryWindowStart !== job.windowStart || State.platformCostHistoryWindowEnd !== job.windowEnd);
+  if (displayedRange !== job.range || displayedWindowChanged) {
     const storedStart = job.scope === 'platformCostBreakdown'
       ? State.platformCostBreakdownHistoryWindowStart
       : State.platformCostHistoryWindowStart;
@@ -616,14 +634,14 @@ function restoreDisplayedCostGraphSelection(job) {
         State.platformCostBreakdownWindowStart = storedStart;
         State.platformCostBreakdownWindowEnd = storedEnd;
         State.platformCostBreakdownStartDate = formatHistoryDateInTimezone(new Date(storedStart));
-        State.platformCostBreakdownEndDate = formatHistoryDateInTimezone(new Date(storedEnd));
+        State.platformCostBreakdownEndDate = formatHistoryDateInTimezone(new Date(Date.parse(storedEnd) - 1));
         savePlatformCostBreakdownRange(displayedRange);
       } else {
         State.platformCostRange = displayedRange;
         State.platformCostWindowStart = storedStart;
         State.platformCostWindowEnd = storedEnd;
         State.platformCostStartDate = formatHistoryDateInTimezone(new Date(storedStart));
-        State.platformCostEndDate = formatHistoryDateInTimezone(new Date(storedEnd));
+        State.platformCostEndDate = formatHistoryDateInTimezone(new Date(Date.parse(storedEnd) - 1));
         savePlatformCostRange(displayedRange);
       }
       persistHistoryWindow(job.scope);
@@ -640,7 +658,9 @@ function restoreDisplayedCostGraphSelection(job) {
   const shownLabel = platformCostRangeLabel(displayedRange);
   const failedLabel = platformCostRangeLabel(job.range);
   const graphLabel = job.scope === 'platformCostBreakdown' ? 'cost breakdown' : 'cost';
-  const message = displayedRange === job.range
+  const message = displayedWindowChanged
+    ? `Could not load these dates. Showing ${graphLabel} for the previous dates.`
+    : displayedRange === job.range
     ? `Could not refresh ${failedLabel} ${graphLabel}. Showing saved data.`
     : `Could not load ${failedLabel} ${graphLabel}. Showing saved ${shownLabel} data.`;
   setGraphHistoryRangeError(job.scope, message);
@@ -1014,6 +1034,7 @@ function populateCodexProfileTabs() {
 
 function switchCodexProfile(accountId) {
   if (State.codexAccount === accountId) return;
+  if (State.chart) setUsageChartRefreshMessage('Showing the previous account while history loads.');
   State.codexAccount = accountId;
   saveCodexAccount(accountId);
   updateProfileTabsActive();
@@ -1173,6 +1194,7 @@ function populateMiniMaxAccountTabs() {
 
 function switchMiniMaxAccount(accountId) {
   if (State.minimaxAccount === accountId) return;
+  if (State.chart) setUsageChartRefreshMessage('Showing the previous account while history loads.');
   State.minimaxAccount = accountId;
   saveMiniMaxAccount(accountId);
   updateMiniMaxAccountTabsActive();
@@ -1835,7 +1857,7 @@ function updateChartVisibility() {
   });
   
   // Recompute Y-axis based on visible datasets only
-  State.chartYMax = computeYMax(State.chart.data.datasets, State.chart, { cap: !isPeriodGraphMode(State.graphMode) });
+  State.chartYMax = computeYMax(State.chart.data.datasets, State.chart, { cap: provider !== 'api-integrations' && !isPeriodGraphMode(State.graphMode) });
   State.chart.options.scales.y.max = State.chartYMax;
   State.chart.update('none'); // Update without animation
 }
@@ -2491,8 +2513,7 @@ async function loadAnthropicModalChart(quotaName) {
     const colors = getThemeColors();
     const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] ?? null }));
     const processed = processCappedDataWithGaps(rawData, range);
-    const maxVal = Math.max(...data.map(d => d[quotaName] || 0), 0);
-    let yMax = maxVal <= 0 ? 10 : maxVal < 5 ? 10 : Math.min(Math.max(Math.ceil((maxVal * 1.2) / 5) * 5, 10), 100);
+    const yMax = computeYMax([{ data: processed.data }]);
 
     State.modalChart = new Chart(ctx, {
       type: 'line',
@@ -2503,7 +2524,7 @@ async function loadAnthropicModalChart(quotaName) {
           borderColor: c.border,
           backgroundColor: c.bg,
           fill: processed.gapSegments.size === 0,
-          tension: 0.3,
+          tension: 0,
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
@@ -2513,12 +2534,13 @@ async function loadAnthropicModalChart(quotaName) {
       },
       options: {
         responsive: true, maintainAspectRatio: false,
+        animation: false,
         plugins: {
           legend: { display: false },
           tooltip: { backgroundColor: colors.surfaceContainer, titleColor: colors.onSurface, bodyColor: colors.text, borderColor: colors.outline, borderWidth: 1, callbacks: { label: c => `${c.parsed.y.toFixed(1)}%` } }
         },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' } },
+          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick } },
           y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
         }
       }
@@ -2910,8 +2932,7 @@ async function loadCopilotModalChart(quotaName) {
     const colors = getThemeColors();
     const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d.usagePercent }));
     const processed = processCappedDataWithGaps(rawData, range);
-    const maxVal = Math.max(...data.map(d => d.usagePercent), 10);
-    const yMax = Math.min(Math.ceil(maxVal / 10) * 10 + 10, 110);
+    const yMax = computeYMax([{ data: processed.data }]);
 
     State.modalChart = new Chart(ctx, {
       type: 'line',
@@ -2922,7 +2943,7 @@ async function loadCopilotModalChart(quotaName) {
           borderColor: c.border,
           backgroundColor: c.bg,
           fill: processed.gapSegments.size === 0,
-          tension: 0.3,
+          tension: 0,
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
@@ -2932,12 +2953,13 @@ async function loadCopilotModalChart(quotaName) {
       },
       options: {
         responsive: true, maintainAspectRatio: false,
+        animation: false,
         plugins: {
           legend: { display: false },
           tooltip: { backgroundColor: colors.surfaceContainer, titleColor: colors.onSurface, bodyColor: colors.text, borderColor: colors.outline, borderWidth: 1, callbacks: { label: c => `${c.parsed.y.toFixed(1)}%` } }
         },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' } },
+          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick } },
           y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
         }
       }
@@ -3583,7 +3605,7 @@ async function loadAntigravityModalChart(groupKey) {
           data: processed.data,
           borderColor: borderColor,
           backgroundColor: 'rgba(110, 64, 201, 0.1)',
-          tension: 0.3,
+          tension: 0,
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
@@ -3595,10 +3617,11 @@ async function loadAntigravityModalChart(groupKey) {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' }, title: { display: true, text: 'Time' } },
-          y: { beginAtZero: true, max: 100, title: { display: true, text: 'Usage %' } }
+          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick }, title: { display: true, text: 'Time' } },
+          y: { beginAtZero: true, max: computeYMax([{ data: processed.data }]), title: { display: true, text: 'Quota used (%)' } }
         }
       }
     });
@@ -3935,7 +3958,6 @@ async function loadCodexModalChart(quotaName) {
     const colors = getThemeColors();
     const rawData = data.map(d => ({ x: new Date(d.capturedAt), y: d[quotaName] ?? null }));
     const processed = processCappedDataWithGaps(rawData, range);
-    const maxVal = Math.max(...data.map(d => d[quotaName] || 0), 0);
     const yMax = maxVal <= 0 ? 10 : maxVal < 5 ? 10 : Math.min(Math.max(Math.ceil((maxVal * 1.2) / 5) * 5, 10), 100);
 
     State.modalChart = new Chart(ctx, {
@@ -3947,7 +3969,7 @@ async function loadCodexModalChart(quotaName) {
           borderColor: c.border,
           backgroundColor: c.bg,
           fill: processed.gapSegments.size === 0,
-          tension: 0.3,
+          tension: 0,
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
@@ -3957,12 +3979,13 @@ async function loadCodexModalChart(quotaName) {
       },
       options: {
         responsive: true, maintainAspectRatio: false,
+        animation: false,
         plugins: {
           legend: { display: false },
           tooltip: { backgroundColor: colors.surfaceContainer, titleColor: colors.onSurface, bodyColor: colors.text, borderColor: colors.outline, borderWidth: 1, callbacks: { label: c => `${c.parsed.y.toFixed(1)}%` } }
         },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' } },
+          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick } },
           y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
         }
       }
@@ -5151,7 +5174,7 @@ function renderAPIIntegrationsInsights() {
     { label: 'Output Tokens', value: formatNumber(totals.outputTokens), sublabel: 'Completion-side tokens across all time' },
     { label: 'Reasoning Tokens', value: formatNumber(totals.reasoningTokens), sublabel: 'Reasoning tokens reported by providers' },
     { label: 'API Calls', value: formatNumber(totals.requestCount), sublabel: 'Recorded requests since this dataset started' },
-    { label: 'Average Tokens per Call', value: avgTokensPerCall > 0 ? formatNumber(avgTokensPerCall.toFixed(1)) : '0.0', sublabel: 'Average request size across all recorded calls' },
+    { label: 'Average Tokens per Request', value: avgTokensPerCall > 0 ? formatNumber(avgTokensPerCall.toFixed(1)) : '0.0', sublabel: 'Average request size across all recorded calls' },
   ].map((stat) => `
     <div class="insight-stat">
       <div class="insight-stat-value">${stat.value}</div>
@@ -5167,7 +5190,7 @@ function renderAPIIntegrationsInsights() {
     { label: 'Output Tokens in Range', value: formatNumber(recentOutputTokens), sublabel: 'Completion-side tokens in the selected range' },
     { label: 'API Calls in Range', value: formatNumber(recentRequestCount), sublabel: 'Recorded requests in the selected chart range' },
     { label: 'Usage Change vs Earlier Half', value: `${trendDelta >= 0 ? '+' : '-'}${Math.abs(trendPct).toFixed(1)}%`, sublabel: `Compared with the earlier half of the visible window (${trendDelta >= 0 ? 'up' : 'down'} ${formatNumber(Math.abs(trendDelta))} tokens)` },
-    { label: 'Average Tokens per Call in Range', value: recentAvgTokensPerCall > 0 ? formatNumber(recentAvgTokensPerCall.toFixed(1)) : '0.0', sublabel: 'Average request size inside the visible window' },
+    { label: 'Average Tokens per Request in Range', value: recentAvgTokensPerCall > 0 ? formatNumber(recentAvgTokensPerCall.toFixed(1)) : '0.0', sublabel: 'Average request size inside the visible window' },
     { label: 'Busiest Integration in Range', value: busiestRecentIntegration ? escapeHTML(busiestRecentIntegration) : '--', sublabel: busiestRecentTokens > 0 ? `${formatNumber(busiestRecentTokens)} tokens in the selected range` : 'Waiting for more recent activity' },
   ].map((stat) => `
     <div class="insight-stat">
@@ -5431,30 +5454,12 @@ function computeYMax(datasets, chart, options = {}) {
     return ds.data && ds.data.length > 0;
   });
 
-  const cap = options.cap === false ? Number.POSITIVE_INFINITY : 100;
-
-  // If no visible datasets, return default 10%
-  if (visibleDatasets.length === 0) return 10;
-
-  let maxVal = 0;
-  visibleDatasets.forEach(ds => {
-    ds.data.forEach(v => {
-      // Handle both {x, y} objects and raw numbers
-      const val = typeof v === 'number' ? v : (v && typeof v.y === 'number' ? v.y : 0);
-      if (val > maxVal) maxVal = val;
-    });
-  });
-  
-  // If max is 0 or very low, show up to 10% to give visual context
-  if (maxVal <= 0) return 10;
-  if (maxVal < 5) return 10;
-  
-  // Add 30% headroom above the max value for better visualization
-  // Round up to nearest 5 for cleaner axis labels
-  const paddedMax = maxVal * 1.3;
-  const yMax = Math.min(Math.max(Math.ceil(paddedMax / 5) * 5, 10), cap);
-
-  return yMax;
+  const maxVal = visibleDatasets.reduce((max, dataset) => dataset.data.reduce((top, point) => {
+    const value = typeof point === 'number' ? point : point?.y;
+    return Number.isFinite(value) ? Math.max(top, value) : top;
+  }, max), 0);
+  if (options.cap !== false) return Math.max(100, niceAxisMax(maxVal) || 100);
+  return niceAxisMax(maxVal * 1.1) || 1;
 }
 
 function niceAxisMax(value) {
@@ -5746,18 +5751,20 @@ function graphBucketRange(
 
 function formatPeriodTooltipTitle(point) {
   if (!point || !point.raw || !point.raw.periodStart || !point.raw.periodEnd) {
-    return point && point.label ? point.label : '';
+    return point?.raw?.x != null ? formatDateTime(point.raw.x) : (point?.label || '');
   }
   const start = point.raw.periodStart instanceof Date ? point.raw.periodStart : new Date(point.raw.periodStart);
   const end = point.raw.periodEnd instanceof Date ? point.raw.periodEnd : new Date(point.raw.periodEnd);
-  const sameDay = start.toDateString() === end.toDateString();
   const dateOptions = { month: 'short', day: 'numeric' };
   const timeOptions = { hour: 'numeric', minute: '2-digit' };
+  const timeZone = getEffectiveTimezone();
+  dateOptions.timeZone = timeZone;
+  timeOptions.timeZone = timeZone;
   const startDate = start.toLocaleDateString([], dateOptions);
   const startTime = start.toLocaleTimeString([], timeOptions);
   const endDate = end.toLocaleDateString([], dateOptions);
   const endTime = end.toLocaleTimeString([], timeOptions);
-  const title = sameDay
+  const title = startDate === endDate
     ? `${startDate}, ${startTime} - ${endTime}`
     : `${startDate}, ${startTime} - ${endDate}, ${endTime}`;
   return point.raw.resetObserved ? `${title} (reset observed)` : title;
@@ -5833,10 +5840,19 @@ function aggregateDatasetForBuckets(
     });
 }
 
+function chartTimeTick(value) {
+  const unit = this.options.time?.unit || 'hour';
+  const timeZone = getEffectiveTimezone();
+  const parts = unit === 'day'
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+  return new Date(value).toLocaleString('en-US', { ...parts, timeZone });
+}
+
 function graphLineStyle(periodMode) {
   return {
     fill: !periodMode,
-    tension: periodMode ? 0.25 : 0.4,
+    tension: 0,
     borderWidth: 2,
     pointRadius: 2,
     pointHoverRadius: 4,
@@ -5860,7 +5876,7 @@ function applyGraphModeToDatasets(
         data: dataset.data || [],
         ...graphLineStyle(false),
         fill: dataset.fill !== undefined ? dataset.fill : true,
-        tension: dataset.tension !== undefined ? dataset.tension : 0.4,
+        tension: 0,
         pointRadius: dataset.pointRadius !== undefined ? dataset.pointRadius : 2,
         pointHoverRadius: dataset.pointHoverRadius !== undefined ? dataset.pointHoverRadius : 4,
       };
@@ -5960,7 +5976,8 @@ function renderUsageSummary(datasets, range, mode = State.graphMode) {
   const graphMode = normalizeGraphMode(mode);
   const periodMode = isPeriodGraphMode(graphMode);
   const countLabel = periodMode ? 'Periods' : 'Observed Samples';
-  const latestLabel = periodMode ? 'Latest Period Used' : 'Current Usage';
+  const latestLabel = periodMode ? 'Latest Observed Increase' : 'Latest Quota Reading';
+  const formatUsage = value => periodMode ? `${formatNumber(value.toFixed(1))} pp` : formatUsagePercent(value);
   const weeklyAverageLabel = periodMode ? 'Avg Weekly Period' : 'Avg Weekly All-Model';
   const fiveHourAverageLabel = periodMode ? 'Avg 5-Hour Period' : 'Avg 5-Hour Usage';
 
@@ -6000,15 +6017,15 @@ function renderUsageSummary(datasets, range, mode = State.graphMode) {
   summaryEl.innerHTML = `
     <div class="platform-cost-metric primary">
       <span class="platform-cost-label">${weeklyAverageLabel}</span>
-      <strong>${averages.weekly == null ? '--' : formatUsagePercent(averages.weekly)}</strong>
+      <strong>${averages.weekly == null ? '--' : formatUsage(averages.weekly)}</strong>
     </div>
     <div class="platform-cost-metric">
       <span class="platform-cost-label">${latestLabel}</span>
-      <strong>${formatUsagePercent(latest)}</strong>
+      <strong>${formatUsage(latest)}</strong>
     </div>
     <div class="platform-cost-metric">
       <span class="platform-cost-label">${fiveHourAverageLabel}</span>
-      <strong>${averages.daily == null ? '--' : formatUsagePercent(averages.daily)}</strong>
+      <strong>${averages.daily == null ? '--' : formatUsage(averages.daily)}</strong>
     </div>
     <div class="platform-cost-metric">
       <span class="platform-cost-label">${countLabel}</span>
@@ -6085,10 +6102,10 @@ function renderUsageAccessibleSummary(datasets, range, mode = State.graphMode) {
     const values = points.map(point => point.value);
     const formatValue = (value) => {
       if (dataset._accessibleValueType === 'totalCostUsd') return formatCurrencyUSD(value);
-      if (dataset._accessibleValueType === 'tokenPerCall') return `${formatNumber(value)} tokens per call`;
+      if (dataset._accessibleValueType === 'tokenPerCall') return `${formatNumber(value)} tokens per request`;
       if (dataset._accessibleValueType === 'requestCount') return `${formatNumber(value)} requests`;
       if (dataset._accessibleValueType === 'accumulatedTokens') return `${formatNumber(value)} tokens`;
-      return `${formatNumber(value)}%`;
+      return isPeriodGraphMode(mode) ? `${formatNumber(value)} percentage points` : `${formatNumber(value)}%`;
     };
     return `${dataset.label || 'Series'}: ${formatValue(points[0].value)} first, `
       + `${formatValue(points[points.length - 1].value)} last, `
@@ -6124,16 +6141,18 @@ function antigravityWindowDatasets(datasets) {
   return datasets.filter(item => item._antigravityWindow === State.antigravityQuotaWindow);
 }
 
-function renderAntigravityUsageSummary(datasets) {
+function renderAntigravityUsageSummary(datasets, mode = State.graphMode) {
   const summary = document.getElementById('usage-summary');
   if (!summary) return;
   const timestamps = new Set();
   let latestTime = 0;
+  const periodMode = isPeriodGraphMode(mode);
   const metrics = datasets.map(dataset => {
     const points = (dataset.data || []).map(usageSummaryPoint).filter(Boolean);
     points.forEach(point => { timestamps.add(point.end.getTime()); latestTime = Math.max(latestTime, point.end.getTime()); });
     const latest = points[points.length - 1];
-    return `<div class="platform-cost-metric"><span class="platform-cost-label">${escapeHTML(dataset.label)}</span><strong>${latest ? formatUsagePercent(latest.value) : '--'}</strong></div>`;
+    const value = latest == null ? '--' : periodMode ? `${formatNumber(latest.value.toFixed(1))} pp` : formatUsagePercent(latest.value);
+    return `<div class="platform-cost-metric"><span class="platform-cost-label">${escapeHTML(dataset.label)}</span><strong>${value}</strong></div>`;
   });
   summary.innerHTML = metrics.join('')
     + `<div class="platform-cost-metric"><span class="platform-cost-label">Observed Samples</span><strong>${formatNumber(timestamps.size)}</strong></div>`
@@ -6146,6 +6165,9 @@ function setMainChartDatasets(datasets, range, options = {}) {
   const isAntigravity = getCurrentProvider() === 'antigravity';
   if (isAntigravity) datasets = antigravityWindowDatasets(datasets);
   const mode = normalizeGraphMode(options.mode || State.graphMode);
+  const selection = providerDataCacheKey('history', getCurrentProvider(),
+    historySelectionKey(range) + ':' + (isAntigravity ? State.antigravityQuotaWindow : '')
+      + ':' + (getCurrentProvider() === 'api-integrations' ? State.apiIntegrationsSelectedMetric : ''));
   const selectedWindowStart = options.windowStart
     || (options.xBounds ? new Date(options.xBounds.min).toISOString() : State.historyWindowStart);
   const selectedWindowEnd = options.windowEnd
@@ -6158,13 +6180,10 @@ function setMainChartDatasets(datasets, range, options = {}) {
     selectedWindowEnd,
   );
   const cap = options.cap !== undefined ? options.cap : !isPeriodGraphMode(mode);
-  const hasPeriodPoints = isPeriodGraphMode(mode)
-    && datasetsHaveFiniteValue(chartDatasets);
-  if (!datasetsHaveFiniteValue(chartDatasets) && !hasPeriodPoints) {
+  if (!datasetsHaveFiniteValue(chartDatasets)) {
     const existingDatasets = State.chart.data?.datasets || [];
     const canPreserveExisting = options.preserveExistingOnEmpty !== false
-      && State.currentChartProvider === getCurrentProvider()
-      && State.currentChartRange === range
+      && State.currentChartSelection === selection
       && State.currentChartMode === mode
       && datasetsHaveNonZeroValue(existingDatasets);
     if (canPreserveExisting) {
@@ -6172,7 +6191,7 @@ function setMainChartDatasets(datasets, range, options = {}) {
       setChartEmptyState('usage-chart', false);
       return;
     }
-    if (isAntigravity) renderAntigravityUsageSummary(datasets);
+    if (isAntigravity) renderAntigravityUsageSummary([], mode);
     else renderUsageSummary([], range, mode);
     renderUsageCoverageNote([]);
     renderUsageAccessibleSummary([], range, mode);
@@ -6188,6 +6207,8 @@ function setMainChartDatasets(datasets, range, options = {}) {
       State.chart.data.datasets = [];
       State.chart.update('none');
     });
+    State.currentChartAccount = usageGraphAccountKey(getCurrentProvider());
+    State.currentChartSelection = selection;
     State.currentChartProvider = getCurrentProvider();
     State.currentChartRange = range;
     State.currentChartMode = mode;
@@ -6196,13 +6217,14 @@ function setMainChartDatasets(datasets, range, options = {}) {
   setChartEmptyState('usage-chart', false);
   renderUsageCoverageNote(datasets);
   const summaryDatasets = isPeriodGraphMode(mode) ? chartDatasets : datasets;
-  if (isAntigravity) renderAntigravityUsageSummary(summaryDatasets);
-  else renderUsageSummary(summaryDatasets, range, mode);
+  if (isAntigravity) renderAntigravityUsageSummary(summaryDatasets, mode);
+  else if (getCurrentProvider() !== 'api-integrations') renderUsageSummary(summaryDatasets, range, mode);
   renderUsageAccessibleSummary(chartDatasets, range, mode);
-  const nextYMax = isAntigravity && !isPeriodGraphMode(mode) ? 100 : computeYMax(chartDatasets, State.chart, { cap });
+  const nextYMax = computeYMax(chartDatasets, null, { cap });
   const xBounds = options.xBounds || usageChartTimeBounds(range);
   const renderState = {
     provider: getCurrentProvider(),
+    metric: getCurrentProvider() === 'api-integrations' ? State.apiIntegrationsSelectedMetric : null,
     range,
     mode,
     empty: false,
@@ -6210,6 +6232,7 @@ function setMainChartDatasets(datasets, range, options = {}) {
     yMax: nextYMax,
     xBounds,
     colors: getThemeColors(),
+    timeZone: getEffectiveTimezone(),
     theme: document.documentElement.getAttribute('data-theme') || 'dark',
   };
   updateChartWhenChanged('mainChartRenderSignature', renderState, () => {
@@ -6218,11 +6241,16 @@ function setMainChartDatasets(datasets, range, options = {}) {
     updateTimeScale(State.chart, range);
     State.chartYMax = nextYMax;
     State.chart.options.scales.y.max = State.chartYMax;
+    State.chart.options.scales.y.title.text = renderState.metric
+      ? apiIntegrationsMetricTitle[renderState.metric]
+      : isPeriodGraphMode(mode) ? 'Observed quota increase (pp)' : 'Quota used (%)';
     State.chart.update('none');
   });
   State.currentChartProvider = getCurrentProvider();
   State.currentChartRange = range;
   State.currentChartMode = mode;
+  State.currentChartAccount = usageGraphAccountKey(getCurrentProvider());
+  State.currentChartSelection = selection;
   State.currentChartWindowStart = selectedWindowStart;
   State.currentChartWindowEnd = selectedWindowEnd;
   if (State.currentChartProvider && State.currentChartProvider !== 'api-integrations' && State.currentChartProvider !== 'both') {
@@ -6256,15 +6284,15 @@ function initChart() {
     defaultDatasets = []; // OpenRouter datasets are dynamic - populated when history data arrives
   } else if (provider === 'zai') {
     defaultDatasets = [
-      { label: 'Tokens Limit', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-subscription').trim() || '#0D9488', backgroundColor: 'rgba(13, 148, 136, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('tokensLimit') },
-      { label: 'Time Limit', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-search').trim() || '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('timeLimit') },
-      { label: 'Tool Calls', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', backgroundColor: 'rgba(59, 130, 246, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('toolCalls') }
+      { label: 'Tokens Limit', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-subscription').trim() || '#0D9488', backgroundColor: 'rgba(13, 148, 136, 0.06)', fill: true, tension: 0, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('tokensLimit') },
+      { label: 'Time Limit', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-search').trim() || '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.06)', fill: true, tension: 0, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('timeLimit') },
+      { label: 'Tool Calls', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', backgroundColor: 'rgba(59, 130, 246, 0.06)', fill: true, tension: 0, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('toolCalls') }
     ];
   } else {
     defaultDatasets = [
-      { label: 'Subscription', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-subscription').trim() || '#0D9488', backgroundColor: 'rgba(13, 148, 136, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('subscription') },
-      { label: 'Search', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-search').trim() || '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('search') },
-      { label: 'Tool Calls', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', backgroundColor: 'rgba(59, 130, 246, 0.06)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('toolCalls') }
+      { label: 'Subscription', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-subscription').trim() || '#0D9488', backgroundColor: 'rgba(13, 148, 136, 0.06)', fill: true, tension: 0, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('subscription') },
+      { label: 'Search', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-search').trim() || '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.06)', fill: true, tension: 0, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('search') },
+      { label: 'Tool Calls', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--chart-toolcalls').trim() || '#3B82F6', backgroundColor: 'rgba(59, 130, 246, 0.06)', fill: true, tension: 0, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, hidden: State.hiddenQuotas.has('toolCalls') }
     ];
   }
   const quotaMap = provider === 'zai'
@@ -6293,7 +6321,7 @@ function initChart() {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: { mode: 'index', intersect: false },
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
       layout: { padding: { top: 4 } },
       plugins: {
         legend: {
@@ -6314,15 +6342,14 @@ function initChart() {
             const ci = legend.chart;
             const meta = ci.getDatasetMeta(index);
             meta.hidden = meta.hidden === null ? !ci.data.datasets[index].hidden : null;
-            ci.update('none');
-            // Recalculate Y-axis based on visible datasets
-            State.chartYMax = computeYMax(ci.data.datasets, ci, { cap: !isPeriodGraphMode(State.graphMode) });
+            State.chartYMax = computeYMax(ci.data.datasets, ci, { cap: !isAPIIntegrations && !isPeriodGraphMode(State.graphMode) });
             ci.options.scales.y.max = State.chartYMax;
-            ci.update();
+            ci.update('none');
           }
         },
         tooltip: {
-          mode: 'index',
+          mode: 'nearest',
+          axis: 'x',
           intersect: false,
           backgroundColor: colors.surfaceContainer || '#1E1E1E',
           titleColor: colors.onSurface || '#E6E1E5',
@@ -6342,12 +6369,12 @@ function initChart() {
                   return `${ctx.dataset.label}: ${formatCurrencyUSD(Number(ctx.parsed.y || 0))}`;
                 }
                 if (metric === 'tokenPerCall') {
-                  return `${ctx.dataset.label}: ${formatNumber(Number(ctx.parsed.y || 0).toFixed(1))} tokens/call`;
+                  return `${ctx.dataset.label}: ${formatNumber(Number(ctx.parsed.y || 0).toFixed(1))} tokens/request`;
                 }
                 return `${ctx.dataset.label}: ${formatNumber(Number(ctx.parsed.y || 0))}`;
               }
-              const suffix = isPeriodGraphMode(State.graphMode) ? ' used in period' : '';
-              return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%${suffix}`;
+              const unit = isPeriodGraphMode(State.graphMode) ? ' percentage points' : '%';
+              return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}${unit}`;
             }
           }
         }
@@ -6358,7 +6385,7 @@ function initChart() {
           offset: false,
           time: { unit: 'hour', displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' } },
           grid: { color: colors.grid, drawBorder: false },
-          ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' }
+          ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick }
         },
         y: {
           grid: { color: colors.grid, drawBorder: false },
@@ -6369,12 +6396,12 @@ function initChart() {
                 ? formatCurrencyUSD(Number(v || 0))
                 : ((State.apiIntegrationsSelectedMetric || 'tokenPerCall') === 'tokenPerCall'
                   ? formatNumber(Number(v || 0).toFixed(1))
-                  : formatNumber(Number(v || 0))))
-              : v + '%'
+                  : formatChartAxisNumber(Number(v || 0))))
+              : (isPeriodGraphMode(State.graphMode) ? v + ' pp' : v + '%')
           },
           title: {
-            display: isAPIIntegrations,
-            text: isAPIIntegrations ? 'Tokens per Call' : '',
+            display: true,
+            text: isAPIIntegrations ? 'Tokens per request' : 'Quota used (%)',
             color: colors.text,
           },
           min: 0,
@@ -6436,7 +6463,6 @@ function updateChartTheme() {
 function applyProviderHistoryPayload(provider, range, data, apiIntegrationsHistoryData = null) {
   if (provider === 'api-integrations') {
     State.apiIntegrationsHistory = data;
-    State.platformCostHistoryRange = range;
     renderAPIIntegrationsChart(range);
     renderAPIIntegrationsInsights();
     return;
@@ -6444,7 +6470,6 @@ function applyProviderHistoryPayload(provider, range, data, apiIntegrationsHisto
 
   if (apiIntegrationsHistoryData) {
     State.apiIntegrationsHistory = apiIntegrationsHistoryData;
-    State.platformCostHistoryRange = range;
   }
 
   if (provider === 'both') {
@@ -7798,7 +7823,7 @@ function renderPlatformCostPanel(provider = getCurrentProvider()) {
   const costRange = normalizePlatformCostRange(State.platformCostRange || DEFAULT_CHART_RANGE);
   if (State.platformCostBreakdownHistoryRange !== breakdownRange &&
       (breakdownRange === 'custom' || breakdownRange !== costRange) &&
-      !State.platformCostBreakdownLoading) {
+      !State.platformCostBreakdownLoading && !State.customGraphRefreshControllers.platformCostBreakdown) {
     fetchPlatformCostBreakdownRange(breakdownRange, provider);
   }
   renderPlatformCostChart(provider, costRange);
@@ -8046,26 +8071,21 @@ function pointSeriesHaveUsage(...series) {
 function renderPlatformCostAccessibleSummary(costPoints, tokenPoints, range, mode) {
   const summary = document.getElementById('platform-cost-chart-accessible-summary');
   if (!summary) return;
-  const finiteCosts = (costPoints || []).filter(point => point?.y != null && Number.isFinite(Number(point.y)));
-  const finiteTokens = (tokenPoints || []).filter(point => point?.y != null && Number.isFinite(Number(point.y)));
-  if (finiteCosts.length === 0 && finiteTokens.length === 0) {
-    summary.textContent = `No cost data for ${platformCostRangeLabel(range)}.`;
+  const hasCost = costPoints.length > 0;
+  const points = (hasCost ? costPoints : tokenPoints)
+    .filter(point => point?.y != null && Number.isFinite(Number(point.y)));
+  const metric = hasCost ? 'Priced cost' : 'Tokens';
+  const time = platformCostRangeLabel(range);
+  if (points.length === 0) {
+    summary.textContent = `No ${State.platformCostChartMetric === 'tokens' ? 'token' : 'priced cost'} data for ${time}.`;
     return;
   }
-  const costValues = finiteCosts.map(point => Number(point.y));
-  const tokenValues = finiteTokens.map(point => Number(point.y));
-  const minCost = costValues.length > 0 ? Math.min(...costValues) : 0;
-  const maxCost = costValues.length > 0 ? Math.max(...costValues) : 0;
-  const minTokens = tokenValues.length > 0 ? Math.min(...tokenValues) : 0;
-  const maxTokens = tokenValues.length > 0 ? Math.max(...tokenValues) : 0;
+  const values = points.map(point => Number(point.y));
+  const format = hasCost ? formatCurrencyUSD : formatNumber;
   const modeLabel = isPeriodGraphMode(mode) ? 'per period' : 'cumulative';
-  const costSummary = costValues.length > 0
-    ? `Priced cost first ${formatCurrencyUSD(costValues[0])}, last ${formatCurrencyUSD(costValues[costValues.length - 1])}, minimum ${formatCurrencyUSD(minCost)}, maximum ${formatCurrencyUSD(maxCost)}. `
-    : 'No priced cost for this period. ';
-  summary.textContent = `Cost chart for ${platformCostRangeLabel(range)} in ${modeLabel} mode. `
-    + costSummary
-    + `Tokens first ${formatNumber(tokenValues[0] || 0)}, last ${formatNumber(tokenValues[tokenValues.length - 1] || 0)}, `
-    + `minimum ${formatNumber(minTokens)}, maximum ${formatNumber(maxTokens)}.`;
+  summary.textContent = `${metric} chart for ${time}, ${modeLabel}. `
+    + `First ${format(values[0])}, last ${format(values[values.length - 1])}, `
+    + `minimum ${format(Math.min(...values))}, maximum ${format(Math.max(...values))}.`;
 }
 
 function renderPlatformCostChart(provider = getCurrentProvider(), range = State.platformCostRange || DEFAULT_CHART_RANGE) {
@@ -8074,26 +8094,28 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   range = normalizePlatformCostRange(range);
   State.platformCostRange = range;
   const integration = platformCostIntegrationNames[provider];
-  const hasLoadedSelectedRange = State.platformCostHistoryRange === range;
+  const hasLoadedSelectedRange = State.platformCostHistoryRange === range
+    && (range !== 'custom' || (State.platformCostHistoryWindowStart === State.platformCostWindowStart
+      && State.platformCostHistoryWindowEnd === State.platformCostWindowEnd));
   let rows = hasLoadedSelectedRange ? getPlatformCostHistoryRows(integration) : [];
   const rangeTotals = getPlatformCostRangeTotals(provider, range, rows);
-  if (!State.platformCostHistoryLoading && !hasLoadedSelectedRange) {
+  if (!hasLoadedSelectedRange && !State.customGraphRefreshControllers.platformCost) {
     fetchPlatformCostHistory(range, provider);
   }
   bindPlatformCostRangeControls(range);
   const subtitle = document.getElementById('platform-cost-chart-subtitle');
   const title = document.getElementById('platform-cost-chart-title');
   const graphMode = normalizeGraphMode(State.platformCostGraphMode);
+  const showTokens = State.platformCostChartMetric === 'tokens';
+  const metric = showTokens ? 'Tokens' : 'Priced cost';
   const periodMode = isPeriodGraphMode(graphMode);
   const costTimeBounds = platformCostChartTimeBounds(range);
+  if (!hasLoadedSelectedRange) return;
+  canvas.setAttribute('aria-label', `${metric} history chart`);
   if (title) {
     title.textContent = periodMode
-      ? 'Token & Cost per Period'
-      : 'Token & Cost Growth';
-  }
-  if (!hasLoadedSelectedRange) {
-    if (range !== 'custom') setPlatformCostChartLoading(false);
-    return;
+      ? `${metric} per period`
+      : `Cumulative ${metric.toLowerCase()}`;
   }
   const cumulative = buildPlatformCumulativeSeries(rows, range);
   const bucketed = buildPlatformBucketSeries(rows, range, graphMode);
@@ -8128,8 +8150,8 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   if (subtitle) {
     subtitle.textContent = hasUsageInRange || hasPeriodCostPoints
       ? (periodMode
-        ? `${formatNumber(bucketed.cost.length)} periods`
-        : `${formatNumber(cumulative.cost.length)} recorded samples`)
+        ? `${formatNumber(bucketed.tokens.filter(point => point.y != null).length)} recorded periods`
+        : `${formatNumber(cumulative.tokens.filter(point => point.y != null).length)} recorded samples`)
       : (provider === 'antigravity' ? 'No token records' : emptyCostMessage);
   }
   setPlatformCostChartLoading(false);
@@ -8161,83 +8183,49 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   Chart.register(crosshairPlugin);
   const colors = getThemeColors();
   const chartType = 'line';
-  const costColor = '#14B8A6';
-  const tokensColor = '#38BDF8';
-  const costFill = periodMode ? 'rgba(20, 184, 166, 0.04)' : 'rgba(20, 184, 166, 0.12)';
-  const tokensFill = periodMode ? 'rgba(56, 189, 248, 0.04)' : 'rgba(56, 189, 248, 0.12)';
-  const activeMaxCost = periodMode ? bucketed.maxCost : cumulative.maxCost;
-  const activeMaxTokens = periodMode ? bucketed.maxTokens : cumulative.maxTokens;
-  const yMaxCost = niceAxisMax(activeMaxCost * 1.18);
-  const yMaxTokens = niceAxisMax(activeMaxTokens * 1.18);
-  const costPoints = rangeTotals?.cost == null ? [] : (periodMode ? bucketed.cost : cumulative.cost);
-  const tokenPoints = periodMode ? bucketed.tokens : cumulative.tokens;
-  renderPlatformCostAccessibleSummary(costPoints, tokenPoints, range, graphMode);
+  const plottedPoints = showTokens
+    ? (periodMode ? bucketed.tokens : cumulative.tokens)
+    : (rangeTotals?.cost == null ? [] : (periodMode ? bucketed.cost : cumulative.cost));
+  renderPlatformCostAccessibleSummary(showTokens ? [] : plottedPoints, showTokens ? plottedPoints : [], range, graphMode);
+  if (!plottedPoints.some(point => point.y != null && Number.isFinite(Number(point.y)))) {
+    setChartEmptyState('platform-cost-chart', true, showTokens ? noUsageMessage(range)
+      : 'No priced cost available for this range.');
+    return;
+  }
+  const metricColor = showTokens ? '#38BDF8' : '#14B8A6';
+  const formatMetric = showTokens ? formatNumber : formatCurrencyUSD;
+  const formatAxis = showTokens ? formatChartAxisNumber : formatCurrencyUSD;
+  const yMax = niceAxisMax((showTokens
+    ? (periodMode ? bucketed.maxTokens : cumulative.maxTokens)
+    : (periodMode ? bucketed.maxCost : cumulative.maxCost)) * 1.08);
   const renderState = {
-    provider,
-    range,
-    graphMode,
-    empty: false,
-    costPoints,
-    tokenPoints,
-    yMaxCost,
-    yMaxTokens,
-    colors,
+    provider, range, graphMode, metric, plottedPoints, yMax, colors,
+    xBounds: costTimeBounds || costPeriodBounds,
+    timeScale,
+    timeZone: getEffectiveTimezone(),
     theme: document.documentElement.getAttribute('data-theme') || 'dark',
   };
   const chartData = {
-    datasets: [
-        {
-          type: chartType,
-          label: periodMode ? 'Priced Cost per Period' : 'Cumulative Priced Cost',
-          data: costPoints,
-          yAxisID: 'y',
-          borderColor: costColor,
-          backgroundColor: costFill,
-          hoverBackgroundColor: costFill,
-          hoverBorderColor: costColor,
-          ...graphLineStyle(periodMode),
-          showLine: true,
-          fill: false,
-          hoverBorderWidth: 2,
-        },
-        {
-          type: chartType,
-          label: periodMode ? 'Tokens per Period' : 'Cumulative Tokens',
-          data: tokenPoints,
-          yAxisID: 'y1',
-          borderColor: tokensColor,
-          backgroundColor: tokensFill,
-          hoverBackgroundColor: tokensFill,
-          hoverBorderColor: tokensColor,
-          ...graphLineStyle(periodMode),
-          showLine: true,
-          fill: false,
-          hoverBorderWidth: 2,
-        },
-      ],
-    };
+    datasets: [{
+      label: metric,
+      data: plottedPoints,
+      borderColor: metricColor,
+      backgroundColor: metricColor,
+      ...graphLineStyle(periodMode),
+      fill: false,
+    }],
+  };
   const chartOptions = {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: { mode: 'index', intersect: false },
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
       layout: { padding: { top: 4 } },
       plugins: {
-        legend: {
-          display: true,
-          align: 'center',
-          labels: {
-            color: colors.text,
-            usePointStyle: true,
-            pointStyle: 'circle',
-            boxWidth: 10,
-            boxHeight: 10,
-            padding: 16,
-            font: { size: 12, weight: '500', lineHeight: 1.2 },
-          },
-        },
+        legend: { display: false },
         tooltip: {
-          mode: 'index',
+          mode: 'nearest',
+          axis: 'x',
           intersect: false,
           backgroundColor: colors.surfaceContainer || '#1E1E1E',
           titleColor: colors.onSurface || '#E6E1E5',
@@ -8248,12 +8236,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           usePointStyle: true,
           callbacks: {
             title: items => items && items.length > 0 ? formatPeriodTooltipTitle(items[0]) : '',
-            label: ctx => {
-              const value = Number(ctx.parsed.y || 0);
-              return ctx.dataset.yAxisID === 'y'
-                ? `${ctx.dataset.label}: ${formatCurrencyUSD(value)}`
-                : `${ctx.dataset.label}: ${formatNumber(Math.round(value))}`;
-            },
+            label: ctx => ctx.parsed.y == null ? null : `${metric}: ${formatMetric(ctx.parsed.y)}`,
           },
         },
       },
@@ -8265,20 +8248,14 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
           max: costTimeBounds?.max ?? costPeriodBounds?.max,
           time: timeScale,
           grid: { color: colors.grid, drawBorder: false },
-          ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' },
+          ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick },
         },
         y: {
           min: 0,
-          max: yMaxCost,
+          max: yMax,
+          title: { display: true, text: showTokens ? 'Tokens' : 'Priced cost (USD)', color: colors.text },
           grid: { color: colors.grid, drawBorder: false },
-          ticks: { color: colors.text, callback: value => formatCurrencyUSD(Number(value || 0)) },
-        },
-        y1: {
-          min: 0,
-          max: yMaxTokens,
-          position: 'right',
-          grid: { drawOnChartArea: false, color: colors.grid, drawBorder: false },
-          ticks: { color: colors.text, callback: value => formatChartAxisNumber(Number(value || 0)) },
+          ticks: { color: colors.text, callback: value => formatAxis(value) },
         },
       },
     };
@@ -8378,6 +8355,7 @@ function downsamplePointSeriesForCumulative(
 
   const sampled = [];
   let pointIndex = 0;
+  let previousObservedEnd = null;
   buckets.forEach((bucket) => {
     let latestPoint = null;
     while (pointIndex < cleanPoints.length && cleanPoints[pointIndex].x.getTime() < bucket.periodEnd.getTime()) {
@@ -8386,7 +8364,11 @@ function downsamplePointSeriesForCumulative(
       pointIndex += 1;
     }
     if (!latestPoint) return;
+    if (previousObservedEnd != null && bucket.periodStart > previousObservedEnd) {
+      sampled.push({ x: previousObservedEnd, y: null, _collectionGap: true });
+    }
     sampled.push(latestPoint);
+    previousObservedEnd = bucket.periodEnd;
   });
   const visible = clampToSelectedWindow
     ? cleanPoints.filter(point => point.x.getTime() >= selectedStart && point.x.getTime() < selectedEnd)
@@ -8405,40 +8387,11 @@ function processCappedDataWithGaps(dataPoints, range = '6h') {
     }))
     .filter(point => !Number.isNaN(point.x.getTime()) && (point.y == null || Number.isFinite(point.y)))
     .sort((a, b) => a.x.getTime() - b.x.getTime());
-  const points = normalized.filter(point => point.y != null);
-  if (points.length <= graphBucketMaxCount('bucket')) return processDataWithGaps(normalized, range);
-
-  const intervalMs = graphBucketIntervalMs(range, 'bucket', points);
-  const sampled = [];
-  let latestInBucket = null;
-  let activeBucketTime = null;
-  points.forEach((point) => {
-    const bucket = graphBucketStart(point.x, range, 'bucket', intervalMs);
-    const bucketTime = bucket?.getTime();
-    if (!Number.isFinite(bucketTime)) return;
-    if (activeBucketTime != null && bucketTime !== activeBucketTime && latestInBucket) {
-      sampled.push(latestInBucket);
-    }
-    activeBucketTime = bucketTime;
-    latestInBucket = point;
-  });
-  if (latestInBucket) sampled.push(latestInBucket);
-  if (sampled[0]?.x.getTime() !== points[0].x.getTime()) sampled.unshift(points[0]);
-  const lastPoint = points[points.length - 1];
-  if (sampled[sampled.length - 1]?.x.getTime() !== lastPoint.x.getTime()) sampled.push(lastPoint);
-  let insideMissingRun = false;
-  normalized.forEach((point) => {
-    if (point.y != null) {
-      insideMissingRun = false;
-      return;
-    }
-    if (!insideMissingRun) sampled.push(point);
-    insideMissingRun = true;
-  });
-  const deduplicated = [...new Map(sampled
-    .sort((a, b) => a.x.getTime() - b.x.getTime())
-    .map(point => [point.x.getTime(), point])).values()];
-  return processDataWithGaps(deduplicated, range);
+  // The history endpoint has already sampled the requested window. Preserve
+  // every observation it returned, including brief peaks and reset transitions.
+  const processed = processDataWithGaps(normalized, range);
+  if (normalized.length > 100) processed.pointRadii = 0;
+  return processed;
 }
 
 function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h', mode = State.platformCostGraphMode) {
@@ -8461,8 +8414,8 @@ function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h'
     State.platformCostWindowEnd,
   ).map(bucket => [bucket._bucketKey || bucket.periodStart.toISOString(), {
     ...bucket,
-    cost: 0,
-    tokens: 0,
+    cost: null,
+    tokens: null,
   }]));
   [...rows]
     .filter(row => row && row.capturedAt)
@@ -8477,8 +8430,8 @@ function buildPlatformBucketSeries(rows, range = State.platformCostRange || '6h'
         periodStart: bucketStart,
         periodEnd: new Date(bucketStart.getTime() + intervalMs),
       };
-      bucket.cost += Number(row.totalCostUsd || 0);
-      bucket.tokens += Number(row.totalTokens || 0);
+      if (row.totalCostUsd != null) bucket.cost = Number(bucket.cost || 0) + Number(row.totalCostUsd);
+      bucket.tokens = Number(bucket.tokens || 0) + Number(row.totalTokens || 0);
       buckets.set(key, bucket);
     });
   const sorted = [...buckets.values()].sort((a, b) => a.x.getTime() - b.x.getTime());
@@ -8508,9 +8461,9 @@ function platformCostRangeStartTime(range) {
 }
 
 function platformCostChartTimeBounds(range) {
-  if (normalizePlatformCostRange(range) !== 'custom') return null;
-  const min = Date.parse(State.platformCostWindowStart || '');
-  const max = Date.parse(State.platformCostWindowEnd || '');
+  if (normalizePlatformCostRange(range) === 'all') return null;
+  const min = Date.parse(State.platformCostHistoryWindowStart || State.platformCostWindowStart || '');
+  const max = Date.parse(State.platformCostHistoryWindowEnd || State.platformCostWindowEnd || '');
   return Number.isFinite(min) && Number.isFinite(max) && min < max ? { min, max } : null;
 }
 
@@ -8595,7 +8548,9 @@ function getPlatformCostRangeTotals(provider, range, rows) {
   if (!entry) return null;
   const integration = platformCostIntegrationNames[provider] || '';
   const selectedRange = normalizePlatformCostRange(range);
-  const hasLoadedSelectedRange = State.platformCostHistoryRange === selectedRange;
+  const hasLoadedSelectedRange = State.platformCostHistoryRange === selectedRange
+    && (selectedRange !== 'custom' || (State.platformCostHistoryWindowStart === State.platformCostWindowStart
+      && State.platformCostHistoryWindowEnd === State.platformCostWindowEnd));
   const rangeTotals = hasLoadedSelectedRange
     ? getPlatformCostIntegrationValue(State.platformCostSessionTotals || {}, integration)
     : null;
@@ -8708,6 +8663,8 @@ async function fetchPlatformCostBreakdownRange(range, provider, options = {}) {
     if (cached.usesArchivedData) noteArchivedHistorySelection(range, 'platformCostBreakdown');
     State.platformCostBreakdownSessionModels = cached.sessionModels || {};
     State.platformCostBreakdownHistoryRange = range;
+    State.platformCostBreakdownHistoryWindowStart = cached.windowStart;
+    State.platformCostBreakdownHistoryWindowEnd = cached.windowEnd;
     if (getCurrentProvider() === provider) renderPlatformCostBreakdown(provider);
     if (!options.force && freshCached) return;
   }
@@ -8718,7 +8675,9 @@ async function fetchPlatformCostBreakdownRange(range, provider, options = {}) {
     try {
       await runCustomGraphRefresh(job);
     } finally {
-      setPlatformCostBreakdownRangeControlsLoading(range, false);
+      if (!State.customGraphRefreshControllers.platformCostBreakdown) {
+        setPlatformCostBreakdownRangeControlsLoading(range, false);
+      }
     }
     return;
   }
@@ -8749,8 +8708,10 @@ async function fetchPlatformCostHistory(range, provider, options = {}) {
     try {
       await runCustomGraphRefresh(job);
     } finally {
-      setPlatformCostChartLoading(false);
-      setPlatformCostRangeControlsLoading(range, false);
+      if (!State.customGraphRefreshControllers.platformCost) {
+        setPlatformCostChartLoading(false);
+        setPlatformCostRangeControlsLoading(range, false);
+      }
     }
     return;
   }
@@ -8868,8 +8829,8 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
       data: processed.data,
       borderColor: color.border,
       backgroundColor: color.bg,
-      fill: true,
-      tension: 0.4,
+      fill: processed.gapSegments.size === 0,
+      tension: 0,
       borderWidth: 2,
       pointRadius: processed.pointRadii,
       pointHoverRadius: 4,
@@ -8883,6 +8844,13 @@ function buildAPIIntegrationsChartDatasets(historyRows, range, metric) {
   }, []);
 }
 
+const apiIntegrationsMetricTitle = {
+  tokenPerCall: 'Tokens per call',
+  requestCount: 'API requests',
+  accumulatedTokens: 'Accumulated tokens',
+  totalCostUsd: 'Cost (USD)',
+};
+
 function renderAPIIntegrationsChart(range = State.currentRange || DEFAULT_CHART_RANGE) {
   if (!State.chart) initChart();
   if (!State.chart) return;
@@ -8891,66 +8859,6 @@ function renderAPIIntegrationsChart(range = State.currentRange || DEFAULT_CHART_
   State.apiIntegrationsSelectedMetric = metric;
   const datasets = buildAPIIntegrationsChartDatasets(State.apiIntegrationsHistory || {}, range, metric);
   setMainChartDatasets(datasets, range, { cap: false });
-  const yAxisTitles = {
-    tokenPerCall: 'Tokens per Call',
-    requestCount: 'API Calls',
-    accumulatedTokens: 'Accumulated Tokens',
-    totalCostUsd: 'Cost (USD)',
-  };
-  const chartConfig = State.chart.config.options || {};
-  const configScales = chartConfig.scales || {};
-  const currentYScale = configScales.y || {};
-  const currentYTitle = currentYScale.title || {};
-  const currentYTicks = currentYScale.ticks || {};
-  const configPlugins = chartConfig.plugins || {};
-  const currentTooltip = configPlugins.tooltip || {};
-  const currentTooltipCallbacks = currentTooltip.callbacks || {};
-
-  const tickFormatter = (value) => {
-    if (metric === 'totalCostUsd') return formatCurrencyUSD(Number(value || 0));
-    return formatChartAxisNumber(Number(value || 0));
-  };
-  const tooltipLabelFormatter = (ctx) => {
-    if (ctx.parsed.y == null) return null;
-    if (metric === 'totalCostUsd') {
-      return `${ctx.dataset.label}: ${formatCurrencyUSD(Number(ctx.parsed.y || 0))}`;
-    }
-    if (metric === 'tokenPerCall') {
-      return `${ctx.dataset.label}: ${formatNumber(Number(ctx.parsed.y || 0).toFixed(1))} tokens/call`;
-    }
-    return `${ctx.dataset.label}: ${formatNumber(Number(ctx.parsed.y || 0))}`;
-  };
-
-  State.chart.config.options.scales = {
-    ...configScales,
-    y: {
-      ...currentYScale,
-      max: State.chartYMax,
-      title: {
-        ...currentYTitle,
-        display: true,
-        text: yAxisTitles[metric] || 'Value',
-      },
-      ticks: {
-        ...currentYTicks,
-        callback: tickFormatter,
-      },
-    },
-  };
-
-  State.chart.config.options.plugins = {
-    ...configPlugins,
-    tooltip: {
-      ...currentTooltip,
-      callbacks: {
-        ...currentTooltipCallbacks,
-        title: items => items && items.length > 0 ? formatPeriodTooltipTitle(items[0]) : '',
-        label: tooltipLabelFormatter,
-      },
-    },
-  };
-
-  State.chart.update('none');
 }
 
 function buildFixedDatasetsForRows(rows, range, configs) {
@@ -8963,8 +8871,8 @@ function buildFixedDatasetsForRows(rows, range, configs) {
       data: processed.data,
       borderColor: cfg.color,
       backgroundColor: cfg.bg,
-      fill: true,
-      tension: 0.4,
+      fill: processed.gapSegments.size === 0,
+      tension: 0,
       borderWidth: 2,
       pointRadius: processed.pointRadii,
       pointHoverRadius: 4,
@@ -8994,8 +8902,8 @@ function buildDynamicDatasetsForRows(rows, range, labelMap, colorMap, colorFallb
       data: processed.data,
       borderColor: color.border,
       backgroundColor: color.bg,
-      fill: true,
-      tension: 0.4,
+      fill: processed.gapSegments.size === 0,
+      tension: 0,
       borderWidth: 2,
       pointRadius: processed.pointRadii,
       pointHoverRadius: 4,
@@ -9286,7 +9194,7 @@ function updateBothCharts(data, range = '6h') {
   }
 
   container.innerHTML = slots.map(slot =>
-    `<div class="chart-half"><h4 class="chart-half-label">${slot.label}</h4><canvas id="usage-chart-${slot.id}"></canvas></div>`
+    `<div class="chart-half"><h4 class="chart-half-label">${escapeHTML(slot.label)}</h4><canvas id="usage-chart-${slot.id}" role="img" aria-label="${escapeHTML(slot.label)} quota history"></canvas></div>`
   ).join('');
 
   const origCanvas = document.getElementById('usage-chart');
@@ -9305,8 +9213,8 @@ function updateBothCharts(data, range = '6h') {
         data: processed.data,
         borderColor: cfg.color,
         backgroundColor: cfg.bg,
-        fill: true,
-        tension: 0.4,
+        fill: processed.gapSegments.size === 0,
+        tension: 0,
         borderWidth: 2,
         pointRadius: processed.pointRadii,
         pointHoverRadius: 4,
@@ -9334,8 +9242,8 @@ function updateBothCharts(data, range = '6h') {
         data: processed.data,
         borderColor: color.border,
         backgroundColor: color.bg,
-        fill: true,
-        tension: 0.4,
+        fill: processed.gapSegments.size === 0,
+        tension: 0,
         borderWidth: 2,
         pointRadius: processed.pointRadii,
         pointHoverRadius: 4,
@@ -9422,7 +9330,8 @@ function buildChartOptions(colors, yMax, range) {
   return {
     responsive: true,
     maintainAspectRatio: false,
-    interaction: { mode: 'index', intersect: false },
+    animation: false,
+    interaction: { mode: 'nearest', axis: 'x', intersect: false },
     plugins: {
       legend: {
         display: true,
@@ -9438,7 +9347,7 @@ function buildChartOptions(colors, yMax, range) {
         }
       },
       tooltip: {
-        mode: 'index', intersect: false,
+        mode: 'nearest', axis: 'x', intersect: false,
         backgroundColor: colors.surfaceContainer || '#1E1E1E',
         titleColor: colors.onSurface || '#E6E1E5',
         bodyColor: colors.text || '#CAC4D0',
@@ -9455,7 +9364,7 @@ function buildChartOptions(colors, yMax, range) {
         type: 'time',
         time: { unit: timeUnit, displayFormats },
         grid: { color: colors.grid, drawBorder: false },
-        ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' }
+        ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick }
       },
       y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax || 100 }
     }
@@ -9492,6 +9401,7 @@ function processDataWithGaps(dataPoints, range = '6h') {
     data.push(point);
     pointRadii.push(2);
 
+    if (point.y == null) gapSegments.add(data.length - 1);
     if (nextGap > gapThresholdMs) {
       gapSegments.add(data.length - 1);
       data.push({
@@ -10705,18 +10615,8 @@ async function loadModalChart(quotaType, effectiveProvider) {
     const colors = getThemeColors();
     const rawData = historyRows.map(d => ({ x: new Date(d.capturedAt), y: d[datasetKey] }));
     const processed = processCappedDataWithGaps(rawData, range);
-    const maxVal = Math.max(...historyRows.map(d => d[datasetKey] ?? 0), 0);
 
-    // Dynamic Y-axis: if max is 0 or very low, show up to 10%
-    // Otherwise add 20% padding, rounded to nearest 5
-    let yMax;
-    if (maxVal <= 0) {
-      yMax = 10;
-    } else if (maxVal < 5) {
-      yMax = 10;
-    } else {
-      yMax = Math.min(Math.max(Math.ceil((maxVal * 1.2) / 5) * 5, 10), 100);
-    }
+    const yMax = computeYMax([{ data: processed.data }]);
 
     State.modalChart = new Chart(ctx, {
       type: 'line',
@@ -10727,7 +10627,7 @@ async function loadModalChart(quotaType, effectiveProvider) {
           borderColor: colorMap[quotaType] || '#3B82F6',
           backgroundColor: bgMap[quotaType] || 'rgba(59,130,246,0.08)',
           fill: processed.gapSegments.size === 0,
-          tension: 0.3,
+          tension: 0,
           borderWidth: 2.5,
           pointRadius: processed.pointRadii,
           pointHoverRadius: 5,
@@ -10738,6 +10638,7 @@ async function loadModalChart(quotaType, effectiveProvider) {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: false,
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -10750,7 +10651,7 @@ async function loadModalChart(quotaType, effectiveProvider) {
           }
         },
         scales: {
-          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto' } },
+          x: { type: 'time', time: { unit: timeUnit, displayFormats: { minute: 'HH:mm', hour: ['7d', '30d', '15d', '24h', '3d'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm', day: 'MMM d' } }, grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, maxTicksLimit: 6, autoSkipPadding: 16, source: 'auto', callback: chartTimeTick } },
           y: { grid: { color: colors.grid, drawBorder: false }, ticks: { color: colors.text, callback: v => v + '%' }, min: 0, max: yMax }
         }
       }
@@ -10853,12 +10754,20 @@ async function reloadGraphHistoryRange(scope) {
   const range = normalizeChartRange(historyScopeWindow(scope).range);
   const provider = getCurrentProvider();
   if (scope === 'platformCost') {
+    const subtitle = document.getElementById('platform-cost-chart-subtitle');
+    if (subtitle && State.platformCostHistoryRange && State.platformCostChart) {
+      subtitle.textContent = `Showing saved ${platformCostRangeLabel(State.platformCostHistoryRange)} data while history loads.`;
+    }
     await fetchPlatformCostHistory(range, provider);
     return;
   }
   if (scope === 'platformCostBreakdown') {
     await fetchPlatformCostBreakdownRange(range, provider);
     return;
+  }
+  if (State.currentChartRange && State.chart) {
+    const shownRange = platformCostRangeLabel(State.currentChartRange);
+    setUsageChartRefreshMessage(`Showing saved ${shownRange} data while history loads.`);
   }
   await fetchHistory(range, { force: true });
 }
@@ -10988,7 +10897,27 @@ function setupChartModeSelector() {
   group.dataset.bound = 'true';
 }
 
+function setupPlatformCostChartMetricSelector() {
+  const group = document.getElementById('platform-cost-chart-metric-select');
+  if (!group || group.dataset.bound) return;
+  const syncButtons = () => group.querySelectorAll('[data-metric]').forEach(button => {
+    const active = button.dataset.metric === State.platformCostChartMetric;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  syncButtons();
+  group.addEventListener('click', event => {
+    const button = event.target.closest('[data-metric]');
+    if (!button || button.dataset.metric === State.platformCostChartMetric) return;
+    State.platformCostChartMetric = button.dataset.metric;
+    syncButtons();
+    renderPlatformCostChart(getCurrentProvider(), selectedPlatformCostRange());
+  });
+  group.dataset.bound = 'true';
+}
+
 function setupPlatformCostChartModeSelector() {
+  setupPlatformCostChartMetricSelector();
   const group = document.getElementById('platform-cost-chart-mode-select');
   if (!group) return;
   const setActive = () => {

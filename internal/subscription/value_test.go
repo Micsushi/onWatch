@@ -131,3 +131,61 @@ func TestEmptyCycleFragmentsAreTrimmed(t *testing.T) {
 		t.Fatalf("empty fragments were returned to the graph: %+v", r.Cycles)
 	}
 }
+
+func TestExpiredResetDoesNotPairPostDeadlineUsageWithOldQuota(t *testing.T) {
+	start := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	deadline := start.Add(time.Hour)
+	meters := []Meter{
+		{At: start, Reset: deadline, Used: 50, Quota: "seven_day"},
+		{At: start.Add(30 * time.Minute), Reset: deadline, Used: 60, Quota: "seven_day"},
+		{At: deadline.Add(time.Minute), Reset: deadline, Used: 70, Quota: "seven_day"},
+		{At: deadline.Add(2 * time.Minute), Reset: deadline, Used: 90, Quota: "seven_day"},
+	}
+	events := []Event{
+		{At: start.Add(time.Minute), Model: "m", Cost: 2, Priced: true, Requests: 1},
+		{At: deadline, Model: "m", Cost: 8, Priced: true, Requests: 1},
+	}
+	got := Analyze(events, meters, Profile{})
+	if got.Cost != 10 || len(got.Cycles) != 2 || got.Cycles[0].Cost != 2 || got.Cycles[1].Per100 != nil || got.Cycles[1].Boundary != "scheduled boundary observed" {
+		t.Fatalf("expired deadlines must not calibrate the next interval: %+v", got)
+	}
+}
+
+func TestArchiveCoverageUsesQuotaScopeAndSkipsRangeBoundaryBuckets(t *testing.T) {
+	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	meters := []Meter{{At: at, Quota: "seven_day_sonnet"}, {At: at.Add(time.Hour), Quota: "seven_day_sonnet", Used: 20}}
+	events := []Event{
+		{At: at.Add(-time.Minute), End: at.Add(time.Minute), Model: "claude-opus-5", Archived: true, OutsideRange: true, Requests: 2, Cost: 10, Priced: true},
+		{At: at.Add(2 * time.Minute), Model: "claude-sonnet-5", Requests: 1, Cost: 4, Priced: true},
+	}
+	got := Analyze(events, meters, Profile{MonthlyUSD: 20})
+	cycle := got.Cycles[0]
+	if got.Cost != 4 || got.ExcludedArchiveBuckets != 1 || got.ValueMultiple != nil || cycle.ArchiveTiming || cycle.Per100 == nil || *cycle.Per100 != 20 || !cycle.Points[1].Matched {
+		t.Fatalf("archive range or model scope misclassified: %+v", got)
+	}
+	events[0].Model = "claude-sonnet-5"
+	got = Analyze(events, meters, Profile{})
+	cycle = got.Cycles[0]
+	if !cycle.ArchiveTiming || cycle.Per100 != nil || cycle.Points[1].Matched {
+		t.Fatalf("same-scope archive overlap cannot certify timing: %+v", cycle)
+	}
+}
+
+func TestModelCalibrationDistinguishesUnknownPriceFromMissingTokenBreakdown(t *testing.T) {
+	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	meters := []Meter{{At: at, Quota: "seven_day"}, {At: at.Add(time.Hour), Quota: "seven_day", Used: 20}}
+	events := []Event{
+		{At: at.Add(time.Minute), Model: "m", Input: 40, Output: 60, Tokens: 100, Requests: 1, Cost: 5, Priced: true},
+		{At: at.Add(2 * time.Minute), Model: "m", Tokens: 100, Requests: 1},
+	}
+	got := Analyze(events, meters, Profile{})
+	if got.Cost != 5 || got.UnknownRequests != 1 || len(got.Cycles[0].Models) != 0 {
+		t.Fatalf("missing breakdown must exclude the interval from model projection: %+v", got)
+	}
+	events[1].Input, events[1].Output = 50, 50
+	got = Analyze(events, meters, Profile{})
+	models := got.Cycles[0].Models
+	if len(models) != 1 || models[0].MatchedOutput != 110 || models[0].MatchedUnpriced != 1 || models[0].Per100 != nil {
+		t.Fatalf("complete vectors can support token projection without a dollar estimate: %+v", got)
+	}
+}

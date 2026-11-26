@@ -17,13 +17,13 @@ type Profile struct {
 	Source          string  `json:"source"`
 }
 type Event struct {
-	At                                      time.Time
-	End                                     time.Time
-	Model, Effort, Speed, Device, Plan      string
-	Tokens, Input, Cached, Output, Requests int
-	CacheWrite                              int
-	Cost, Credits                           float64
-	Priced, CreditsKnown, Archived          bool
+	At                                           time.Time
+	End                                          time.Time
+	Model, Effort, Speed, Device, Plan           string
+	Tokens, Input, Cached, Output, Requests      int
+	CacheWrite                                   int
+	Cost, Credits                                float64
+	Priced, CreditsKnown, Archived, OutsideRange bool
 }
 type Meter struct {
 	At     time.Time `json:"at"`
@@ -37,7 +37,7 @@ type Point struct {
 	At      time.Time `json:"at"`
 	Used    float64   `json:"used"`
 	Cost    float64   `json:"cost"`
-	matched bool
+	Matched bool      `json:"matched"`
 }
 type Cycle struct {
 	UnmatchedPoints float64   `json:"unmatchedPoints"`
@@ -101,6 +101,7 @@ type Report struct {
 	Requests                 int           `json:"requests"`
 	UnknownRequests          int           `json:"unknownRequests"`
 	ArchivedRequests         int           `json:"archivedRequests"`
+	ExcludedArchiveBuckets   int           `json:"excludedArchiveBuckets,omitempty"`
 	ValueMultiple            *float64      `json:"valueMultiple"`
 	Cycles                   []Cycle       `json:"cycles"`
 	Models                   []Model       `json:"models"`
@@ -116,6 +117,10 @@ func number(v float64) *float64 {
 	return &v
 }
 func modelKey(e Event) string { return e.Model + "|" + e.Effort + "|" + e.Speed }
+
+func crossedReset(before, after Meter) bool {
+	return !before.Reset.IsZero() && before.At.Before(before.Reset) && !after.At.Before(before.Reset)
+}
 
 func matchesQuota(e Event, quota string) bool {
 	switch quota {
@@ -162,6 +167,10 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 	models := map[string]*Model{}
 	devices := map[string]*Device{}
 	for _, e := range events {
+		if e.OutsideRange {
+			r.ExcludedArchiveBuckets++
+			continue
+		}
 		r.Cost += e.Cost
 		r.Requests += e.Requests
 		if !e.Priced {
@@ -197,7 +206,7 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 		d.Cost += e.Cost
 		d.Requests += e.Requests
 	}
-	if profile.MonthlyUSD > 0 && r.Requests > r.UnknownRequests {
+	if profile.MonthlyUSD > 0 && r.Requests > 0 && r.UnknownRequests == 0 && r.ExcludedArchiveBuckets == 0 {
 		r.ValueMultiple = number(r.Cost / profile.MonthlyUSD)
 	}
 	var cycle *Cycle
@@ -207,11 +216,12 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 		if m.Used < 0 || m.Used > 100 || math.IsNaN(m.Used) {
 			continue
 		}
-		if cycle != nil && m.Quota == previous.Quota && m.Plan == previous.Plan && math.Abs(m.Reset.Sub(previous.Reset).Seconds()) <= 60 && m.Used < previous.Used && previous.Used-m.Used <= 5 {
+		crossedDeadline := crossedReset(previous, m)
+		if cycle != nil && !crossedDeadline && m.Quota == previous.Quota && m.Plan == previous.Plan && math.Abs(m.Reset.Sub(previous.Reset).Seconds()) <= 60 && m.Used < previous.Used && previous.Used-m.Used <= 5 {
 			r.RejectedMeterCorrections++
 			continue
 		}
-		changed := cycle == nil || m.Quota != previous.Quota || m.Plan != previous.Plan || m.Used < previous.Used-0.001 || (!m.Reset.IsZero() && !previous.Reset.IsZero() && math.Abs(m.Reset.Sub(previous.Reset).Seconds()) > 60)
+		changed := cycle == nil || m.Quota != previous.Quota || m.Plan != previous.Plan || crossedDeadline || m.Used < previous.Used-0.001 || (!m.Reset.IsZero() && !previous.Reset.IsZero() && math.Abs(m.Reset.Sub(previous.Reset).Seconds()) > 60)
 		if changed {
 			earlyRefill := false
 			if cycle != nil {
@@ -223,19 +233,21 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 				} else if !previous.Reset.IsZero() && !m.At.Before(previous.Reset) {
 					boundary = "scheduled boundary observed"
 				} else if m.Used < previous.Used {
-					boundary = "early reset observed; cause unknown"
 					earlyRefill = m.Source == "poll" && previous.Source == "poll" &&
 						m.At.After(previous.At) && !previous.Reset.IsZero() &&
 						m.At.Before(previous.Reset.Add(-time.Minute)) &&
 						m.Reset.After(previous.Reset.Add(time.Minute)) && previous.Used-m.Used > 5
+					if earlyRefill {
+						boundary = "early reset observed; cause unknown"
+					}
 				}
 			}
 			r.Cycles = append(r.Cycles, Cycle{Start: m.At, End: m.At, Reset: m.Reset, Quota: m.Quota, Plan: m.Plan, StartUsed: m.Used, EndUsed: m.Used, Boundary: boundary, Points: []Point{{At: m.At, Used: m.Used}}, earlyRefill: earlyRefill, priorReset: previous.Reset, priorUsed: previous.Used})
 			cycle = &r.Cycles[len(r.Cycles)-1]
 			anchor = m
-		} else if m.At.After(previous.At) && cycle.EndUsed < 100 {
+		} else if m.At.After(previous.At) && cycle.EndUsed < 100 && (anchor.Reset.IsZero() || anchor.At.Before(anchor.Reset)) {
 			delta := m.Used - anchor.Used
-			lastInWindow := index == len(meters)-1 || meters[index+1].Quota != m.Quota || meters[index+1].Plan != m.Plan || meters[index+1].Used < m.Used-5 || (!m.Reset.IsZero() && !meters[index+1].Reset.IsZero() && math.Abs(meters[index+1].Reset.Sub(m.Reset).Seconds()) > 60)
+			lastInWindow := index == len(meters)-1 || meters[index+1].Quota != m.Quota || meters[index+1].Plan != m.Plan || crossedReset(m, meters[index+1]) || meters[index+1].Used < m.Used-5 || (!m.Reset.IsZero() && !meters[index+1].Reset.IsZero() && math.Abs(meters[index+1].Reset.Sub(m.Reset).Seconds()) > 60)
 			if delta >= 5 || m.Used >= 100 || (delta > 0 && lastInWindow) {
 				from := sort.Search(len(events), func(i int) bool { return events[i].At.After(anchor.At) })
 				cost := 0.0
@@ -246,10 +258,13 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 				count := 0
 				// An hourly row can start before this interval and still overlap it.
 				// Its total cannot establish where within the hour quota was spent.
-				archiveOverlap := archiveEnds[from].After(anchor.At)
-				if archiveOverlap {
-					cycle.ArchiveTiming = true
-					mixed = true
+				archiveOverlap := false
+				firstOverlap := sort.Search(from, func(i int) bool { return archiveEnds[i+1].After(anchor.At) })
+				for _, e := range events[firstOverlap:from] {
+					if e.Archived && e.End.After(anchor.At) && matchesQuota(e, m.Quota) && (e.Plan == "" || m.Plan == "" || e.Plan == m.Plan) {
+						archiveOverlap = true
+						break
+					}
 				}
 				for j := from; j < len(events) && !events[j].At.After(m.At); j++ {
 					e := events[j]
@@ -259,7 +274,10 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 					if !matchesQuota(e, m.Quota) {
 						continue
 					}
-					if !e.End.IsZero() && e.End.After(m.At) {
+					if e.Archived {
+						archiveOverlap = true
+					}
+					if e.OutsideRange || (!e.End.IsZero() && e.End.After(m.At)) {
 						unknown += e.Requests
 						mixed = true
 						continue
@@ -273,17 +291,18 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 					if !e.Priced {
 						unknown += e.Requests
 					}
+					if e.Tokens > 0 && e.Input+e.Output == 0 {
+						mixed = true // Missing token breakdown cannot establish output per quota point.
+					}
 					k := modelKey(e)
 					if only == "" {
 						only = k
 					} else if only != k {
 						mixed = true
 					}
-					if e.Archived {
-						cycle.ArchiveTiming = true
-						archiveOverlap = true
-						mixed = true
-					}
+				}
+				if archiveOverlap {
+					cycle.ArchiveTiming = true
 				}
 				if count == 0 {
 					cycle.UnmatchedPoints += delta
@@ -293,8 +312,8 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 				cycle.End = m.At
 				cycle.EndUsed = m.Used
 				cycle.Used = m.Used - cycle.StartUsed
-				cycle.Points = append(cycle.Points, Point{At: m.At, Used: m.Used, Cost: cycle.Cost, matched: count > 0 && unknown == 0 && !archiveOverlap})
-				if weeklyModelQuota(m.Quota) && delta >= 5 && count > 0 && !mixed {
+				cycle.Points = append(cycle.Points, Point{At: m.At, Used: m.Used, Cost: cycle.Cost, Matched: count > 0 && unknown == 0 && !archiveOverlap})
+				if weeklyModelQuota(m.Quota) && delta >= 5 && count > 0 && !mixed && !archiveOverlap {
 					base := models[only]
 					idx := -1
 					for i, v := range cycle.Models {
@@ -351,13 +370,33 @@ func Analyze(events []Event, meters []Meter, profile Profile) Report {
 		}
 		r.Models = append(r.Models, *m)
 	}
-	sort.Slice(r.Models, func(i, j int) bool { return r.Models[i].Cost > r.Models[j].Cost })
+	sort.Slice(r.Models, func(i, j int) bool {
+		a, b := r.Models[i], r.Models[j]
+		if a.Cost != b.Cost {
+			return a.Cost > b.Cost
+		}
+		if a.Model != b.Model {
+			return a.Model < b.Model
+		}
+		if a.Effort != b.Effort {
+			return a.Effort < b.Effort
+		}
+		return a.Speed < b.Speed
+	})
 	for _, d := range devices {
 		r.Devices = append(r.Devices, *d)
 	}
-	sort.Slice(r.Devices, func(i, j int) bool { return r.Devices[i].Cost > r.Devices[j].Cost })
+	sort.Slice(r.Devices, func(i, j int) bool {
+		if r.Devices[i].Cost != r.Devices[j].Cost {
+			return r.Devices[i].Cost > r.Devices[j].Cost
+		}
+		return r.Devices[i].Name < r.Devices[j].Name
+	})
 	if r.UnknownRequests > 0 {
-		r.Warnings = append(r.Warnings, "Some requests have no known price. Dollar totals and subscription multiples are lower bounds.")
+		r.Warnings = append(r.Warnings, "Some requests lack a price or a usable token breakdown. Dollar totals show only priced usage.")
+	}
+	if r.ExcludedArchiveBuckets > 0 {
+		r.Warnings = append(r.Warnings, "Hourly buckets that overlap a range boundary are excluded because their in-range usage cannot be recovered.")
 	}
 	if r.ArchivedRequests > 0 {
 		r.Warnings = append(r.Warnings, "Hourly archives have coarser timing and no per-request pricing details; excluded from model quota calibration.")

@@ -8,13 +8,15 @@ The All view and the Subscription Value tab show known plan names and recorded b
 
 - **Output tokens / API dollar:** output token count divided by the recorded API-equivalent value in the same period. It is shown only when every recorded request in the comparison is priced and the total is positive. Task success is not available from the local usage logs.
 
-- **Observed API value:** token vectors in the selected period priced using current API Standard short-context text rates. The period defaults to the last 30 days. It is not automatically the billing month.
+- **Observed API value:** token vectors in the selected period priced using the canonical current API Standard short-context text rates. This comparison uses the same rates across dates. The dashboard's token cost history uses rates effective at the time of each request. The period defaults to the last 30 days.
 - **API / 100% quota:** matched API value divided by observed percentage-point movement, multiplied by 100. A 0% to 100% observation is near-full meter coverage; 38% to 100% covers 62 points and is extrapolated.
 - **Normalized x1:** the per-100% value divided by the configured plan multiplier. This is a normalization assumption, not a measurement of a different plan.
 
 Each allowance is kept separate by quota, plan and reset boundary. A material meter drop also starts a separate observation. Small backwards readings up to five points with the same reset are rejected as stale concurrent counters or corrections; their count is reported. Raw telemetry remains stored. Reset timestamp jitter up to 60 seconds is tolerated. When task telemetry is available, nearby polling observations are excluded to avoid counting a stale poll as a reset. Early resets are observed events; the view does not claim they were redeemed, promotional or banked without external evidence.
 
-Quota at 100% is saturated. Costs after its first observed 100% remain in period totals but cannot be calibrated against further quota movement. Rounded counters need at least five percentage points before an allowance estimate is shown. The displayed rounding range accounts only for one percentage point of endpoint uncertainty, not missing logs or unknown provider policy.
+Quota at 100% is saturated. Costs after its first observed 100% remain in period totals but cannot be calibrated against further quota movement. Rounded counters need at least five percentage points before an allowance estimate is shown. The displayed rounding range accounts for one percentage point of endpoint uncertainty. An interval with missing timed usage or unavailable pricing leaves a gap in the allowance chart. Archived hourly buckets that overlap the requested boundaries are excluded and reported as partial coverage. The period total counts fully contained priced rows and suppresses the output-per-dollar ratio when known coverage is incomplete.
+
+All providers in a comparison use the same selected bounds. If a refresh is incomplete, the last complete comparison for the same period and account stays visible. Allowance details display the matched cost and quota points used in their calculation. **How value is calculated** explains the formulas used by the chart, table, and CSV.
 
 ## Comparing early refills
 
@@ -154,18 +156,7 @@ Output tokens per percentage point describe throughput, not successful work. Mod
 
 ## Price basis and evidence
 
-Rates checked 2026-09-07:
-
-| Model | Input / M | Cached input / M | Cache write / M | Output / M |
-| --- | ---: | ---: | ---: | ---: |
-| GPT-6 Astra | $10 | $1 | $12.50 | $50 |
-| GPT-5.6 Sol | $5 | $0.50 | $6.25 | $30 |
-| GPT-5.6 Terra | $2 | $0.20 | $2.50 | $12 |
-| GPT-5.6 Luna | $0.20 | $0.02 | $0.25 | $1.20 |
-
-Sources: official model pages for [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) and [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna). Other recognized models use the existing onWatch price catalog. Update the dated catalog when verifying new prices. Historical stored costs are preserved; this comparison reprices token vectors consistently.
-
-Standard API rates checked Nov 24, 2026 for the three benchmarked models are $2 input, $0.10 cached input, $2.50 short cache write, and $10 output per million tokens for [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and [Claude Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview). Sonnet's one-hour cache write is $4. [Gemini 4 Hydrogen](https://ai.google.dev/gemini-api/docs/pricing#gemini-4-hydrogen) is $1.50 input, $0.075 cached input, and $7.50 output with implicit caching.
+The comparison reads Standard short-context rates from the onWatch price catalog. Use its dated rate schedule for verified price changes. Token vectors without a verifiable price or token-type breakdown stay unpriced. Archived rows with cache writes omit the cache duration split required to calculate a standard price, so they count as unpriced. See [API Integrations](API_INTEGRATIONS_SETUP.md) for request-time historical pricing and coverage.
 
 Codex credit estimates use the [published credit rate card](https://learn.chatgpt.com/docs/pricing) independently. Astra Standard is 250/25/1,250 credits per million input/cached/output tokens. Its Codex Fast multiplier is 2.5x, while its API Fast multiplier is 2x. The API comparison deliberately excludes speed and long-context premiums. Cache reads/writes are not added to input twice; reasoning is not added to output twice. Config-derived historical speed is unverified, so affected credit estimates stay incomplete.
 

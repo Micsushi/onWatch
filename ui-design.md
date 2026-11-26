@@ -13,6 +13,12 @@ dashboard.
 
 - Preserve a compact, high-signal dashboard layout.
 - Favor scan speed, exact labels, and consistent ranges for cost and quota data.
+- Give history plots a title row, a separate toolbar, and labeled axes. Use one
+  unit per plot and make the metric an explicit choice when history contains
+  both dollars and tokens.
+- Keep quota percentages on a shared zero-to-100 scale. Extend the scale when
+  an observed reading exceeds 100%. Use percentage points for sums of quota
+  movement.
 - Keep provider identity, refresh state, errors, and data age visible.
 - Keep the last successful cards and graphs visible during refreshes. Show a
   persistent header activity indicator until replacement data finishes loading.
