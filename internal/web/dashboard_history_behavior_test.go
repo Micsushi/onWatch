@@ -1150,7 +1150,7 @@ if (formatChartAxisNumber(2500) !== '2,500') {
 	}
 }
 
-func TestCombinedQuotaHistoryDoesNotFetchUnusedCostHistory(t *testing.T) {
+func TestCombinedQuotaHistoryRequestsWeeklyDashboardData(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
 	refresh := dashboardJavaScriptBetween(t, source, "async function runUsageGraphRefreshJob(", "function createUsageGraphRefreshJob(")
@@ -1169,10 +1169,10 @@ function applyUsageGraphJob(_job,payload) { applications.push(payload); }
 %s
 (async () => {
   await runUsageGraphRefreshJob({provider:'both', range:'all', query:'range=all'}, {aborted:false});
-  assert.deepEqual(requests, ['/api/history?range=all&provider=both&quotaAccounts=1']);
+  assert.deepEqual(requests, ['/api/history?range=all&provider=both&weeklyDashboard=1']);
   assert.equal(applications.length, 1);
   assert.deepEqual(applications[0].data, {primary:true});
-  assert.equal(applications[0].quotaAccounts, true);
+  assert.equal(applications[0].weeklyDashboard, true);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 `, refresh))
 }

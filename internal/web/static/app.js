@@ -201,6 +201,7 @@ const State = {
   codexQuotaNames: [],
   allProvidersCurrent: null,
   allProviderAccountSelections: {},
+  allWeeklyCards: null,
   allProvidersCurrentLoaded: false,
   allProvidersInsights: null,
   allProvidersHistory: null,
@@ -924,25 +925,29 @@ async function fetchPlatformCostPayload(provider, range, signal, scope = 'platfo
   const request = (async () => {
     const integration = platformCostIntegrationNames[provider] || '';
     const query = queryOverride || platformCostHistoryRequestQuery(range, scope);
-    const sessions = authFetch(`${API_BASE}/api/api-integrations/sessions?${query}&integration=${encodeURIComponent(integration)}&includeSessions=false`, { signal });
-    const history = authFetch(`${API_BASE}/api/api-integrations/history?${query}&integration=${encodeURIComponent(integration)}`, { signal }).then(async response => {
+    const isCombined = provider === 'both';
+    const sessions = isCombined ? null
+      : authFetch(`${API_BASE}/api/api-integrations/sessions?${query}&integration=${encodeURIComponent(integration)}&includeSessions=false`, { signal });
+    const filter = isCombined ? '' : '&integration=' + encodeURIComponent(integration);
+    const history = authFetch(`${API_BASE}/api/api-integrations/history?${query}${filter}`, { signal }).then(async response => {
       if (!response.ok) return null;
+      const rows = await response.json();
       const payload = {
-        apiHistory: await response.json(),
+        apiHistory: isCombined ? { [integration]: combineProviderCostBuckets(rows) } : rows,
         usesArchivedData: response.headers.get('X-OnWatch-Archived-Data') === 'true',
       };
       if (!signal.aborted) onHistory?.(payload);
       return payload;
     });
     const [sessionRes, bucketPayload] = await Promise.all([sessions, history]);
-    if (!sessionRes.ok && !bucketPayload) {
+    if (!sessionRes?.ok && !bucketPayload) {
       throw new Error('Failed to fetch cost history');
     }
     let sessionHistory = {};
     let sessionTotals = {};
     let sessionModels = {};
     let usesArchivedData = Boolean(bucketPayload?.usesArchivedData);
-    if (sessionRes.ok) {
+    if (sessionRes?.ok) {
       usesArchivedData = usesArchivedData || sessionRes.headers.get('X-OnWatch-Archived-Data') === 'true';
       const sessionData = await sessionRes.json();
       sessionTotals = sessionData && typeof sessionData === 'object' ? (sessionData._totals || {}) : {};
@@ -4693,7 +4698,8 @@ async function fetchCurrent(options = {}) {
       return;
     }
 
-    const res = await authFetchWithTimeout(`${API_BASE}/api/current?${providerParam()}`);
+    const dashboard = requestProvider === 'both' ? '&weeklyDashboard=1' : '';
+    const res = await authFetchWithTimeout(`${API_BASE}/api/current?${providerParam()}${dashboard}`);
     if (!res.ok) throw new Error('Failed to fetch');
     const data = await res.json();
 
@@ -6255,10 +6261,6 @@ function setMainChartDatasets(datasets, range, options = {}) {
 function initChart() {
   const ctx = document.getElementById('usage-chart');
   if (!ctx || typeof Chart === 'undefined') return;
-  if (getCurrentProvider() === 'both') {
-    document.getElementById('all-providers-container')?.addEventListener('dashboard-accounts-changed', renderAllQuotaHistory);
-  }
-
   Chart.register(crosshairPlugin);
 
   const colors = getThemeColors();
@@ -6421,6 +6423,7 @@ function updateChartTheme() {
     if (State.allProvidersCurrent || State.allProvidersInsights || State.allProvidersHistory) {
       renderAllProvidersView();
       renderAllQuotaHistory();
+      renderPlatformCostChartForSelectedRange(provider);
     } else {
       fetchHistory();
     }
@@ -6601,61 +6604,32 @@ function buildProviderHistoryDatasets(provider, range, data) {
 }
 
 function buildAllQuotaHistoryDatasets(data, range, selections) {
-  const datasets = [];
-  const providers = ['anthropic', 'codex', 'antigravity', 'minimax', 'gemini', 'copilot', 'cursor', 'openrouter', 'synthetic', 'zai'];
-  const colors = ['#14B8A6', '#6366F1', '#F59E0B', '#EC4899', '#38BDF8', '#A855F7', '#22C55E', '#F87171'];
-  const append = (provider, payload, accountName = '') => {
-    const title = [bothProviderNames[provider] || 'OpenRouter', accountName].filter(Boolean).join(' · ');
-    for (const dataset of buildProviderHistoryDatasets(provider, range, payload)) {
-      if (!datasetsHaveFiniteValue([dataset])) continue;
-      const color = colors[datasets.length % colors.length];
-      datasets.push({
-        ...dataset,
-        label: title + ' · ' + dataset.label,
-        borderColor: color,
-        backgroundColor: color,
-        fill: false,
-        hidden: false,
-        segment: undefined,
-      });
-    }
-  };
-  for (const provider of providers) {
-    const accounts = data[provider + 'Accounts'];
-    const selected = selections[provider];
-    if (Array.isArray(accounts)) {
-      for (const account of accounts) {
-        if (selected && !selected.includes(String(account.accountId))) continue;
-        if (account.history) append(provider, account.history, account.accountName);
-      }
-      continue;
-    }
-    if (selected || !data[provider]) continue;
-    const rows = data[provider];
-    if (provider === 'antigravity' || provider === 'copilot') {
-      const names = provider === 'copilot' ? copilotDisplayNames : {};
-      const colorMap = provider === 'copilot' ? copilotChartColorMap : antigravityChartColorMap;
-      const series = buildFlatUsageDatasets(rows, range, provider, names, colorMap, copilotChartColorFallback);
-      // Combined history uses flat rows for these legacy provider-wide responses.
-      for (const dataset of series) {
-        if (!datasetsHaveFiniteValue([dataset])) continue;
-        datasets.push({ ...dataset, label: bothProviderNames[provider] + ' · ' + dataset.label, hidden: false, fill: false });
-      }
+  const colors = { anthropic: '#14B8A6', antigravity: '#8B5CF6', codex: '#F59E0B' };
+  return Object.entries(colors).flatMap(([provider, color]) => {
+    if (!Object.hasOwn(selections, provider)) return [];
+    const payload = selections[provider] == null
+      ? data[provider]
+      : data[provider + 'Accounts']?.find(account => String(account.accountId) === selections[provider])?.history;
+    let points;
+    if (provider === 'antigravity') {
+      const weekly = payload?.datasets?.find(series => series.modelId === 'antigravity_gemini_pro:weekly');
+      points = weekly ? payload.labels.map((x, index) => ({ x, y: weekly.data[index] })) : [];
     } else {
-      append(provider, rows);
+      points = (payload || []).map(row => ({ x: row.capturedAt, y: row.seven_day }));
     }
-  }
-  return datasets;
+    if (!points.some(point => point.y != null)) return [];
+    return [{ ...usageLineDataset(bothProviderNames[provider], '', points, color, range), fill: false, hidden: false }];
+  });
 }
 
 function renderAllQuotaHistory() {
   const window = State.allProvidersHistoryWindow;
-  if (!window || !State.allProvidersHistory) return;
+  if (!window || !State.allProvidersHistory || !State.allWeeklyCards) return;
   if (!State.chart) initChart();
   const min = Date.parse(window.start);
   const max = Date.parse(window.end);
   setMainChartDatasets(
-    buildAllQuotaHistoryDatasets(State.allProvidersHistory, window.range, State.allProviderAccountSelections || {}),
+    buildAllQuotaHistoryDatasets(State.allProvidersHistory, window.range, State.allWeeklyCards),
     window.range,
     {
       windowStart: window.start,
@@ -6668,6 +6642,7 @@ function renderAllQuotaHistory() {
 }
 
 function usageGraphAccountKey(provider) {
+  if (provider === 'both') return 'weekly-dashboard';
   if (provider === 'codex') return `codex:${State.codexAccount || 1}`;
   if (provider === 'minimax') return `minimax:${State.minimaxAccount || ''}`;
   return '';
@@ -6723,7 +6698,7 @@ async function runUsageGraphRefreshJob(job, signal) {
     usesArchivedData = response.headers.get('X-OnWatch-Archived-Data') === 'true';
     data = await response.json();
   } else {
-    const accounts = job.provider === 'both' ? '&quotaAccounts=1' : '';
+    const accounts = job.provider === 'both' ? '&weeklyDashboard=1' : '';
     const response = await authFetch(`${API_BASE}/api/history?${job.query}&${providerParamFor(job.provider, job.accountKey)}${accounts}`, { signal });
     if (!response.ok) throw new Error('Failed to fetch history');
     usesArchivedData = response.headers.get('X-OnWatch-Archived-Data') === 'true';
@@ -6737,7 +6712,7 @@ async function runUsageGraphRefreshJob(job, signal) {
     : buildProviderHistoryDatasets(job.provider, job.range, data);
   const payload = {
     data,
-    quotaAccounts: job.provider === 'both',
+    weeklyDashboard: job.provider === 'both',
     chartDatasets,
     usesArchivedData,
     windowStart: job.windowStart,
@@ -6789,7 +6764,7 @@ async function fetchHistory(range, options = {}) {
       cached,
       { stale: Boolean(options.force || !freshCached), ts: cached.ts },
     );
-    if (!options.force && freshCached && (provider !== 'both' || cached.quotaAccounts)) {
+    if (!options.force && freshCached && (provider !== 'both' || cached.weeklyDashboard)) {
       return;
     }
   }
@@ -7080,9 +7055,7 @@ function buildAllProviderEntries() {
     }
 
     if (provider === 'codex') {
-      const currentAccounts = Array.isArray(current.codexAccounts)
-        ? current.codexAccounts
-        : (current.codex ? [current.codex] : []);
+      const currentAccounts = current.codexCardAccounts || current.codexAccounts || (current.codex ? [current.codex] : []);
       if (currentAccounts.length === 0) return;
 
       const insightAccounts = Array.isArray(insights.codexAccounts) ? insights.codexAccounts : [];
@@ -7090,7 +7063,6 @@ function buildAllProviderEntries() {
 
       currentAccounts.forEach((account, idx) => {
         const accountID = account.accountId || account.id || idx + 1;
-        if (!isProviderTelemetryEnabled('codex', accountID)) return;
         const accountName = account.accountName || account.name || `Account ${idx + 1}`;
         const cardKey = sanitizeProviderCardKey(`codex-${accountID}`);
         const insightPayload = insightAccounts.find(acc => String(acc.accountId || '') === String(accountID))
@@ -7101,8 +7073,10 @@ function buildAllProviderEntries() {
           provider: 'codex',
           accountID,
           accountName,
+          accountHidden: account.accountHidden || !isProviderTelemetryEnabled('codex', accountID),
+          accountPolling: account.accountPolling,
           cardKey,
-          title: `Codex - Account: ${accountName}`,
+          title: 'Codex',
           badge: account.subscriptionPlan?.name || toTitleCase(account.planType || ''),
           nextBillingDate: account.subscriptionPlan?.nextBillingDate || '',
           planType: account.planType || '',
@@ -7116,7 +7090,7 @@ function buildAllProviderEntries() {
       return;
     }
 
-    if (provider === 'antigravity' && current.antigravityAccounts?.length > 1) {
+    if (provider === 'antigravity' && current.antigravityAccounts?.length) {
       if (!isProviderTelemetryEnabled(provider)) return;
       current.antigravityAccounts.forEach(account => {
         entries.push({
@@ -7124,7 +7098,7 @@ function buildAllProviderEntries() {
           accountID: account.accountId,
           accountName: account.accountName,
           cardKey: sanitizeProviderCardKey('antigravity-' + account.accountId),
-          title: 'Antigravity · ' + account.accountName,
+          title: 'Antigravity',
           badge: account.planName || '',
           quotas: normalizeBothQuotas(provider, account),
         });
@@ -7695,12 +7669,33 @@ function renderAPIIntegrationsModelCosts() {
 }
 
 const platformCostIntegrationNames = {
+  both: 'Combined',
   anthropic: 'Claude Code',
   codex: 'Codex CLI',
   gemini: 'Gemini CLI',
   antigravity: 'Antigravity',
   cursor: 'Cursor',
 };
+
+function combineProviderCostBuckets(history) {
+  const buckets = new Map();
+  for (const provider of ['anthropic', 'antigravity', 'codex']) {
+    for (const row of history[platformCostIntegrationNames[provider]] || []) {
+      const bucket = buckets.get(row.capturedAt) || {
+        capturedAt: row.capturedAt, bucketSeconds: row.bucketSeconds,
+        totalCostUsd: null, totalTokens: 0, requestCount: 0,
+      };
+      if (row.totalCostUsd != null) bucket.totalCostUsd = (bucket.totalCostUsd || 0) + row.totalCostUsd;
+      bucket.totalTokens += row.totalTokens || 0;
+      bucket.requestCount += row.requestCount || 0;
+      const first = row.firstCapturedAt || row.capturedAt;
+      if (!bucket.firstCapturedAt || Date.parse(first) < Date.parse(bucket.firstCapturedAt)) bucket.firstCapturedAt = first;
+      bucket.lastCapturedAt = laterDateString(bucket.lastCapturedAt, row.lastCapturedAt || row.capturedAt);
+      buckets.set(row.capturedAt, bucket);
+    }
+  }
+  return [...buckets.values()].sort((left, right) => Date.parse(left.capturedAt) - Date.parse(right.capturedAt));
+}
 
 function supportsPlatformCost(provider = getCurrentProvider()) {
   return Boolean(platformCostIntegrationNames[provider]);
@@ -7825,6 +7820,10 @@ function getModelRowsFromAPIIntegrationEntry(entry) {
 function renderPlatformCostPanel(provider = getCurrentProvider()) {
   const section = document.getElementById('platform-cost-section');
   if (!section || !supportsPlatformCost(provider)) return;
+  if (provider === 'both') {
+    renderPlatformCostChartForSelectedRange(provider);
+    return;
+  }
   const entry = getPlatformCostEntry(provider);
   section.hidden = false;
   if (!entry) {
@@ -8167,7 +8166,7 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const title = document.getElementById('platform-cost-chart-title');
   const gapNote = document.getElementById('platform-cost-chart-gap-note');
   const graphMode = normalizeGraphMode(State.platformCostGraphMode);
-  const showTokens = State.platformCostChartMetric === 'tokens';
+  const showTokens = provider !== 'both' && State.platformCostChartMetric === 'tokens';
   const metric = showTokens ? 'Tokens' : 'Priced cost';
   const periodMode = isPeriodGraphMode(graphMode);
   const costTimeBounds = platformCostChartTimeBounds(range);
@@ -8593,6 +8592,14 @@ function updatePlatformCostSummaryForRange(provider, range, rows) {
     coverage.hidden = totals.tokens === 0 && totals.cost == null;
   }
   const label = platformCostRangeLabel(range);
+  if (provider === 'both') {
+    summaryEl.innerHTML = `
+      <div class="platform-cost-metric primary">
+        <span class="platform-cost-label">Priced subtotal · ${escapeHTML(label)} · All accounts</span>
+        <strong>${totals.cost != null ? formatCurrencyUSD(totals.cost) : '--'}</strong>
+      </div>`;
+    return;
+  }
   summaryEl.innerHTML = `
     <div class="platform-cost-metric primary">
       <span class="platform-cost-label">${costLabel} (${escapeHTML(label)})</span>
@@ -9180,7 +9187,6 @@ function initAllProviderAccountPicker(container, provider, entries, previousPick
     picker.open = false;
     applySelection(selection);
     summary.focus();
-    container.dispatchEvent(new Event('dashboard-accounts-changed'));
   };
   picker.onkeydown = event => {
     if (event.key === 'Escape') {
@@ -9194,9 +9200,46 @@ function renderAllProvidersView() {
   const container = document.getElementById('all-providers-container');
   if (!container) return;
 
-  const entries = sortAllProviderEntries(buildAllProviderEntries());
+  const candidates = buildAllProviderEntries();
+  const pickerAccounts = {
+    codex: candidates.filter(entry => entry.provider === 'codex' && entry.accountID != null),
+    antigravity: candidates.filter(entry => entry.provider === 'antigravity' && entry.accountID != null),
+  };
+  const activeCards = {};
+  for (const [provider, accounts] of Object.entries(pickerAccounts)) {
+    let selected = State.allProviderAccountSelections[provider]?.[0];
+    if (!selected) {
+      try {
+        selected = JSON.parse(localStorage.getItem('onwatch-all-dashboard-accounts:' + provider) || '[]')?.[0];
+      } catch (_) { /* optional */ }
+    }
+    activeCards[provider] = accounts.find(entry => String(entry.accountID) === selected)
+      || accounts.find(entry => !entry.accountHidden);
+  }
+  const entries = sortAllProviderEntries(candidates.filter(entry =>
+    entry.accountID == null || !Object.hasOwn(pickerAccounts, entry.provider) || activeCards[entry.provider] === entry
+  ));
+  const weeklyCards = Object.fromEntries(entries.filter(entry => ['anthropic', 'codex', 'antigravity'].includes(entry.provider))
+    .map(entry => [entry.provider, entry.accountID == null ? null : String(entry.accountID)]));
+  const weeklyChanged = JSON.stringify(weeklyCards) !== JSON.stringify(State.allWeeklyCards);
+  State.allWeeklyCards = weeklyCards;
+
+  const accountControl = entry => {
+    const accounts = pickerAccounts[entry.provider];
+    if (!accounts?.length || !entry.accountName) return '';
+    if (accounts.length === 1) {
+      return `<span class="provider-card-account-name">${escapeHTML(entry.accountName)}</span>`;
+    }
+    return `<select class="page-size-select provider-card-account-select" data-account-switch="${entry.provider}" aria-label="${entry.title} account">${accounts.map(account => {
+      const label = account.accountName + (account.accountPolling === false ? ' (saved readings)' : '');
+      return `<option value="${escapeHTML(String(account.accountID))}"${account === entry ? ' selected' : ''}>${escapeHTML(label)}</option>`;
+    }).join('')}</select>`;
+  };
+  const pickerSignature = entry => JSON.stringify((pickerAccounts[entry.provider] || [])
+    .map(account => [account.accountID, account.accountName, account.accountPolling]));
 
   if (entries.length === 0) {
+    if (weeklyChanged) renderAllQuotaHistory();
     if (getCurrentProvider() === 'both' && !State.allProvidersCurrentLoaded) {
       container.innerHTML = '<p class="insight-text">Loading provider cards...</p>';
       return;
@@ -9213,6 +9256,7 @@ function renderAllProvidersView() {
     if (!card) return false;
     // A poll error appearing or clearing changes the card structure.
     if (card.querySelector('.provider-card-title > span')?.textContent !== entry.title) return false;
+    if (card.dataset.accountOptions !== pickerSignature(entry)) return false;
     const hasBanner = card.querySelector('.poll-error-banner') !== null;
     const hasSubscription = ['anthropic', 'codex', 'antigravity'].includes(entry.provider);
     return hasBanner === Boolean(entry.pollError && entry.pollError.message)
@@ -9229,6 +9273,7 @@ function renderAllProvidersView() {
         entry.quotas.forEach(quota => updateProviderKPICard(quota, entry.cardKey));
       }
     });
+    if (weeklyChanged) renderAllQuotaHistory();
     return;
   }
 
@@ -9241,6 +9286,7 @@ function renderAllProvidersView() {
   const previousPickers = new Map([...container.querySelectorAll('[data-account-provider]')]
     .map(picker => [picker.dataset.accountProvider, picker]));
   const accountFocus = document.activeElement?.closest('.all-provider-account-picker') ? document.activeElement : null;
+  const switchFocus = document.activeElement?.dataset.accountSwitch;
 
   container.innerHTML = entries.map((entry) => {
     const collapsed = Boolean(collapsedState[entry.cardKey]);
@@ -9254,12 +9300,13 @@ function renderAllProvidersView() {
     const quotaCards = entry.provider === 'antigravity' && entry.quotas.length
       ? renderAntigravityQuotaGroups(entry.quotas, renderCards, antigravityDetails?.open)
       : renderCards(entry.quotas);
-    return `<section class="provider-card ${collapsed ? 'collapsed' : ''}" data-card-key="${entry.cardKey}" data-provider="${entry.provider}">
+    return `<section class="provider-card ${collapsed ? 'collapsed' : ''}" data-card-key="${entry.cardKey}" data-provider="${entry.provider}" data-account-options="${escapeHTML(pickerSignature(entry))}">
       <header class="provider-card-header">
         <div class="provider-card-title">
           <span>${escapeHTML(entry.title)}</span>
           ${badge}
           ${renewal}
+          ${accountControl(entry)}
         </div>
         <button class="provider-card-collapse-btn" type="button" data-card-key="${entry.cardKey}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${escapeHTML(entry.title)}">
           <svg class="provider-card-collapse-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -9273,11 +9320,20 @@ function renderAllProvidersView() {
       </div>
     </section>`;
   }).join('');
-  for (const provider of ['codex', 'antigravity', 'minimax']) {
-    const accounts = entries.filter(entry => entry.provider === provider && entry.accountID != null);
-    if (accounts.length > 1) initAllProviderAccountPicker(container, provider, accounts, previousPickers.get(provider));
-    else delete State.allProviderAccountSelections[provider];
+  const minimaxAccounts = entries.filter(entry => entry.provider === 'minimax' && entry.accountID != null);
+  if (minimaxAccounts.length > 1) initAllProviderAccountPicker(container, 'minimax', minimaxAccounts, previousPickers.get('minimax'));
+  else delete State.allProviderAccountSelections.minimax;
+  for (const select of container.querySelectorAll('[data-account-switch]')) {
+    const provider = select.dataset.accountSwitch;
+    select.addEventListener('change', () => {
+      const selection = [select.value];
+      State.allProviderAccountSelections[provider] = selection;
+      try { localStorage.setItem('onwatch-all-dashboard-accounts:' + provider, JSON.stringify(selection)); } catch (_) { /* optional */ }
+      renderAllProvidersView();
+    });
+    if (switchFocus === provider) select.focus();
   }
+  if (weeklyChanged) renderAllQuotaHistory();
   if (accountFocus?.isConnected) accountFocus.focus();
   if (summaryHadFocus) container.querySelector('.antigravity-quota-details > summary')?.focus();
 
@@ -11792,7 +11848,9 @@ function startAutoRefresh() {
   State.refreshInterval = setInterval(() => {
     setDashboardRefreshState(true, 'Checking for newer data...');
     const tasks = [fetchCurrent(), fetchHistory(), ...fetchOpenDashboardDetails()];
-    if (getCurrentProvider() === 'both') tasks.push(fetchDeepInsights());
+    if (getCurrentProvider() === 'both') {
+      tasks.push(fetchDeepInsights(), fetchPlatformCostHistory(selectedPlatformCostRange(), 'both', { background: true }));
+    }
     Promise.allSettled(tasks).finally(() => setDashboardRefreshState(false));
   }, REFRESH_INTERVAL);
 }
@@ -14500,7 +14558,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     setDashboardRefreshState(true, 'Updating saved data...');
     const tasks = [loadHiddenInsights(), fetchCurrent({ force: true }), fetchHistory(selectedChartRange(), { force: true })];
-    if (getCurrentProvider() === 'both') tasks.push(fetchDeepInsights({ force: true }));
+    if (getCurrentProvider() === 'both') {
+      tasks.push(fetchDeepInsights({ force: true }), fetchPlatformCostHistory(selectedPlatformCostRange(), 'both', { background: true }));
+    }
     Promise.allSettled(tasks).finally(() => setDashboardRefreshState(false));
 
     const overviewSection = document.querySelector('.cycle-overview-section');

@@ -437,90 +437,7 @@
         {{end}}
 
         {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}}
-        <section class="sessions-section platform-cost-section" id="platform-cost-section" data-provider="{{.CurrentProvider}}">
-            <header class="section-header">
-                <h3 class="section-title">
-                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 1v22"/>
-                        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6"/>
-                    </svg>
-                    Estimated Token Cost
-                </h3>
-            </header>
-            <div class="platform-cost-summary" id="platform-cost-summary">
-                <div class="platform-cost-metric primary">
-                    <span class="platform-cost-label">Estimated Cost</span>
-                    <strong>--</strong>
-                </div>
-                <div class="platform-cost-metric">
-                    <span class="platform-cost-label">Total Tokens</span>
-                    <strong>--</strong>
-                </div>
-                <div class="platform-cost-metric">
-                    <span class="platform-cost-label">Requests</span>
-                    <strong>--</strong>
-                </div>
-                <div class="platform-cost-metric">
-                    <span class="platform-cost-label">Cost / 1M Priced Tokens</span>
-                    <strong>--</strong>
-                </div>
-                <div class="platform-cost-metric">
-                    <span class="platform-cost-label">Last Entry</span>
-                    <strong>--</strong>
-                </div>
-            </div>
-            <section class="history-chart platform-cost-chart-card" aria-labelledby="platform-cost-chart-title">
-                <header class="history-chart-heading">
-                    <h4 class="history-chart-title" id="platform-cost-chart-title">Cost &amp; token history</h4>
-                </header>
-                <p class="chart-coverage-note chart-refresh-message" id="platform-cost-refresh-status" role="status" hidden></p>
-                <div class="history-chart-toolbar">
-                    <div class="history-chart-controls">
-                        <div class="range-selector graph-mode-toggle" id="platform-cost-chart-metric-select" role="group" aria-label="Cost history metric">
-                            <button class="range-btn active" type="button" data-metric="cost" aria-pressed="true">Cost</button>
-                            <button class="range-btn" type="button" data-metric="tokens" aria-pressed="false">Tokens</button>
-                        </div>
-                        <div class="range-selector graph-mode-toggle" id="platform-cost-chart-mode-select" role="group" aria-label="Cost graph style">
-                            <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative" aria-pressed="true">Cumulative</button>
-                            <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket" aria-pressed="false">Per period</button>
-                        </div>
-                    </div>
-                    <div class="graph-history-control" data-history-scope="platformCost">
-                        <div class="range-selector graph-history-presets" role="group" aria-label="Cost graph time range">
-                            <button class="platform-cost-range-btn" type="button" data-range="1h" aria-pressed="false">1h</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="6h" aria-pressed="false">6h</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="12h" aria-pressed="false">12h</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="24h" aria-pressed="false">24h</button>
-                            <button class="platform-cost-range-btn active" type="button" data-range="7d" aria-pressed="true">7d</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="30d" aria-pressed="false">30d</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="all" aria-pressed="false">All</button>
-                            <button class="platform-cost-range-btn" type="button" data-range="custom" aria-pressed="false">Custom</button>
-                        </div>
-                        <div class="graph-history-dates">
-                            <label for="platform-cost-history-start-date"><span>Start</span><input type="date" id="platform-cost-history-start-date" data-history-start autocomplete="off"></label>
-                            <span class="graph-history-date-separator" aria-hidden="true">to</span>
-                            <label for="platform-cost-history-end-date"><span>End</span><input type="date" id="platform-cost-history-end-date" data-history-end autocomplete="off"></label>
-                        </div>
-                        <p class="graph-history-error" data-history-error role="alert" hidden></p>
-                    </div>
-                </div>
-                <p class="sr-only" id="platform-cost-chart-gap-note" hidden></p>
-                <div class="platform-cost-chart-wrap history-chart-plot">
-                    <div class="chart-loading-overlay" id="platform-cost-chart-loading" aria-live="polite" hidden>
-                        <span class="loading-spinner" aria-hidden="true"></span>
-                        <span>Loading cost history</span>
-                    </div>
-                    <p class="sr-only" id="platform-cost-chart-accessible-summary" aria-live="polite"></p>
-                    <canvas id="platform-cost-chart" role="img" aria-label="Cost and token history chart" aria-describedby="platform-cost-summary platform-cost-chart-gap-note platform-cost-chart-accessible-summary"></canvas>
-                    <div class="chart-empty-state" id="platform-cost-chart-empty" hidden aria-live="polite"></div>
-                </div>
-            </section>
-            <details class="pricing-details" id="platform-cost-coverage" hidden>
-                <summary>Pricing details</summary>
-                <p>API list-price estimate from local token logs.{{if or (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}} Includes all provider accounts.{{end}}</p>
-                <p id="platform-cost-coverage-notes" hidden></p>
-            </details>
-        </section>
+        {{template "dashboard-token-cost" .}}
         {{end}}
 
         <section class="chart-section history-chart{{if eq .CurrentProvider "antigravity"}} antigravity-history-section{{end}}" aria-labelledby="usage-chart-title">
@@ -530,7 +447,7 @@
                         <path d="M3 3v18h18"/>
                         <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
                     </svg>
-                    {{if eq .CurrentProvider "api-integrations"}}API activity history{{else if eq .CurrentProvider "antigravity"}}Quota history{{else}}Usage history{{end}}
+                    {{if eq .CurrentProvider "api-integrations"}}API activity history{{else if eq .CurrentProvider "both"}}Weekly quota history{{else if eq .CurrentProvider "antigravity"}}Quota history{{else}}Usage history{{end}}
                 </h3>
             </header>
             <div class="history-chart-toolbar">
@@ -589,6 +506,8 @@
                 <div class="chart-empty-state" id="usage-chart-empty" hidden aria-live="polite"></div>
             </div>
         </section>
+
+        {{if eq .CurrentProvider "both"}}{{template "dashboard-token-cost" .}}{{end}}
 
         {{if or (eq .CurrentProvider "anthropic") (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}}
         <details class="sessions-section platform-cost-breakdown-section dashboard-detail dashboard-secondary" id="platform-cost-breakdown-section" data-provider="{{.CurrentProvider}}">
@@ -965,4 +884,95 @@
     </div>
     <p class="graph-history-error" data-history-error role="alert" hidden></p>
 </div>
+{{end}}
+
+{{define "dashboard-token-cost"}}
+        <section class="sessions-section platform-cost-section" id="platform-cost-section" data-provider="{{.CurrentProvider}}">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 1v22"/>
+                        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6"/>
+                    </svg>
+                    {{if eq .CurrentProvider "both"}}Combined Token Cost{{else}}Estimated Token Cost{{end}}
+                </h3>
+            </header>
+            <div class="platform-cost-summary" id="platform-cost-summary">
+                <div class="platform-cost-metric primary">
+                    <span class="platform-cost-label">{{if eq .CurrentProvider "both"}}Priced subtotal · All accounts{{else}}Estimated Cost{{end}}</span>
+                    <strong>--</strong>
+                </div>
+                {{if ne .CurrentProvider "both"}}
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Total Tokens</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Requests</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Cost / 1M Priced Tokens</span>
+                    <strong>--</strong>
+                </div>
+                <div class="platform-cost-metric">
+                    <span class="platform-cost-label">Last Entry</span>
+                    <strong>--</strong>
+                </div>
+                {{end}}
+            </div>
+            <section class="history-chart platform-cost-chart-card" aria-labelledby="platform-cost-chart-title">
+                <header class="history-chart-heading">
+                    <h4 class="history-chart-title" id="platform-cost-chart-title">{{if eq .CurrentProvider "both"}}Cost history{{else}}Cost &amp; token history{{end}}</h4>
+                </header>
+                <p class="chart-coverage-note chart-refresh-message" id="platform-cost-refresh-status" role="status" hidden></p>
+                <div class="history-chart-toolbar">
+                    <div class="history-chart-controls">
+                        {{if ne .CurrentProvider "both"}}
+                        <div class="range-selector graph-mode-toggle" id="platform-cost-chart-metric-select" role="group" aria-label="Cost history metric">
+                            <button class="range-btn active" type="button" data-metric="cost" aria-pressed="true">Cost</button>
+                            <button class="range-btn" type="button" data-metric="tokens" aria-pressed="false">Tokens</button>
+                        </div>
+                        {{end}}
+                        <div class="range-selector graph-mode-toggle" id="platform-cost-chart-mode-select" role="group" aria-label="Cost graph style">
+                            <button class="range-btn graph-mode-btn active" type="button" data-graph-mode="cumulative" aria-pressed="true">Cumulative</button>
+                            <button class="range-btn graph-mode-btn" type="button" data-graph-mode="bucket" aria-pressed="false">Per period</button>
+                        </div>
+                    </div>
+                    <div class="graph-history-control" data-history-scope="platformCost">
+                        <div class="range-selector graph-history-presets" role="group" aria-label="Cost graph time range">
+                            <button class="platform-cost-range-btn" type="button" data-range="1h" aria-pressed="false">1h</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="6h" aria-pressed="false">6h</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="12h" aria-pressed="false">12h</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="24h" aria-pressed="false">24h</button>
+                            <button class="platform-cost-range-btn active" type="button" data-range="7d" aria-pressed="true">7d</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="30d" aria-pressed="false">30d</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="all" aria-pressed="false">All</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="custom" aria-pressed="false">Custom</button>
+                        </div>
+                        <div class="graph-history-dates">
+                            <label for="platform-cost-history-start-date"><span>Start</span><input type="date" id="platform-cost-history-start-date" data-history-start autocomplete="off"></label>
+                            <span class="graph-history-date-separator" aria-hidden="true">to</span>
+                            <label for="platform-cost-history-end-date"><span>End</span><input type="date" id="platform-cost-history-end-date" data-history-end autocomplete="off"></label>
+                        </div>
+                        <p class="graph-history-error" data-history-error role="alert" hidden></p>
+                    </div>
+                </div>
+                <p class="sr-only" id="platform-cost-chart-gap-note" hidden></p>
+                <div class="platform-cost-chart-wrap history-chart-plot">
+                    <div class="chart-loading-overlay" id="platform-cost-chart-loading" aria-live="polite" hidden>
+                        <span class="loading-spinner" aria-hidden="true"></span>
+                        <span>Loading cost history</span>
+                    </div>
+                    <p class="sr-only" id="platform-cost-chart-accessible-summary" aria-live="polite"></p>
+                    <canvas id="platform-cost-chart" role="img" aria-label="Cost and token history chart" aria-describedby="platform-cost-summary platform-cost-chart-gap-note platform-cost-chart-accessible-summary"></canvas>
+                    <div class="chart-empty-state" id="platform-cost-chart-empty" hidden aria-live="polite"></div>
+                </div>
+            </section>
+            <details class="pricing-details" id="platform-cost-coverage" hidden>
+                <summary>Pricing details</summary>
+                <p>API list-price estimate from local token logs.{{if eq .CurrentProvider "both"}} Includes Anthropic, Antigravity, and Codex across all accounts.{{else if or (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}} Includes all provider accounts.{{end}}</p>
+                <p id="platform-cost-coverage-notes" hidden></p>
+            </details>
+        </section>
 {{end}}

@@ -54,23 +54,21 @@ func TestSubscriptionNavigation_ProviderView(t *testing.T) {
 
 func TestDashboardShowsPrimaryGraphsBeforeSecondaryStatusSections(t *testing.T) {
 	t.Parallel()
-	template := dashboardTemplateSource(t)
-
-	orderedMarkers := []string{
-		`id="platform-cost-section"`,
-		`<section class="chart-section`,
-		`id="platform-cost-breakdown-section"`,
-		`id="device-health-section"`,
-	}
-	previous := -1
-	for _, marker := range orderedMarkers {
-		index := strings.Index(template, marker)
-		if index < 0 {
-			t.Fatalf("dashboard template missing %q", marker)
+	h := NewHandler(nil, nil, nil, nil, createTestConfigWithAll())
+	for provider, orderedMarkers := range map[string][]string{
+		"codex": {`id="platform-cost-section"`, `id="usage-chart"`, `id="platform-cost-breakdown-section"`},
+		"both":  {`id="usage-chart"`, `id="platform-cost-section"`, `id="device-health-section"`},
+	} {
+		rr := httptest.NewRecorder()
+		h.Dashboard(rr, httptest.NewRequest(http.MethodGet, "/?provider="+provider, nil))
+		body := rr.Body.String()
+		previous := -1
+		for _, marker := range orderedMarkers {
+			index := strings.Index(body, marker)
+			if index <= previous {
+				t.Fatalf("%s dashboard missing or misplacing %q", provider, marker)
+			}
+			previous = index
 		}
-		if index <= previous {
-			t.Fatalf("dashboard template section %q is out of priority order", marker)
-		}
-		previous = index
 	}
 }

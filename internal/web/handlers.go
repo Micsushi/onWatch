@@ -2331,6 +2331,7 @@ func (h *Handler) currentBoth(w http.ResponseWriter, r *http.Request) {
 	providers := h.telemetryProviderSet()
 	response := map[string]interface{}{}
 	visibility := h.providerVisibilitySettings()
+	weeklyDashboard := r.URL.Query().Get("weeklyDashboard") == "1"
 
 	if providers["synthetic"] && providerTelemetryEnabled(visibility, "synthetic") {
 		response["synthetic"] = h.buildSyntheticCurrent()
@@ -2348,11 +2349,24 @@ func (h *Handler) currentBoth(w http.ResponseWriter, r *http.Request) {
 		codexAccounts := h.codexUsageAccounts()
 		originalAccountCount := len(codexAccounts)
 		filteredAccounts := make([]map[string]interface{}, 0, len(codexAccounts))
+		var cardAccounts []map[string]interface{}
 		for _, acc := range codexAccounts {
 			accountID := codexUsageAccountID(acc)
-			if codexAccountTelemetryEnabled(visibility, accountID) && codexUsageHasQuotas(acc) {
+			polling := codexAccountTelemetryEnabled(visibility, accountID)
+			hasQuotas := codexUsageHasQuotas(acc)
+			if weeklyDashboard && hasQuotas {
+				settings, _ := visibility[fmt.Sprintf("codex:%d", accountID)].(map[string]interface{})
+				dashboard, configured := settings["dashboard"].(bool)
+				acc["accountPolling"] = polling
+				acc["accountHidden"] = configured && !dashboard
+				cardAccounts = append(cardAccounts, acc)
+			}
+			if polling && hasQuotas {
 				filteredAccounts = append(filteredAccounts, acc)
 			}
+		}
+		if len(cardAccounts) > 0 {
+			response["codexCardAccounts"] = cardAccounts
 		}
 		codexAccounts = filteredAccounts
 		if len(codexAccounts) > 1 {
@@ -2366,7 +2380,7 @@ func (h *Handler) currentBoth(w http.ResponseWriter, r *http.Request) {
 	if providers["antigravity"] && providerTelemetryEnabled(visibility, "antigravity") {
 		response["antigravity"] = h.buildAntigravityCurrent()
 		accounts := h.dashboardAccounts("antigravity", nil)
-		if len(accounts) > 1 {
+		if len(accounts) > 1 || (weeklyDashboard && len(accounts) == 1) {
 			usages := make([]map[string]interface{}, 0, len(accounts))
 			for _, account := range accounts {
 				latest, err := h.latestAntigravityDashboardAccount(account)
@@ -2766,6 +2780,10 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	providers := h.telemetryProviderSet()
 	response := map[string]interface{}{}
 	visibility := h.providerVisibilitySettings()
+	weeklyDashboard := r.URL.Query().Get("weeklyDashboard") == "1"
+	if weeklyDashboard {
+		providers = map[string]bool{"anthropic": providers["anthropic"], "codex": providers["codex"], "antigravity": providers["antigravity"]}
+	}
 
 	window, err := historyWindowForRequest(r, time.Now().UTC())
 	if err != nil {
@@ -2889,7 +2907,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 		codexHistories := make([]map[string]interface{}, 0, len(codexAccounts))
 		for _, acc := range codexAccounts {
 			accountID := codexUsageAccountID(acc)
-			if !codexAccountTelemetryEnabled(visibility, accountID) {
+			if !weeklyDashboard && !codexAccountTelemetryEnabled(visibility, accountID) {
 				continue
 			}
 			snapshots, err := h.store.QueryCodexRangeSampled(accountID, start, now, maxChartPoints)
@@ -2931,7 +2949,7 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 
 	if providers["antigravity"] && providerTelemetryEnabled(visibility, "antigravity") && h.store != nil {
 		var accounts []dashboardAccount
-		if r.URL.Query().Get("quotaAccounts") == "1" {
+		if weeklyDashboard || r.URL.Query().Get("quotaAccounts") == "1" {
 			accounts = h.dashboardAccounts("antigravity", nil)
 		}
 		histories := make([]map[string]interface{}, 0, len(accounts))

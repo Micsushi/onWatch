@@ -792,6 +792,26 @@ button, input, select { font-family: inherit; }
   text-overflow: ellipsis;
 }
 
+.provider-card-title:has(.provider-card-account-select, .provider-card-account-name) {
+  flex-wrap: wrap;
+}
+
+.provider-card-account-select {
+  min-width: 0;
+  max-width: min(100%, 280px);
+  text-overflow: ellipsis;
+}
+
+.provider-card-title > .provider-card-account-name {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+#platform-cost-section[data-provider="both"] .platform-cost-summary {
+  grid-template-columns: minmax(0, 265px);
+}
+
 .provider-card-badge {
   font-family: var(--font-primary);
   font-size: 11px;

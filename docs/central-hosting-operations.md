@@ -155,6 +155,8 @@ Verify history, settings, devices, receipts, revocations, ownership, export, and
 
 Graphs use the timestamps of recorded observations. Quota history draws dashed links across missing readings and shows observed resets as drops. It carries the last reading to the right edge and can extend a flat series to the left edge. Cumulative token and cost charts connect recorded totals with solid lines. In a bounded date range, they start at zero and carry the final total to the right edge. Per-period charts use dashed links across missing periods. Edge extensions do not count as observations.
 
+All shows weekly quota history for the Anthropic, Antigravity (Gemini Pro), and Codex cards. Switching a card's account updates its quota line. Combined cost adds the recorded API estimates for those three providers across all accounts.
+
 Codex and Antigravity cards show the age of their last successful quota snapshot
 and mark it stale after 30 minutes. The last measured percentage remains visible;
 it is not reset to zero or presented as a newly measured value. Central Codex
