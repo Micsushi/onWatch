@@ -1180,7 +1180,7 @@ func sanitizeNotificationTestError(err error) string {
 	}
 }
 
-// parseTimeRange parses a time range string (1h, 6h, 12h, 24h, 1d, 7d, 30d)
+// parseTimeRange parses a history range preset.
 func parseTimeRange(rangeStr string) (time.Duration, error) {
 	if rangeStr == "" {
 		return 6 * time.Hour, nil
@@ -1199,6 +1199,8 @@ func parseTimeRange(rangeStr string) (time.Duration, error) {
 		return 7 * 24 * time.Hour, nil
 	case "30d":
 		return 30 * 24 * time.Hour, nil
+	case "90d":
+		return 90 * 24 * time.Hour, nil
 	case "all":
 		return 100 * 365 * 24 * time.Hour, nil
 	default:

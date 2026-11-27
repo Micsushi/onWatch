@@ -189,6 +189,8 @@ const State = {};
 const buttons = ['weekly', 'five_hour', 'unknown'].map(quotaWindow => ({dataset:{quotaWindow},classList:{toggle(){}},setAttribute(){}}));
 const document = {querySelectorAll:()=>buttons};
 const selectedChartRange=()=> '7d';
+const graphSelectionFeedback=()=> ({});
+const updateHistoryChartSwitch=()=> {};
 let rendered;
 const setMainChartDatasets=(data)=>{rendered=antigravityWindowDatasets(data);};
 function assert(ok,message){if(!ok)throw new Error(message);}

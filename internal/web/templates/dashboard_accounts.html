@@ -56,7 +56,10 @@
             <p class="history-chart-note" data-account-status role="status">Loading quota readings…</p>
             <dl class="dashboard-account-readings" data-account-readings></dl>
             <p class="history-chart-note" data-account-history role="status">Loading history…</p>
-            <div class="history-chart-plot" data-account-plot hidden><canvas role="img" aria-label="Quota history for {{if .Email}}{{.Email}}{{else}}{{.Name}}{{end}}"></canvas></div>
+            <div class="history-chart-plot" data-account-plot hidden>
+                {{template "history-chart-loading" (printf "dashboard-account-%s" .ID)}}
+                <canvas role="img" aria-label="Quota history for {{if .Email}}{{.Email}}{{else}}{{.Name}}{{end}}"></canvas>
+            </div>
         </article>
         {{end}}
     </div>

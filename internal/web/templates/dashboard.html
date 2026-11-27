@@ -511,12 +511,7 @@
             {{end}}
             <p class="sr-only" id="usage-chart-coverage-note" hidden></p>
             <div class="chart-container history-chart-plot">
-                <div class="chart-loading-overlay" id="usage-chart-loading" role="status">
-                    <div class="chart-loading-card" hidden>
-                        <span class="loading-spinner" aria-hidden="true"></span>
-                        <div><strong data-history-loading-title></strong><span data-history-loading-detail></span></div>
-                    </div>
-                </div>
+                {{template "history-chart-loading" "usage-chart"}}
                 <p class="sr-only" id="usage-chart-accessible-summary" aria-live="polite"></p>
                 <canvas id="usage-chart" role="img" aria-label="Usage history chart" aria-describedby="usage-summary usage-chart-coverage-note usage-chart-accessible-summary"></canvas>
                 <div class="chart-empty-state" id="usage-chart-empty" hidden aria-live="polite"></div>
@@ -542,6 +537,7 @@
                             <button class="platform-cost-breakdown-range-btn" type="button" data-range="24h">24h</button>
                             <button class="platform-cost-breakdown-range-btn active" type="button" data-range="7d">7d</button>
                             <button class="platform-cost-breakdown-range-btn" type="button" data-range="30d">30d</button>
+                            <button class="platform-cost-breakdown-range-btn" type="button" data-range="90d">90d</button>
                             <button class="platform-cost-breakdown-range-btn" type="button" data-range="all">All</button>
                             <button class="platform-cost-breakdown-range-btn" type="button" data-range="custom">Custom</button>
                         </div>
@@ -881,6 +877,15 @@
 </div>
 {{end}}
 
+{{define "history-chart-loading"}}
+<div class="chart-loading-overlay" id="{{.}}-loading" role="status">
+    <div class="chart-loading-card" hidden>
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <div><strong data-history-loading-title></strong><span data-history-loading-detail></span></div>
+    </div>
+</div>
+{{end}}
+
 {{define "quota-history-ranges"}}
 <div class="graph-history-control" data-history-scope="chart">
     <div class="range-selector graph-history-presets" role="group" aria-label="Usage graph time range">
@@ -890,6 +895,7 @@
         <button class="chart-range-btn" type="button" data-range="24h" aria-pressed="false">24h</button>
         <button class="chart-range-btn active" type="button" data-range="7d" aria-pressed="true">7d</button>
         <button class="chart-range-btn" type="button" data-range="30d" aria-pressed="false">30d</button>
+        <button class="chart-range-btn" type="button" data-range="90d" aria-pressed="false">90d</button>
         <button class="chart-range-btn" type="button" data-range="all" aria-pressed="false">All</button>
         <button class="chart-range-btn" type="button" data-range="custom" aria-pressed="false">Custom</button>
     </div>
@@ -969,6 +975,7 @@
                             <button class="platform-cost-range-btn" type="button" data-range="24h" aria-pressed="false">24h</button>
                             <button class="platform-cost-range-btn active" type="button" data-range="7d" aria-pressed="true">7d</button>
                             <button class="platform-cost-range-btn" type="button" data-range="30d" aria-pressed="false">30d</button>
+                            <button class="platform-cost-range-btn" type="button" data-range="90d" aria-pressed="false">90d</button>
                             <button class="platform-cost-range-btn" type="button" data-range="all" aria-pressed="false">All</button>
                             <button class="platform-cost-range-btn" type="button" data-range="custom" aria-pressed="false">Custom</button>
                         </div>
@@ -982,12 +989,7 @@
                 </div>
                 <p class="sr-only" id="platform-cost-chart-gap-note" hidden></p>
                 <div class="platform-cost-chart-wrap history-chart-plot">
-                    <div class="chart-loading-overlay" id="platform-cost-chart-loading" role="status">
-                        <div class="chart-loading-card" hidden>
-                            <span class="loading-spinner" aria-hidden="true"></span>
-                            <div><strong data-history-loading-title></strong><span data-history-loading-detail></span></div>
-                        </div>
-                    </div>
+                    {{template "history-chart-loading" "platform-cost-chart"}}
                     <p class="sr-only" id="platform-cost-chart-accessible-summary" aria-live="polite"></p>
                     <canvas id="platform-cost-chart" role="img" aria-label="Cost and token history chart" aria-describedby="platform-cost-summary platform-cost-chart-gap-note platform-cost-chart-accessible-summary"></canvas>
                     <div class="chart-empty-state" id="platform-cost-chart-empty" hidden aria-live="polite"></div>

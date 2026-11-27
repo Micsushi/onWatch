@@ -272,6 +272,8 @@ const State = {
   graphRefreshDraining: false,
   graphFallbackTimers: {},
   graphPlotLoads: {},
+  graphSelectionTimes: new Map(),
+  graphSwitchTimers: {},
   customGraphRefreshControllers: {},
   refreshInFlight: false,
   dashboardRefreshCount: 0,
@@ -322,6 +324,8 @@ const PLATFORM_COST_BREAKDOWN_RANGE_STORAGE_KEY = 'onwatch-platform-cost-breakdo
 const PLATFORM_COST_BREAKDOWN_DATE_RANGE_STORAGE_KEY = 'onwatch-platform-cost-breakdown-date-range-v1';
 const DASHBOARD_FOREGROUND_FETCH_TIMEOUT_MS = 15000;
 const GRAPH_PRESET_FALLBACK_DELAY_MS = 1000;
+const GRAPH_SWITCH_CUE_MS = 200;
+const GRAPH_SELECTION_RECENCY_MS = 60_000;
 const ARCHIVED_HISTORY_NOTICE = 'Older data is shown at hourly resolution because detailed records are kept for 30 days.';
 const POLL_HEALTH_SEEN_ALERTS_KEY = 'onwatch-seen-poll-health-alerts-v1';
 const POLL_HEALTH_SEEN_ALERT_LIMIT = 100;
@@ -575,11 +579,46 @@ function finishGraphRefreshJob(job) {
 function setHistoryChartLoading(chartID, title = '', detail = '') {
   const status = document.getElementById(chartID + '-loading');
   if (!status) return;
+  if (title) cancelHistoryChartSwitch(chartID);
+  else if (State.graphSwitchTimers[chartID] !== undefined) return;
   status.firstElementChild.hidden = !title;
   const titleNode = status.querySelector('[data-history-loading-title]');
   const detailNode = status.querySelector('[data-history-loading-detail]');
   if (titleNode.textContent !== title) titleNode.textContent = title;
   if (detailNode.textContent !== detail) detailNode.textContent = detail;
+}
+
+function graphSelectionFeedback(group, previous, next) {
+  const now = Date.now();
+  const recent = State.graphSelectionTimes;
+  for (const [key, time] of recent) {
+    if (now - time >= GRAPH_SELECTION_RECENCY_MS) recent.delete(key);
+  }
+  const key = `${group}:${next}`;
+  const selectionChanged = next !== previous;
+  const showSwitchCue = selectionChanged && !recent.has(key);
+  recent.set(key, now);
+  return { selectionChanged, showSwitchCue };
+}
+
+function cancelHistoryChartSwitch(chartID) {
+  const timer = State.graphSwitchTimers[chartID];
+  if (timer === undefined) return false;
+  window.clearTimeout(timer);
+  delete State.graphSwitchTimers[chartID];
+  return true;
+}
+
+function updateHistoryChartSwitch(chartID, feedback, ready = true, title = 'Updating chart…') {
+  if (!feedback?.selectionChanged) return;
+  if (cancelHistoryChartSwitch(chartID)) setHistoryChartLoading(chartID);
+  const card = document.getElementById(chartID + '-loading')?.firstElementChild;
+  if (!ready || !feedback.showSwitchCue || !card?.hidden) return;
+  setHistoryChartLoading(chartID, title);
+  State.graphSwitchTimers[chartID] = window.setTimeout(() => {
+    delete State.graphSwitchTimers[chartID];
+    setHistoryChartLoading(chartID);
+  }, GRAPH_SWITCH_CUE_MS);
 }
 
 async function loadSelectedGraphHistory(job, cached, options) {
@@ -608,6 +647,7 @@ async function loadSelectedGraphHistory(job, cached, options) {
   const label = platformCostRangeLabel(range);
   const title = isUsage ? `Loading ${label} history` : `Loading ${label} cost history`;
   setHistoryChartLoading(chartID, cached ? '' : title, cached ? '' : detail);
+  updateHistoryChartSwitch(chartID, options, cached, `Showing ${label} ${isUsage ? 'history' : 'cost history'}`);
   try {
     if (cached && !options.force && options.fresh) return;
     if (range === 'custom') return await runCustomGraphRefresh(job);
@@ -1231,7 +1271,7 @@ function initDashboardAccountOverview(overview) {
     };
     new Chart(canvas, { type: 'line', data: { datasets }, options });
   };
-  const load = async ({ force = false, refreshCurrent = true } = {}) => {
+  const load = async ({ force = false, refreshCurrent = true, feedback } = {}) => {
     controller?.abort();
     controller = new AbortController();
     const request = controller;
@@ -1264,11 +1304,13 @@ function initDashboardAccountOverview(overview) {
       }
       const accountKey = `overview:${panel.dataset.account}`;
       const showHistory = (payload, start, end) => {
-        const result = { payload, range: selected, start, end };
+        const result = { payload, range: selected, selectionKey, start, end };
         history.set(panel, result);
         draw(panel, result);
       };
       const cached = getStaleProviderHistory(provider, selected, selectionKey, accountKey);
+      updateHistoryChartSwitch(`dashboard-account-${panel.dataset.account}`, feedback,
+        Boolean(cached?.data), `Showing ${platformCostRangeLabel(selected)} history`);
       if (cached?.data) showHistory(cached.data, cached.windowStart, cached.windowEnd);
       if (force || !cached?.data || Date.now() - cached.ts > PROVIDER_HISTORY_CACHE_TTL_MS) {
         jobs.push(get('/api/history?' + scope + '&' + bounds, payload => {
@@ -1290,8 +1332,12 @@ function initDashboardAccountOverview(overview) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
   refreshBtn?.addEventListener('click', () => load({ force: true }));
-  setupGraphHistoryRangeControls(() => load({ refreshCurrent: false }));
-  setupChartModeSelector(() => history.forEach((result, panel) => draw(panel, result)));
+  setupGraphHistoryRangeControls((_scope, feedback) => load({ refreshCurrent: false, feedback }));
+  setupChartModeSelector(feedback => history.forEach((result, panel) => {
+    updateHistoryChartSwitch(`dashboard-account-${panel.dataset.account}`, feedback,
+      result.selectionKey === historySelectionKey(selectedChartRange()));
+    draw(panel, result);
+  }));
   new MutationObserver(() => history.forEach((result, panel) => draw(panel, result)))
     .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   setInterval(() => { if (!document.hidden) load(); }, REFRESH_INTERVAL);
@@ -1521,12 +1567,12 @@ function isPeriodGraphMode(mode) {
 
 function normalizeChartRange(range) {
   const value = String(range || '').trim().toLowerCase();
-  return ['1h', '6h', '12h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : DEFAULT_CHART_RANGE;
+  return ['1h', '6h', '12h', '24h', '7d', '30d', '90d', 'all', 'custom'].includes(value) ? value : DEFAULT_CHART_RANGE;
 }
 
 function normalizeStoredChartRange(range) {
   const value = String(range || '').trim().toLowerCase();
-  return ['1h', '6h', '12h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : null;
+  return ['1h', '6h', '12h', '24h', '7d', '30d', '90d', 'all', 'custom'].includes(value) ? value : null;
 }
 
 function scopedRangeStorageKey(baseKey, provider = getCurrentProvider()) {
@@ -1691,6 +1737,7 @@ function presetHistoryWindow(range, now = new Date()) {
     '24h': 24 * hour,
     '7d': 7 * 24 * hour,
     '30d': 30 * 24 * hour,
+    '90d': 90 * 24 * hour,
     all: 100 * 365 * 24 * hour,
   };
   const duration = durations[normalized] || durations[DEFAULT_CHART_RANGE];
@@ -1835,6 +1882,7 @@ function platformCostHistoryRequestQuery(range, scope = 'platformCost') {
 function shouldShowArchivedHistoryNotice(range, scope = 'chart') {
   const normalized = normalizeChartRange(range);
   if (normalized === 'all') return true;
+  if (normalized === '90d') return true;
   if (normalized !== 'custom') return false;
   const start = new Date(historyScopeWindow(scope).start || '');
   if (Number.isNaN(start.getTime())) return false;
@@ -4091,7 +4139,7 @@ function platformCostTimeScale(range) {
     }
     return { unit: 'day', displayFormats: { day: 'MMM d', hour: 'MMM d, HH:mm', minute: 'MMM d, HH:mm' } };
   }
-  if (range === 'all' || range === '30d' || range === '7d') {
+  if (['7d', '30d', '90d', 'all'].includes(range)) {
     return { unit: 'day', displayFormats: { day: 'MMM d', hour: 'MMM d, HH:mm', minute: 'MMM d, HH:mm' } };
   }
   if (range === '24h') {
@@ -4123,7 +4171,7 @@ function formatChartXAxisLabel(isoOrLabel, range) {
 
   const tz = typeof getEffectiveTimezone === 'function' ? getEffectiveTimezone() : undefined;
   const rangeKey = (range || '').toLowerCase();
-  const showDate = ['24h', '7d', '30d', '3d', '15d'].includes(rangeKey);
+  const showDate = ['24h', '7d', '30d', '90d', '3d', '15d'].includes(rangeKey);
 
   const opts = showDate
     ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
@@ -5505,6 +5553,7 @@ function chartRangeUsageLabel(range) {
     '7d': 'past 7 days',
     '15d': 'past 15 days',
     '30d': 'past 30 days',
+    '90d': 'past 90 days',
     all: 'all time',
     custom: State.historyStartDate && State.historyEndDate
       ? `${State.historyStartDate} through ${State.historyEndDate}`
@@ -5608,6 +5657,7 @@ function graphRangeDurationMs(
     '7d': 7 * 24 * hour,
     '15d': 15 * 24 * hour,
     '30d': 30 * 24 * hour,
+    '90d': 90 * 24 * hour,
   };
   if (rangeKey === 'custom' && windowStart && windowEnd) {
     const start = Date.parse(windowStart);
@@ -6210,7 +6260,10 @@ function antigravityWindowDatasets(datasets) {
     button.setAttribute('aria-pressed', String(active));
     button.hidden = windowKind === 'unknown' && !datasets.some(item => item._antigravityWindow === 'unknown');
     button.onclick = () => {
+      const feedback = graphSelectionFeedback('antigravity-window', State.antigravityQuotaWindow, windowKind);
       State.antigravityQuotaWindow = windowKind;
+      const job = State.currentUsageHistory?.job;
+      updateHistoryChartSwitch('usage-chart', feedback, Boolean(job && usageGraphJobIsSelected(job)));
       setMainChartDatasets(State.antigravityHistoryDatasets || [], selectedChartRange(), { preserveExistingOnEmpty: false });
     };
   });
@@ -8243,7 +8296,7 @@ function renderPlatformCostAccessibleSummary(costPoints, tokenPoints, range, mod
     + `minimum ${format(Math.min(...values))}, maximum ${format(Math.max(...values))}.`;
 }
 
-function renderPlatformCostChart(provider = getCurrentProvider(), range = State.platformCostRange || DEFAULT_CHART_RANGE, providersChanged = false) {
+function renderPlatformCostChart(provider = getCurrentProvider(), range = State.platformCostRange || DEFAULT_CHART_RANGE, options = {}) {
   const canvas = document.getElementById('platform-cost-chart');
   if (!canvas || !supportsPlatformCost(provider)) return;
   range = normalizePlatformCostRange(range);
@@ -8253,7 +8306,8 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
     && (range !== 'custom' || (State.platformCostHistoryWindowStart === State.platformCostWindowStart
       && State.platformCostHistoryWindowEnd === State.platformCostWindowEnd));
   const noProviders = provider === 'both' && State.combinedCostProviders?.length === 0;
-  if (noProviders || (providersChanged && !hasLoadedSelectedRange)) {
+  updateHistoryChartSwitch('platform-cost-chart', options, hasLoadedSelectedRange && !noProviders);
+  if (noProviders || (options.providersChanged && !hasLoadedSelectedRange)) {
     updatePlatformCostSummaryForRange(provider, range, []);
     document.getElementById('platform-cost-chart-accessible-summary').textContent = '';
     setChartEmptyState('platform-cost-chart', true, noProviders ? 'Select a provider to see combined cost.' : 'Loading cost history…');
@@ -8467,8 +8521,7 @@ function bindPlatformCostRangeControls(range) {
 }
 
 function normalizePlatformCostRange(range) {
-  const value = String(range || '').trim().toLowerCase();
-  return ['1h', '6h', '12h', '24h', '7d', '30d', 'all', 'custom'].includes(value) ? value : DEFAULT_CHART_RANGE;
+  return normalizeChartRange(range);
 }
 
 function buildPlatformCumulativeSeries(rows, range = State.platformCostRange || '6h') {
@@ -8647,6 +8700,7 @@ function platformCostRangeStartTime(range) {
     '24h': 24 * 60 * 60 * 1000,
     '7d': 7 * 24 * 60 * 60 * 1000,
     '30d': 30 * 24 * 60 * 60 * 1000,
+    '90d': 90 * 24 * 60 * 60 * 1000,
   };
   const duration = durations[range];
   return duration ? new Date(Date.now() - duration) : null;
@@ -8660,7 +8714,7 @@ function platformCostChartTimeBounds(range) {
 }
 
 function platformCostRangeLabel(range) {
-  const labels = { '1h': '1h', '6h': '6h', '12h': '12h', '24h': '24h', '7d': '7d', '30d': '30d', all: 'All', custom: 'Custom' };
+  const labels = { '1h': '1h', '6h': '6h', '12h': '12h', '24h': '24h', '7d': '7d', '30d': '30d', '90d': '90d', all: 'All', custom: 'Custom' };
   return labels[range] || labels[DEFAULT_CHART_RANGE] || '7d';
 }
 
@@ -8914,7 +8968,7 @@ async function fetchPlatformCostHistory(range, provider, options = {}) {
   range = normalizePlatformCostRange(range);
   if (provider === 'both' && State.combinedCostProviders?.length === 0) {
     bindPlatformCostRangeControls(range);
-    renderPlatformCostChart(provider, range);
+    renderPlatformCostChart(provider, range, options);
     return;
   }
   const cached = getStalePlatformCostHistory(provider, range, 'platformCost');
@@ -9693,10 +9747,10 @@ function updateBothCharts(data, range = '6h') {
 function buildChartOptions(colors, yMax, range, mode = 'cumulative') {
   const rangeKey = (range || '6h').toLowerCase();
   const periodMode = isPeriodGraphMode(mode);
-  const timeUnit = ['7d', '30d', '15d', 'all'].includes(rangeKey) ? 'day' : rangeKey === '1h' ? 'minute' : 'hour';
+  const timeUnit = ['7d', '15d', '30d', '90d', 'all'].includes(rangeKey) ? 'day' : rangeKey === '1h' ? 'minute' : 'hour';
   const displayFormats = {
     minute: 'HH:mm',
-    hour: ['7d', '30d', '15d', '24h', '3d', 'all'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm',
+    hour: ['24h', '3d', '7d', '15d', '30d', '90d', 'all'].includes(rangeKey) ? 'MMM d, HH:mm' : 'HH:mm',
     day: 'MMM d'
   };
   return {
@@ -9818,7 +9872,7 @@ function updateTimeScale(chart, range) {
     ? (customDuration <= 2 * 60 * 60 * 1000 ? 'minute'
       : customDuration <= 2 * 24 * 60 * 60 * 1000 ? 'hour'
         : 'day')
-    : (['7d', '30d', '15d', 'all'].includes(rangeKey) ? 'day' : rangeKey === '1h' ? 'minute' : 'hour');
+    : (['7d', '15d', '30d', '90d', 'all'].includes(rangeKey) ? 'day' : rangeKey === '1h' ? 'minute' : 'hour');
   const timeUnit = isPeriodGraphMode(graphMode)
     ? graphBucketTimeUnit(range, graphMode, points)
     : cumulativeTimeUnit;
@@ -9827,7 +9881,7 @@ function updateTimeScale(chart, range) {
     displayFormats: {
       second: 'HH:mm:ss',
       minute: 'HH:mm',
-      hour: rangeKey === 'custom' || ['7d', '30d', '15d', '24h', '3d', 'all'].includes(rangeKey)
+      hour: rangeKey === 'custom' || ['24h', '3d', '7d', '15d', '30d', '90d', 'all'].includes(rangeKey)
         ? 'MMM d, HH:mm'
         : 'HH:mm',
       day: 'MMM d'
@@ -11064,18 +11118,18 @@ function setGraphHistoryRangeError(scope, message = '') {
   error.hidden = !message;
 }
 
-async function reloadGraphHistoryRange(scope) {
+async function reloadGraphHistoryRange(scope, feedback) {
   const range = normalizeChartRange(historyScopeWindow(scope).range);
   const provider = getCurrentProvider();
   if (scope === 'platformCost') {
-    await fetchPlatformCostHistory(range, provider);
+    await fetchPlatformCostHistory(range, provider, feedback);
     return;
   }
   if (scope === 'platformCostBreakdown') {
     await fetchPlatformCostBreakdownRange(range, provider);
     return;
   }
-  await fetchHistory(range);
+  await fetchHistory(range, feedback);
 }
 
 function applyCustomHistoryDates(scope, startDate, endDate) {
@@ -11138,29 +11192,36 @@ function setupGraphHistoryRangeControls(reload = reloadGraphHistoryRange) {
 
     const startInput = control.querySelector('[data-history-start]');
     const endInput = control.querySelector('[data-history-end]');
+    const selectionKey = () => historySelectionKey(historyScopeWindow(scope).range, scope);
+    const reloadSelection = previous => {
+      const feedback = graphSelectionFeedback(`range:${scope}`, previous, selectionKey());
+      reload(scope, feedback);
+    };
     control.querySelectorAll('[data-range]').forEach(button => {
       button.addEventListener('click', () => {
-      const nextRange = normalizeChartRange(button.dataset.range);
-      if (nextRange === 'custom') {
+        const previous = selectionKey();
+        const nextRange = normalizeChartRange(button.dataset.range);
+        if (nextRange === 'custom') {
           const windowState = historyScopeWindow(scope);
           const startDate = startInput?.value || windowState.startDate;
           const endDate = endInput?.value || windowState.endDate;
           if (!applyCustomHistoryDates(scope, startDate, endDate)) {
-          startInput?.focus();
-          return;
-        }
-      } else {
+            startInput?.focus();
+            return;
+          }
+        } else {
           applyPresetHistoryWindow(nextRange, new Date(), scope);
           setGraphHistoryRangeError(scope, '');
           syncGraphHistoryRangeControl(scope);
-      }
-        reload(scope);
+        }
+        reloadSelection(previous);
+      });
     });
-  });
 
     const onDateChange = () => {
+      const previous = selectionKey();
       if (!applyCustomHistoryDates(scope, startInput?.value, endInput?.value)) return;
-      reload(scope);
+      reloadSelection(previous);
     };
     startInput?.addEventListener('change', onDateChange);
     endInput?.addEventListener('change', onDateChange);
@@ -11178,15 +11239,20 @@ function setupAPIIntegrationsMetricSelector() {
     select.value = metric;
   }
   select.addEventListener('change', () => {
-    State.apiIntegrationsSelectedMetric = normalizeAPIIntegrationsMetric(select.value);
+    const next = normalizeAPIIntegrationsMetric(select.value);
+    const feedback = graphSelectionFeedback('usage-metric', State.apiIntegrationsSelectedMetric, next);
+    State.apiIntegrationsSelectedMetric = next;
     saveAPIIntegrationsMetric(State.apiIntegrationsSelectedMetric);
+    updateHistoryChartSwitch('usage-chart', feedback, Boolean(State.currentUsageHistory &&
+      usageGraphJobIsSelected(State.currentUsageHistory.job)));
     renderAPIIntegrationsChart(selectedChartRange());
   });
 }
 
-function redrawSelectedUsageGraph() {
+function redrawSelectedUsageGraph(feedback) {
   const history = State.currentUsageHistory;
-  if (!history || !usageGraphJobIsSelected(history.job)) return fetchHistory(selectedChartRange());
+  if (!history || !usageGraphJobIsSelected(history.job)) return fetchHistory(selectedChartRange(), feedback);
+  updateHistoryChartSwitch('usage-chart', feedback);
   if (history.job.provider === 'both') return renderAllQuotaHistory();
   if (history.job.provider === 'api-integrations') return renderAPIIntegrationsChart(history.job.range);
   drawUsageGraph(history.job, history.payload, history.options);
@@ -11203,10 +11269,12 @@ function setupChartModeSelector(render = redrawSelectedUsageGraph) {
   group.addEventListener('click', (event) => {
     const button = event.target.closest('.graph-mode-btn');
     if (!button) return;
-    State.graphMode = normalizeGraphMode(button.dataset.graphMode);
+    const next = normalizeGraphMode(button.dataset.graphMode);
+    const feedback = graphSelectionFeedback('usage-mode', State.graphMode, next);
+    State.graphMode = next;
     setActive();
     saveGraphMode(State.graphMode);
-    render();
+    render(feedback);
   });
   group.dataset.bound = 'true';
 }
@@ -11222,10 +11290,12 @@ function setupPlatformCostChartMetricSelector() {
   syncButtons();
   group.addEventListener('click', event => {
     const button = event.target.closest('[data-metric]');
-    if (!button || button.dataset.metric === State.platformCostChartMetric) return;
+    if (!button) return;
+    const feedback = graphSelectionFeedback('cost-metric', State.platformCostChartMetric, button.dataset.metric);
+    if (!feedback.selectionChanged) return;
     State.platformCostChartMetric = button.dataset.metric;
     syncButtons();
-    renderPlatformCostChart(getCurrentProvider(), selectedPlatformCostRange());
+    renderPlatformCostChart(getCurrentProvider(), selectedPlatformCostRange(), feedback);
   });
   group.dataset.bound = 'true';
 }
@@ -11242,10 +11312,12 @@ function setupPlatformCostChartModeSelector() {
   group.addEventListener('click', (event) => {
     const button = event.target.closest('.graph-mode-btn');
     if (!button) return;
-    State.platformCostGraphMode = normalizeGraphMode(button.dataset.graphMode);
+    const next = normalizeGraphMode(button.dataset.graphMode);
+    const feedback = graphSelectionFeedback('cost-mode', State.platformCostGraphMode, next);
+    State.platformCostGraphMode = next;
     setActive();
     savePlatformCostGraphMode(State.platformCostGraphMode);
-    renderPlatformCostChart(getCurrentProvider(), selectedPlatformCostRange());
+    renderPlatformCostChart(getCurrentProvider(), selectedPlatformCostRange(), feedback);
   });
   group.dataset.bound = 'true';
 }
@@ -11263,7 +11335,7 @@ function setupCombinedCostProviderFilters() {
   group.addEventListener('change', () => {
     State.combinedCostProviders = inputs.filter(input => input.checked).map(input => input.value);
     writeJSONStorage(localStorage, key, State.combinedCostProviders);
-    renderPlatformCostChart('both', selectedPlatformCostRange(), true);
+    renderPlatformCostChart('both', selectedPlatformCostRange(), { providersChanged: true });
   });
 }
 

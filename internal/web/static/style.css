@@ -4598,6 +4598,7 @@ select.settings-input {
     transition-duration: 0.01ms !important;
   }
   .progress-fill { transition: none; }
+  .chart-loading-card .loading-spinner { animation: none; }
   .quota-card, .insights-panel, .chart-section, .cycle-overview-section, .cycles-section, .sessions-section {
     opacity: 1;
     animation: none;

@@ -166,7 +166,9 @@ reuse saved totals for complete hours at hourly and wider resolutions.
 The dashboard prepares 7d and 30d usage and cost history for the current view
 after loading the selected charts. Saved results appear immediately while
 older results refresh. If a range still needs data, the plot shows a loading
-card and the range controls stay available.
+card and the range controls stay available. A switch to a saved graph briefly
+shows the card for 200 ms. Returning to an option selected in the past minute
+skips the cue.
 
 Codex and Antigravity cards show the age of their last successful quota snapshot
 and mark it stale after 30 minutes. The last measured percentage remains visible;
@@ -175,7 +177,7 @@ ingestion replaces legacy generated `central:` display names with short account
 labels on the next accepted snapshot, preserving external IDs, history, and
 custom names.
 
-Check cumulative and per-period modes at 1h, 6h, 24h, 7d, 30d, all, and custom ranges for both quota usage and cost. Cost events may arrive from multiple devices. Quota series accept only the configured owner.
+Check cumulative and per-period modes at 1h, 6h, 24h, 7d, 30d, 90d, all, and custom ranges for both quota usage and cost. Cost events may arrive from multiple devices. Quota series accept only the configured owner.
 
 ## Production cutover
 
