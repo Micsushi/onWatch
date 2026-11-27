@@ -189,6 +189,10 @@ func (s *Store) QueryAnthropicRange(start, end time.Time, limit ...int) ([]*api.
 // QueryAnthropicRangeSampled returns time-sampled Anthropic snapshots and
 // their quota values in one query. The first and last snapshots are retained.
 func (s *Store) QueryAnthropicRangeSampled(start, end time.Time, maxPoints int) ([]*api.AnthropicSnapshot, error) {
+	return readQuotaChart(s, "anthropic", []string{""}, start, end, maxPoints, s.queryAnthropicRangeSampled)
+}
+
+func (s *Store) queryAnthropicRangeSampled(start, end time.Time, maxPoints int) ([]*api.AnthropicSnapshot, error) {
 	if maxPoints < 2 {
 		return nil, fmt.Errorf("anthropic sample size must be at least 2")
 	}

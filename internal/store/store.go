@@ -896,6 +896,9 @@ func (s *Store) createTables() error {
 	if err := s.ensureAPIIntegrationChartHours(); err != nil {
 		return fmt.Errorf("failed to create API integration chart hours: %w", err)
 	}
+	if err := s.ensureQuotaChartDays(); err != nil {
+		return fmt.Errorf("failed to create prepared quota chart history: %w", err)
+	}
 
 	return nil
 }

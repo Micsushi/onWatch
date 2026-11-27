@@ -199,7 +199,9 @@ func (s *Store) QueryAntigravityRange(start, end time.Time, limit ...int) ([]*ap
 
 // QueryAntigravityRangeSampled selects chart points before loading model and summary data.
 func (s *Store) QueryAntigravityRangeSampled(start, end time.Time, maxPoints int) ([]*api.AntigravitySnapshot, error) {
-	return s.queryAntigravityRange(start, end, "", 0, maxPoints)
+	return readQuotaChart(s, "antigravity", []string{""}, start, end, maxPoints, func(start, end time.Time, limit int) ([]*api.AntigravitySnapshot, error) {
+		return s.queryAntigravityRange(start, end, "", 0, limit)
+	})
 }
 
 func (s *Store) queryAntigravityRange(start, end time.Time, email string, limit, maxPoints int) ([]*api.AntigravitySnapshot, error) {

@@ -250,6 +250,15 @@ func (s *Store) QueryCodexRange(accountID int64, start, end time.Time, limit ...
 // QueryCodexRangeSampled returns time-sampled Codex snapshots and their quota
 // values in one query. The first and last snapshots are always retained.
 func (s *Store) QueryCodexRangeSampled(accountID int64, start, end time.Time, maxPoints int) ([]*api.CodexSnapshot, error) {
+	if accountID == 0 {
+		accountID = DefaultCodexAccountID
+	}
+	return readQuotaChart(s, "codex", []string{codexChartSeries(accountID)}, start, end, maxPoints, func(start, end time.Time, limit int) ([]*api.CodexSnapshot, error) {
+		return s.queryCodexRangeSampled(accountID, start, end, limit)
+	})
+}
+
+func (s *Store) queryCodexRangeSampled(accountID int64, start, end time.Time, maxPoints int) ([]*api.CodexSnapshot, error) {
 	if maxPoints < 2 {
 		return nil, fmt.Errorf("codex sample size must be at least 2")
 	}

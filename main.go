@@ -1633,6 +1633,11 @@ func run() error {
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	quotaChartDone := make(chan struct{})
+	go func() {
+		defer close(quotaChartDone)
+		db.MaintainQuotaChartHistory(ctx, logger)
+	}()
 	pollHealthMonitorDone := startPollHealthMonitor(ctx, notifier)
 	var centralMonitorDone <-chan struct{}
 	if ingestServer != nil {
@@ -1738,6 +1743,7 @@ func run() error {
 	cancel()
 	agentMgr.StopAll()
 	<-pollHealthMonitorDone
+	<-quotaChartDone
 	if centralMonitorDone != nil {
 		<-centralMonitorDone
 	}

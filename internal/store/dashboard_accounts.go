@@ -151,6 +151,19 @@ func (s *Store) QueryAntigravityAccountRange(account AntigravityAccount, start, 
 // QueryAntigravityAccountRangeSampled samples the combined local and collector
 // timeline before loading local detail rows or decoding collector receipts.
 func (s *Store) QueryAntigravityAccountRangeSampled(account AntigravityAccount, start, end time.Time, maxPoints int) ([]*api.AntigravitySnapshot, error) {
+	var series []string
+	if account.Local && account.Email != "" {
+		series = append(series, antigravityLocalChartSeries(account.Email))
+	}
+	if account.ExternalID != "" {
+		series = append(series, antigravityCentralChartSeries(account.ExternalID))
+	}
+	return readQuotaChart(s, "antigravity", series, start, end, maxPoints, func(start, end time.Time, limit int) ([]*api.AntigravitySnapshot, error) {
+		return s.queryAntigravityAccountRangeSampled(account, start, end, limit)
+	})
+}
+
+func (s *Store) queryAntigravityAccountRangeSampled(account AntigravityAccount, start, end time.Time, maxPoints int) ([]*api.AntigravitySnapshot, error) {
 	if maxPoints < 1 {
 		return nil, fmt.Errorf("antigravity sample size must be positive")
 	}

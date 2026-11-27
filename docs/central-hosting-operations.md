@@ -157,11 +157,15 @@ Graphs use the timestamps of recorded observations. Quota history draws dashed l
 
 All shows weekly quota history for the Anthropic, Antigravity (Gemini Pro), and Codex cards. Switching a card's account updates its quota line. Combined Token Cost defaults to all three providers. Use its checkboxes to choose which providers contribute to the subtotal and chart. The selection is saved in the browser, and each selected provider includes all of its accounts.
 
-The All range spans retained history at a resolution suitable for a wide
-chart. Presets and custom dates use the same stored observations, with
-sampling and totals calculated for the selected window. Quota history
-selects chart points before loading snapshot details. Cost and token history
-reuse saved totals for complete hours at hourly and wider resolutions.
+The All range spans retained history. Anthropic, Codex, and Antigravity
+quota charts share prepared UTC-day chunks across browsers and devices.
+Server startup fills those chunks from existing observations in the
+background. A new poll, import, or correction refreshes the affected day.
+Short windows, partial boundary days, and days still being prepared read
+the original observations. Wide views reuse the prepared points, which
+retain observed timestamps and prioritize quota drops when sampling.
+Cost and token history reuse saved totals for complete hours at hourly
+and wider resolutions.
 
 The dashboard prepares 7d and 30d usage and cost history for the current view
 after loading the selected charts. Saved results appear immediately while
