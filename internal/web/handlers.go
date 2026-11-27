@@ -2795,15 +2795,10 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	start := window.Start
 
 	if providers["synthetic"] && providerTelemetryEnabled(visibility, "synthetic") && h.store != nil {
-		snapshots, err := h.store.QueryRange(start, now)
+		snapshots, err := h.store.QuerySyntheticRangeSampled(start, now, maxChartPoints)
 		if err == nil {
-			step := downsampleStep(len(snapshots), maxChartPoints)
-			last := len(snapshots) - 1
 			synData := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-			for i, s := range snapshots {
-				if step > 1 && i != 0 && i != last && i%step != 0 {
-					continue
-				}
+			for _, s := range snapshots {
 				subPct, searchPct, toolPct := 0.0, 0.0, 0.0
 				if s.Sub.Limit > 0 {
 					subPct = (s.Sub.Requests / s.Sub.Limit) * 100
@@ -2832,15 +2827,10 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if providers["zai"] && providerTelemetryEnabled(visibility, "zai") && h.store != nil {
-		snapshots, err := h.store.QueryZaiRange(start, now)
+		snapshots, err := h.store.QueryZaiRangeSampled(start, now, maxChartPoints)
 		if err == nil {
-			step := downsampleStep(len(snapshots), maxChartPoints)
-			last := len(snapshots) - 1
 			zaiData := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-			for i, s := range snapshots {
-				if step > 1 && i != 0 && i != last && i%step != 0 {
-					continue
-				}
+			for _, s := range snapshots {
 				zaiData = append(zaiData, map[string]interface{}{
 					"capturedAt":       s.CapturedAt.Format(time.RFC3339),
 					"tokensLimit":      s.TokensUsage,
@@ -2879,15 +2869,10 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if providers["copilot"] && providerTelemetryEnabled(visibility, "copilot") && h.store != nil {
-		snapshots, err := h.store.QueryCopilotRange(start, now)
+		snapshots, err := h.store.QueryCopilotRangeSampled(start, now, maxChartPoints)
 		if err == nil {
-			step := downsampleStep(len(snapshots), maxChartPoints)
-			last := len(snapshots) - 1
 			copData := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-			for i, snap := range snapshots {
-				if step > 1 && i != 0 && i != last && i%step != 0 {
-					continue
-				}
+			for _, snap := range snapshots {
 				entry := map[string]interface{}{
 					"capturedAt": snap.CapturedAt.Format(time.RFC3339),
 				}
@@ -2990,17 +2975,12 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 			if !minimaxAccountTelemetryEnabled(visibility, accountID) {
 				continue
 			}
-			snapshots, err := h.store.QueryMiniMaxRange(start, now, accountID)
+			snapshots, err := h.store.QueryMiniMaxRangeSampled(start, now, accountID, maxChartPoints)
 			if err != nil {
 				continue
 			}
-			step := downsampleStep(len(snapshots), maxChartPoints)
-			last := len(snapshots) - 1
 			mmData := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-			for i, snap := range snapshots {
-				if step > 1 && i != 0 && i != last && i%step != 0 {
-					continue
-				}
+			for _, snap := range snapshots {
 				entry := map[string]interface{}{
 					"capturedAt": snap.CapturedAt.Format(time.RFC3339),
 				}
@@ -3027,15 +3007,10 @@ func (h *Handler) historyBoth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if providers["openrouter"] && providerTelemetryEnabled(visibility, "openrouter") && h.store != nil {
-		snapshots, err := h.store.QueryOpenRouterRange(start, now)
+		snapshots, err := h.store.QueryOpenRouterRangeSampled(start, now, maxChartPoints)
 		if err == nil {
-			step := downsampleStep(len(snapshots), maxChartPoints)
-			last := len(snapshots) - 1
 			orData := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-			for i, s := range snapshots {
-				if step > 1 && i != 0 && i != last && i%step != 0 {
-					continue
-				}
+			for _, s := range snapshots {
 				entry := map[string]interface{}{
 					"capturedAt": s.CapturedAt.Format(time.RFC3339),
 					"usage":      s.Usage,
@@ -3123,20 +3098,15 @@ func (h *Handler) historySynthetic(w http.ResponseWriter, r *http.Request) {
 	start := window.Start
 	end := window.End
 
-	snapshots, err := h.store.QueryRange(start, end)
+	snapshots, err := h.store.QuerySyntheticRangeSampled(start, end, maxChartPoints)
 	if err != nil {
 		h.logger.Error("failed to query history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")
 		return
 	}
 
-	step := downsampleStep(len(snapshots), maxChartPoints)
-	last := len(snapshots) - 1
 	response := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-	for i, snapshot := range snapshots {
-		if step > 1 && i != 0 && i != last && i%step != 0 {
-			continue
-		}
+	for _, snapshot := range snapshots {
 
 		subPercent := 0.0
 		if snapshot.Sub.Limit > 0 {
@@ -3186,20 +3156,15 @@ func (h *Handler) historyZai(w http.ResponseWriter, r *http.Request) {
 	start := window.Start
 	end := window.End
 
-	snapshots, err := h.store.QueryZaiRange(start, end)
+	snapshots, err := h.store.QueryZaiRangeSampled(start, end, maxChartPoints)
 	if err != nil {
 		h.logger.Error("failed to query Z.ai history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")
 		return
 	}
 
-	step := downsampleStep(len(snapshots), maxChartPoints)
-	last := len(snapshots) - 1
 	response := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-	for i, snapshot := range snapshots {
-		if step > 1 && i != 0 && i != last && i%step != 0 {
-			continue
-		}
+	for _, snapshot := range snapshots {
 		// Z.ai API: "usage" = budget, "currentValue" = actual usage, "percentage" = server %
 		response = append(response, map[string]interface{}{
 			"capturedAt":       snapshot.CapturedAt.Format(time.RFC3339),
@@ -3309,20 +3274,15 @@ func (h *Handler) historyOpenRouter(w http.ResponseWriter, r *http.Request) {
 	start := window.Start
 	end := window.End
 
-	snapshots, err := h.store.QueryOpenRouterRange(start, end)
+	snapshots, err := h.store.QueryOpenRouterRangeSampled(start, end, maxChartPoints)
 	if err != nil {
 		h.logger.Error("failed to query OpenRouter history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")
 		return
 	}
 
-	step := downsampleStep(len(snapshots), maxChartPoints)
-	last := len(snapshots) - 1
 	histResp := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-	for i, snapshot := range snapshots {
-		if step > 1 && i != 0 && i != last && i%step != 0 {
-			continue
-		}
+	for _, snapshot := range snapshots {
 		entry := map[string]interface{}{
 			"capturedAt": snapshot.CapturedAt.Format(time.RFC3339),
 			"usage":      snapshot.Usage,
@@ -7849,19 +7809,14 @@ func (h *Handler) historyCopilot(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	snapshots, err := h.store.QueryCopilotRange(window.Start, window.End)
+	snapshots, err := h.store.QueryCopilotRangeSampled(window.Start, window.End, maxChartPoints)
 	if err != nil {
 		h.logger.Error("failed to query Copilot history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")
 		return
 	}
-	step := downsampleStep(len(snapshots), maxChartPoints)
-	last := len(snapshots) - 1
 	response := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-	for i, snap := range snapshots {
-		if step > 1 && i != 0 && i != last && i%step != 0 {
-			continue
-		}
+	for _, snap := range snapshots {
 		entry := map[string]interface{}{
 			"capturedAt": snap.CapturedAt.Format(time.RFC3339),
 		}
@@ -10058,20 +10013,15 @@ func (h *Handler) historyMiniMax(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	minimaxAccID := h.parseMiniMaxAccountID(r)
-	snapshots, err := h.store.QueryMiniMaxRange(window.Start, window.End, minimaxAccID)
+	snapshots, err := h.store.QueryMiniMaxRangeSampled(window.Start, window.End, minimaxAccID, maxChartPoints)
 	if err != nil {
 		h.logger.Error("failed to query MiniMax history", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to query history")
 		return
 	}
 
-	step := downsampleStep(len(snapshots), maxChartPoints)
-	last := len(snapshots) - 1
 	response := make([]map[string]interface{}, 0, min(len(snapshots), maxChartPoints))
-	for i, snap := range snapshots {
-		if step > 1 && i != 0 && i != last && i%step != 0 {
-			continue
-		}
+	for _, snap := range snapshots {
 		entry := map[string]interface{}{
 			"capturedAt": snap.CapturedAt.Format(time.RFC3339),
 		}

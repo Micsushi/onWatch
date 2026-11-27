@@ -135,6 +135,19 @@ func (s *Store) QueryZaiRange(start, end time.Time, limit ...int) ([]*api.ZaiSna
 			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
+	return s.queryZaiRangeRows(query, args...)
+}
+
+// QueryZaiRangeSampled selects chart observations before reading snapshot details.
+func (s *Store) QueryZaiRangeSampled(start, end time.Time, maxPoints int) ([]*api.ZaiSnapshot, error) {
+	query := stridedQuotaHistory("zai_snapshots", `id, captured_at, time_limit, time_unit, time_number, time_usage,
+		 time_current_value, time_remaining, time_percentage, time_usage_details,
+		 tokens_limit, tokens_unit, tokens_number, tokens_usage,
+		 tokens_current_value, tokens_remaining, tokens_percentage, tokens_next_reset`, "")
+	return s.queryZaiRangeRows(query, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), maxPoints, maxPoints)
+}
+
+func (s *Store) queryZaiRangeRows(query string, args ...any) ([]*api.ZaiSnapshot, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query zai range: %w", err)

@@ -893,6 +893,9 @@ func (s *Store) createTables() error {
 	if err := s.ensureCentralSchema(); err != nil {
 		return fmt.Errorf("failed to create central schema: %w", err)
 	}
+	if err := s.ensureAPIIntegrationChartHours(); err != nil {
+		return fmt.Errorf("failed to create API integration chart hours: %w", err)
+	}
 
 	return nil
 }
@@ -1432,6 +1435,18 @@ func (s *Store) QueryRange(start, end time.Time, limit ...int) ([]*api.Snapshot,
 			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
+	return s.querySyntheticRangeRows(query, args...)
+}
+
+// QuerySyntheticRangeSampled selects chart observations before reading snapshot details.
+func (s *Store) QuerySyntheticRangeSampled(start, end time.Time, maxPoints int) ([]*api.Snapshot, error) {
+	query := stridedQuotaHistory("quota_snapshots", `id, captured_at, sub_limit, sub_requests, sub_renews_at,
+		 search_limit, search_requests, search_renews_at,
+		 tool_limit, tool_requests, tool_renews_at`, "")
+	return s.querySyntheticRangeRows(query, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), maxPoints, maxPoints)
+}
+
+func (s *Store) querySyntheticRangeRows(query string, args ...any) ([]*api.Snapshot, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query range: %w", err)

@@ -197,66 +197,14 @@ func (s *Store) QueryCursorRangeSampled(start, end time.Time, maxPoints int) ([]
 		return nil, fmt.Errorf("cursor sample size must be at least 2")
 	}
 
-	rows, err := s.db.Query(`
-		WITH bounded AS (
-			SELECT id, captured_at, account_type, plan_name,
-				julianday(captured_at) AS captured_day,
-				MIN(julianday(captured_at)) OVER () AS first_day,
-				MAX(julianday(captured_at)) OVER () AS last_day,
-				COUNT(*) OVER () AS total_rows
-			FROM cursor_snapshots
-			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ?
-				AND captured_at COLLATE ONWATCH_RFC3339 < ?
-		),
-		bucketed AS (
-			SELECT id, captured_at, account_type, plan_name, total_rows,
-				CASE WHEN last_day = first_day THEN 0 ELSE
-					MIN(? - 1, CAST((captured_day - first_day) * (? - 1) / (last_day - first_day) AS INTEGER))
-				END AS time_bucket
-			FROM bounded
-		),
-		quota_ordered AS (
-			SELECT quota.snapshot_id, quota.quota_name, quota.utilization,
-				LAG(quota.utilization) OVER (
-					PARTITION BY quota.quota_name ORDER BY bounded.captured_at COLLATE ONWATCH_RFC3339 ASC
-				) AS previous_utilization
-			FROM bounded
-			JOIN cursor_quota_values quota ON quota.snapshot_id = bounded.id
-		),
-		reset_ids AS (
-			SELECT DISTINCT snapshot_id
-			FROM quota_ordered
-			WHERE previous_utilization IS NOT NULL AND utilization < previous_utilization
-		),
-		ranked AS (
-			SELECT id, captured_at, account_type, plan_name, total_rows, time_bucket,
-				ROW_NUMBER() OVER (
-					PARTITION BY time_bucket
-					ORDER BY CASE WHEN id IN (SELECT snapshot_id FROM reset_ids) THEN 0 ELSE 1 END,
-						captured_at COLLATE ONWATCH_RFC3339 DESC
-				) AS bucket_rank,
-				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC) AS overall_rank,
-				ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 DESC) AS overall_reverse_rank
-			FROM bucketed
-		),
-		sampled AS (
-			SELECT id, captured_at, account_type, plan_name
-			FROM ranked
-			WHERE total_rows <= ?
-				OR overall_rank = 1
-				OR overall_reverse_rank = 1
-				OR (time_bucket > 0 AND time_bucket < ? - 1 AND bucket_rank = 1)
-		)
+	rows, err := s.db.Query(resetAwareQuotaHistory("cursor_snapshots", "cursor_quota_values", "")+`
 		SELECT sampled.id, sampled.captured_at, sampled.account_type, sampled.plan_name,
 			quota.quota_name, quota.used, quota.limit_value, quota.utilization, quota.format, quota.resets_at
-		FROM sampled
+		FROM selected JOIN cursor_snapshots sampled ON sampled.id = selected.id
 		LEFT JOIN cursor_quota_values quota ON quota.snapshot_id = sampled.id
 		ORDER BY sampled.captured_at COLLATE ONWATCH_RFC3339 ASC, quota.quota_name ASC`,
 		start.UTC().Format(time.RFC3339Nano),
 		end.UTC().Format(time.RFC3339Nano),
-		maxPoints,
-		maxPoints,
-		maxPoints,
 		maxPoints,
 	)
 	if err != nil {

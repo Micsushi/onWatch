@@ -977,7 +977,7 @@ func (s *Store) QueryAPIIntegrationUsageEffortTotals(start, end time.Time, integ
 
 // QueryAPIIntegrationUsageBuckets groups usage into time buckets over a range.
 func (s *Store) QueryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize time.Duration) ([]APIIntegrationUsageBucketRow, error) {
-	return s.queryAPIIntegrationUsageBuckets(start, end, bucketSize, "", apiIntegrationUsageBucketsLimit)
+	return queryAPIIntegrationUsageBuckets(s.db, start, end, bucketSize, "", apiIntegrationUsageBucketsLimit, time.Time{}, time.Time{})
 }
 
 // QueryAPIIntegrationChartBuckets widens time buckets before summing to keep every event in the chart.
@@ -1026,10 +1026,32 @@ func (s *Store) QueryAPIIntegrationChartBuckets(start, end time.Time, bucketSize
 			bucketSize *= (span + width - 1) / width
 		}
 	}
-	return s.queryAPIIntegrationUsageBuckets(start, end, bucketSize, integration, -1)
+	fullStart, fullEnd := start.UTC().Truncate(time.Hour), end.UTC().Truncate(time.Hour)
+	if fullStart.Before(start) {
+		fullStart = fullStart.Add(time.Hour)
+	}
+	var rollupErr error
+	if bucketSize%time.Hour == 0 && fullStart.Before(fullEnd) {
+		var rows []APIIntegrationUsageBucketRow
+		rows, rollupErr = s.queryAPIIntegrationChartHours(start, end, fullStart, fullEnd, bucketSize, integration)
+		if rollupErr == nil {
+			return rows, nil
+		}
+	}
+	rows, err := queryAPIIntegrationUsageBuckets(s.db, start, end, bucketSize, integration, -1, time.Time{}, time.Time{})
+	if err != nil && rollupErr != nil {
+		return nil, errors.Join(rollupErr, err)
+	}
+	return rows, err
 }
 
-func (s *Store) queryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize time.Duration, integration string, limit int) ([]APIIntegrationUsageBucketRow, error) {
+func queryAPIIntegrationUsageBuckets(
+	db interface {
+		Query(string, ...any) (*sql.Rows, error)
+	},
+	start, end time.Time, bucketSize time.Duration, integration string, limit int,
+	fullStart, fullEnd time.Time,
+) ([]APIIntegrationUsageBucketRow, error) {
 	if bucketSize < time.Second {
 		return nil, fmt.Errorf("bucket size must be at least one second")
 	}
@@ -1039,35 +1061,46 @@ func (s *Store) queryAPIIntegrationUsageBuckets(start, end time.Time, bucketSize
 	if integration != "" {
 		filter = " AND integration_name = ?"
 	}
-	args := []any{bucketSeconds, bucketSeconds, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)}
-	if integration != "" {
-		args = append(args, integration)
+	args := []any{bucketSeconds, bucketSeconds}
+	rawRange := func(from, to time.Time) string {
+		args = append(args, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano))
+		if integration != "" {
+			args = append(args, integration)
+		}
+		return `SELECT captured_at, integration_name, prompt_tokens, completion_tokens, total_tokens,
+			input_tokens, cached_input_tokens, cache_creation_input_tokens, output_tokens,
+			reasoning_output_tokens, cost_usd
+			FROM api_integration_usage_events
+			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?` + filter
+	}
+	var rawSource, chartHours string
+	if fullStart.Before(fullEnd) {
+		rawSource = rawRange(start, fullStart) + " UNION ALL " + rawRange(fullEnd, end)
+		chartHours = `UNION ALL
+			SELECT integration_name, strftime('%Y-%m-%dT%H:%M:%SZ', (chart_hour / ?) * ?, 'unixepoch'),
+			       request_count, prompt_tokens, completion_tokens, total_tokens, input_tokens,
+			       cached_input_tokens, cache_creation_input_tokens, output_tokens,
+			       reasoning_output_tokens, total_cost_usd, priced_requests, first_at, last_at
+			FROM api_integration_chart_hours WHERE source_hour >= ? AND source_hour < ?` + filter
+		args = append(args, bucketSeconds, bucketSeconds, fullStart.Format(chartHourLayout), fullEnd.Format(chartHourLayout))
+		if integration != "" {
+			args = append(args, integration)
+		}
+	} else {
+		rawSource = rawRange(start, end)
 	}
 	args = append(args, bucketSeconds, bucketSeconds, end.Format(time.RFC3339Nano), start.Format(time.RFC3339Nano))
 	if integration != "" {
 		args = append(args, integration)
 	}
 	args = append(args, limit)
-	rows, err := s.db.Query(`
+	rows, err := db.Query(`
 		WITH combined AS (
 			SELECT integration_name,
-			       strftime('%Y-%m-%dT%H:%M:%SZ', (CAST(strftime('%s', captured_at) AS INTEGER) / ?) * ?, 'unixepoch') AS bucket_start,
-			       COUNT(*) AS request_count,
-			       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-			       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-			       COALESCE(SUM(total_tokens), 0) AS total_tokens,
-			       COALESCE(SUM(input_tokens), 0) AS input_tokens,
-			       COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-			       COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
-			       COALESCE(SUM(output_tokens), 0) AS output_tokens,
-			       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
-			       COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
-			       COUNT(cost_usd) AS priced_requests,
-			       MIN(captured_at COLLATE ONWATCH_RFC3339) AS first_at,
-			       MAX(captured_at COLLATE ONWATCH_RFC3339) AS last_at
-			FROM api_integration_usage_events
-			WHERE captured_at COLLATE ONWATCH_RFC3339 >= ? AND captured_at COLLATE ONWATCH_RFC3339 < ?`+filter+`
+			       strftime('%Y-%m-%dT%H:%M:%SZ', (CAST(strftime('%s', captured_at) AS INTEGER) / ?) * ?, 'unixepoch') AS bucket_start,`+chartEventTotals+`
+			FROM (`+rawSource+`)
 			GROUP BY integration_name, bucket_start
+			`+chartHours+`
 			UNION ALL
 			SELECT integration_name,
 			       strftime('%Y-%m-%dT%H:%M:%SZ', (CAST(strftime('%s', hour_start) AS INTEGER) / ?) * ?, 'unixepoch') AS bucket_start,

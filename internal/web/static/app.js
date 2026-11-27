@@ -267,12 +267,14 @@ const State = {
   graphRefreshCurrent: null,
   graphRefreshDraining: false,
   graphFallbackTimers: {},
+  graphPlotLoads: {},
   customGraphRefreshControllers: {},
   refreshInFlight: false,
   dashboardRefreshCount: 0,
   dashboardRefreshMessage: 'Updating data...',
   dashboardToastTimer: null,
   currentChartSelection: null,
+  currentUsageHistory: null,
   currentChartAccount: null,
   currentChartWindowStart: null,
   currentChartWindowEnd: null,
@@ -455,14 +457,6 @@ function setCachedProviderData(kind, provider, extra = '', payload = {}, account
   writeJSONStorage(localStorage, PROVIDER_DATA_CACHE_KEY, cache);
 }
 
-function updateCachedProviderData(kind, provider, extra = '', payload = {}, accountOverride) {
-  if (!provider || !payload) return;
-  const cache = getProviderDataCache();
-  const key = providerDataCacheKey(kind, provider, extra, accountOverride);
-  cache[key] = { ...(cache[key] || {}), ts: Date.now(), ...payload };
-  writeJSONStorage(localStorage, PROVIDER_DATA_CACHE_KEY, cache);
-}
-
 function formatCacheTime(ts) {
   const time = ts ? new Date(ts) : new Date();
   return Number.isNaN(time.getTime()) ? new Date().toLocaleTimeString() : time.toLocaleTimeString();
@@ -545,13 +539,13 @@ function showBestSavedGraphFallback(job) {
         renderPlatformCostPanel(job.provider);
       }
     }
-    setPlatformCostChartLoading(false);
     return;
   }
   if (!usageGraphJobIsSelected(job)) return;
   const cached = getStaleProviderHistory(job.provider, job.range, job.selectionKey, job.accountKey);
-  if (!cached || !cached.data || getCurrentProvider() !== job.provider) return;
+  if (!cached?.data) return;
   applyUsageGraphJob(job, cached, { stale: true, ts: cached.ts });
+  setHistoryChartLoading('usage-chart');
 }
 
 function schedulePresetGraphFallback(job) {
@@ -571,16 +565,60 @@ function finishGraphRefreshJob(job) {
   renderDashboardRefreshStatus();
 }
 
-function setUsageChartRefreshMessage(message = '') {
-  const status = document.getElementById('usage-chart-refresh-message');
+function setHistoryChartLoading(chartID, title = '', detail = '') {
+  const status = document.getElementById(chartID + '-loading');
   if (!status) return;
-  status.textContent = message;
-  status.hidden = !message;
+  status.firstElementChild.hidden = !title;
+  const titleNode = status.querySelector('[data-history-loading-title]');
+  const detailNode = status.querySelector('[data-history-loading-detail]');
+  if (titleNode.textContent !== title) titleNode.textContent = title;
+  if (detailNode.textContent !== detail) detailNode.textContent = detail;
+}
+
+async function loadSelectedGraphHistory(job, cached, options) {
+  const { scope, range } = job;
+  const isUsage = job.kind === 'usage';
+  const chartID = isUsage ? 'usage-chart' : 'platform-cost-chart';
+  const previousCustom = State.customGraphRefreshControllers[scope];
+  if (range !== 'custom' && previousCustom) previousCustom.abort();
+  if (State.graphRefreshCurrent?.scope === scope && State.graphRefreshCurrent.key !== job.key) {
+    State.graphRefreshCurrent = null;
+    renderDashboardRefreshStatus();
+  }
+  State.graphPlotLoads[scope] = job;
+  const chart = isUsage ? State.chart : State.platformCostChart;
+  const shownRange = isUsage ? State.currentChartRange : State.platformCostHistoryRange;
+  let detail = '';
+  if (shownRange && chart?.data?.datasets?.length) {
+    if (isUsage && State.currentChartAccount !== job.accountKey) {
+      detail = 'Showing the previous account while it loads.';
+    } else {
+      detail = shownRange === range && range === 'custom'
+        ? 'Showing the previous dates while it loads.'
+        : `Showing ${platformCostRangeLabel(shownRange)} history while it loads.`;
+    }
+  }
+  const label = platformCostRangeLabel(range);
+  const title = isUsage ? `Loading ${label} history` : `Loading ${label} cost history`;
+  setHistoryChartLoading(chartID, cached ? '' : title, cached ? '' : detail);
+  try {
+    if (cached && !options.force && options.fresh) return;
+    if (range === 'custom') return await runCustomGraphRefresh(job);
+    return await enqueueGraphRefresh(job, { foreground: options.background !== true });
+  } finally {
+    if (State.graphPlotLoads[scope] === job) {
+      delete State.graphPlotLoads[scope];
+      setHistoryChartLoading(chartID);
+    }
+  }
 }
 
 function restoreDisplayedUsageGraphSelection(job) {
-  if (!job || job.kind !== 'usage' || getCurrentProvider() !== job.provider) return;
-  if (selectedChartRange() !== job.range || State.currentChartProvider !== job.provider) return;
+  if (!usageGraphJobIsSelected(job)) return;
+  if (State.currentChartProvider !== job.provider) {
+    setGraphHistoryRangeError('chart', `Could not load ${platformCostRangeLabel(job.range)} history.`);
+    return;
+  }
 
   const displayedRange = normalizeChartRange(State.currentChartRange || job.range);
   const displayedWindowChanged = job.range === 'custom'
@@ -615,20 +653,19 @@ function restoreDisplayedUsageGraphSelection(job) {
     ? `Could not refresh ${failedLabel} usage. Showing saved data.`
     : `Could not load ${failedLabel} usage. Showing saved ${shownLabel} data.`;
   setGraphHistoryRangeError('chart', message);
-  setUsageChartRefreshMessage(message);
   setDashboardFreshness({ stale: true });
 }
 
 function restoreDisplayedCostGraphSelection(job) {
-  if (!job || job.kind !== 'cost' || getCurrentProvider() !== job.provider) return;
-  const selectedRange = job.scope === 'platformCostBreakdown'
-    ? selectedPlatformCostBreakdownRange()
-    : selectedPlatformCostRange();
-  if (selectedRange !== job.range) return;
-
-  const displayedRange = normalizePlatformCostRange(job.scope === 'platformCostBreakdown'
+  if (!platformCostJobIsSelected(job)) return;
+  const shownRange = job.scope === 'platformCostBreakdown'
     ? State.platformCostBreakdownHistoryRange
-    : State.platformCostHistoryRange);
+    : State.platformCostHistoryRange;
+  if (!shownRange) {
+    setGraphHistoryRangeError(job.scope, `Could not load ${platformCostRangeLabel(job.range)} cost history.`);
+    return;
+  }
+  const displayedRange = normalizePlatformCostRange(shownRange);
   const displayedWindowChanged = job.range === 'custom'
     && (job.scope === 'platformCostBreakdown'
       ? State.platformCostBreakdownHistoryWindowStart !== job.windowStart || State.platformCostBreakdownHistoryWindowEnd !== job.windowEnd
@@ -680,8 +717,9 @@ function restoreDisplayedCostGraphSelection(job) {
 }
 
 function handleGraphRefreshFailure(job) {
-  restoreDisplayedUsageGraphSelection(job);
-  restoreDisplayedCostGraphSelection(job);
+  if (job.warmup && job.background) return;
+  if (job.kind === 'usage') restoreDisplayedUsageGraphSelection(job);
+  else restoreDisplayedCostGraphSelection(job);
 }
 
 async function drainGraphRefreshQueue() {
@@ -692,6 +730,9 @@ async function drainGraphRefreshQueue() {
       const job = State.graphRefreshQueue.shift();
       State.graphRefreshActive = job;
       renderDashboardRefreshStatus();
+      const timeout = job.warmup
+        ? window.setTimeout(() => job.controller.abort(), DASHBOARD_FOREGROUND_FETCH_TIMEOUT_MS)
+        : null;
       try {
         await job.run(job.controller.signal);
         job.resolve?.({ ok: true });
@@ -699,6 +740,7 @@ async function drainGraphRefreshQueue() {
         handleGraphRefreshFailure(job);
         job.resolve?.({ ok: false, error });
       } finally {
+        if (timeout !== null) window.clearTimeout(timeout);
         finishGraphRefreshJob(job);
         State.graphRefreshActive = null;
         renderDashboardRefreshStatus();
@@ -716,6 +758,7 @@ function enqueueGraphRefresh(job, options = {}) {
   const active = State.graphRefreshActive;
   if (active?.key === job.key) {
     if (foreground) {
+      active.background = false;
       State.graphRefreshCurrent = active;
       schedulePresetGraphFallback(active);
       renderDashboardRefreshStatus();
@@ -807,7 +850,7 @@ function clearQuotaLoadingShell(provider = getCurrentProvider(), message = 'Usag
 
 function clearPlatformCostLoadingShell(provider = getCurrentProvider(), message = 'Cost history is still loading. Refresh again for newer data.') {
   if (!supportsPlatformCost(provider)) return;
-  setPlatformCostChartLoading(false);
+  if (!State.graphPlotLoads.platformCost) setPlatformCostChartLoading(false);
   setPlatformCostRangeControlsLoading(State.platformCostRange || DEFAULT_CHART_RANGE, false);
   const hasEntry = Boolean(getPlatformCostEntry(provider));
   if (!hasEntry) renderPlatformCostEmptyPanel(message);
@@ -1026,10 +1069,12 @@ function refreshAll() {
   const refreshBtn = document.getElementById('refresh-btn');
   if (refreshBtn) refreshBtn.classList.add('spinning');
   setDashboardRefreshState(true, 'Updating saved data...');
-  const tasks = [fetchCurrent(), fetchHistory(), ...fetchOpenDashboardDetails()];
+  const history = fetchHistory();
+  const tasks = [fetchCurrent(), history, ...fetchOpenDashboardDetails()];
   if (getCurrentProvider() === 'both') tasks.push(fetchDeepInsights());
   Promise.allSettled(tasks).finally(() => {
     setDashboardRefreshState(false);
+    preloadDashboardHistory();
     if (refreshBtn) setTimeout(() => refreshBtn.classList.remove('spinning'), 600);
   });
 }
@@ -1173,13 +1218,14 @@ function initDashboardAccountOverview(overview) {
     };
     new Chart(canvas, { type: 'line', data: { datasets }, options });
   };
-  const load = async () => {
+  const load = async ({ force = false, refreshCurrent = true } = {}) => {
     controller?.abort();
     controller = new AbortController();
     const request = controller;
     const timeout = window.setTimeout(() => request.abort(), DASHBOARD_FOREGROUND_FETCH_TIMEOUT_MS);
     const selected = selectedChartRange();
     const period = historyRequestWindow(selected, 'chart');
+    const selectionKey = historySelectionKey(selected);
     const bounds = new URLSearchParams(period);
     setDashboardRefreshState(true, 'Updating account readings…');
     const results = await Promise.allSettled(panels.flatMap(panel => {
@@ -1198,26 +1244,40 @@ function initDashboardAccountOverview(overview) {
           throw error;
         }
       };
-      return [
-        get('/api/current?' + scope, payload => renderAccountReadings(panel, provider, payload), panel.querySelector('[data-account-status]')),
-        get('/api/history?' + scope + '&' + bounds, payload => {
-          const result = { payload, range: selected, start: period.start, end: period.end };
-          history.set(panel, result);
-          draw(panel, result);
-        }, panel.querySelector('[data-account-history]')),
-      ];
+      const jobs = [];
+      if (refreshCurrent) {
+        jobs.push(get('/api/current?' + scope, payload => renderAccountReadings(panel, provider, payload),
+          panel.querySelector('[data-account-status]')));
+      }
+      const accountKey = `overview:${panel.dataset.account}`;
+      const showHistory = (payload, start, end) => {
+        const result = { payload, range: selected, start, end };
+        history.set(panel, result);
+        draw(panel, result);
+      };
+      const cached = getStaleProviderHistory(provider, selected, selectionKey, accountKey);
+      if (cached?.data) showHistory(cached.data, cached.windowStart, cached.windowEnd);
+      if (force || !cached?.data || Date.now() - cached.ts > PROVIDER_HISTORY_CACHE_TTL_MS) {
+        jobs.push(get('/api/history?' + scope + '&' + bounds, payload => {
+          setCachedProviderData('history', provider, selectionKey, {
+            data: payload, windowStart: period.start, windowEnd: period.end,
+          }, accountKey);
+          showHistory(payload, period.start, period.end);
+        }, panel.querySelector('[data-account-history]')));
+      }
+      return jobs;
     }));
     window.clearTimeout(timeout);
-    if (controller !== request) return;
     setDashboardRefreshState(false);
+    if (controller !== request) return;
     setDashboardFreshness({ stale: results.some(result => result.status === 'rejected') });
   };
   document.getElementById('scroll-top')?.addEventListener('click', event => {
     event.preventDefault();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
-  refreshBtn?.addEventListener('click', load);
-  setupGraphHistoryRangeControls(load);
+  refreshBtn?.addEventListener('click', () => load({ force: true }));
+  setupGraphHistoryRangeControls(() => load({ refreshCurrent: false }));
   setupChartModeSelector(() => history.forEach((result, panel) => draw(panel, result)));
   new MutationObserver(() => history.forEach((result, panel) => draw(panel, result)))
     .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
@@ -1263,7 +1323,6 @@ async function loadMiniMaxAccounts() {
     select.value = State.minimaxAccount;
     select.hidden = false;
     select.addEventListener('change', () => {
-      if (State.chart) setUsageChartRefreshMessage('Showing the previous account while history loads.');
       saveMiniMaxAccount(Number(select.value));
       refreshAll();
     });
@@ -2532,12 +2591,20 @@ async function loadQuotaModalChart(provider, readSeries) {
   setModalChartStatus(canvas, 'Loading quota history…');
 
   const range = selectedChartRange();
-  const query = historyRequestQuery(range);
+  const loaded = State.currentUsageHistory;
+  const saved = loaded?.job.provider === provider && usageGraphJobIsSelected(loaded.job)
+    ? loaded.payload : null;
+  const query = saved
+    ? new URLSearchParams({ start: saved.windowStart || loaded.job.windowStart, end: saved.windowEnd || loaded.job.windowEnd })
+    : historyRequestQuery(range);
   const account = provider === 'codex' ? codexAccountParam() : '';
   try {
-    const res = await authFetch(`${API_BASE}/api/history?${query}&provider=${provider}${account}`);
-    if (!res.ok) throw new Error('Quota history unavailable');
-    const data = await res.json();
+    let data = saved?.data;
+    if (!data) {
+      const res = await authFetch(`${API_BASE}/api/history?${query}&provider=${provider}${account}`);
+      if (!res.ok) throw new Error('Quota history unavailable');
+      data = await res.json();
+    }
     if (!canvas.isConnected || document.getElementById('detail-modal')?.hidden) return;
 
     const { color, points } = readSeries(data);
@@ -6156,7 +6223,6 @@ function renderAntigravityUsageSummary(datasets, mode = State.graphMode) {
 
 function setMainChartDatasets(datasets, range, options = {}) {
   if (!State.chart) return;
-  const sourceDatasets = datasets;
   const isAntigravity = getCurrentProvider() === 'antigravity';
   if (isAntigravity) datasets = antigravityWindowDatasets(datasets);
   const mode = normalizeGraphMode(options.mode || State.graphMode);
@@ -6253,9 +6319,6 @@ function setMainChartDatasets(datasets, range, options = {}) {
   State.currentChartSelection = selection;
   State.currentChartWindowStart = selectedWindowStart;
   State.currentChartWindowEnd = selectedWindowEnd;
-  if (State.currentChartProvider && State.currentChartProvider !== 'api-integrations' && State.currentChartProvider !== 'both') {
-    updateCachedProviderData('history', State.currentChartProvider, historySelectionKey(range), { chartDatasets: sourceDatasets });
-  }
 }
 
 function initChart() {
@@ -6656,7 +6719,17 @@ function usageGraphJobIsSelected(job) {
 
 function applyUsageGraphJob(job, payload, options = {}) {
   if (!usageGraphJobIsSelected(job)) return;
+  State.currentUsageHistory = { job, payload, options };
   if (payload.usesArchivedData) noteArchivedHistorySelection(job.range);
+  drawUsageGraph(job, payload, options);
+  if (supportsPlatformCost(job.provider) && job.provider !== 'both') {
+    renderPlatformCostChartForSelectedRange(job.provider);
+  }
+  setGraphHistoryRangeError('chart', '');
+  setDashboardFreshness({ stale: Boolean(options.stale), ts: options.ts });
+}
+
+function drawUsageGraph(job, payload, options) {
   if (job.provider === 'api-integrations' || job.provider === 'both') {
     applyProviderHistoryPayload(job.provider, job.range, payload.data, {
       windowStart: payload.windowStart || job.windowStart,
@@ -6682,11 +6755,7 @@ function applyUsageGraphJob(job, payload, options = {}) {
       windowStart,
       windowEnd,
     });
-    if (supportsPlatformCost(job.provider)) renderPlatformCostChartForSelectedRange(job.provider);
   }
-  setGraphHistoryRangeError('chart', '');
-  setUsageChartRefreshMessage('');
-  setDashboardFreshness({ stale: Boolean(options.stale), ts: options.ts });
 }
 
 async function runUsageGraphRefreshJob(job, signal) {
@@ -6747,8 +6816,9 @@ async function fetchHistory(range, options = {}) {
   range = normalizeChartRange(range === undefined ? selectedChartRange() : range);
   const provider = getCurrentProvider();
   const accountKey = usageGraphAccountKey(provider);
-  const selectionKey = historySelectionKey(range);
   State.currentRange = range;
+  const job = createUsageGraphRefreshJob(range, provider, accountKey);
+  const { selectionKey } = job;
 
   const cached = getStaleProviderHistory(provider, range, selectionKey, accountKey);
   const freshCached = getCachedProviderData(
@@ -6759,21 +6829,32 @@ async function fetchHistory(range, options = {}) {
     accountKey,
   );
   if (cached?.data) {
-    applyUsageGraphJob(
-      createUsageGraphRefreshJob(range, provider, accountKey),
-      cached,
-      { stale: Boolean(options.force || !freshCached), ts: cached.ts },
-    );
-    if (!options.force && freshCached && (provider !== 'both' || cached.weeklyDashboard)) {
-      return;
-    }
+    applyUsageGraphJob(job, cached, { stale: Boolean(options.force || !freshCached), ts: cached.ts });
   }
 
-  const job = createUsageGraphRefreshJob(range, provider, accountKey);
-  if (range === 'custom') {
-    return runCustomGraphRefresh(job);
+  return loadSelectedGraphHistory(job, Boolean(cached?.data), {
+    ...options, fresh: Boolean(freshCached && (provider !== 'both' || cached?.weeklyDashboard)),
+  });
+}
+
+function preloadDashboardHistory() {
+  if (document.hidden) return;
+  const provider = getCurrentProvider();
+  for (const range of [DEFAULT_CHART_RANGE, '30d']) {
+    if (range !== selectedChartRange()) {
+      const job = createUsageGraphRefreshJob(range, provider);
+      if (!getCachedProviderData('history', provider, job.selectionKey, PROVIDER_HISTORY_CACHE_TTL_MS, job.accountKey)) {
+        job.warmup = true;
+        void enqueueGraphRefresh(job, { foreground: false });
+      }
+    }
+    if (range !== selectedPlatformCostRange() && supportsPlatformCost(provider) && document.getElementById('platform-cost-chart')
+        && !getCachedPlatformCostHistory(provider, range)) {
+      const job = createPlatformCostRefreshJob(range, provider);
+      job.warmup = true;
+      void enqueueGraphRefresh(job, { foreground: false });
+    }
   }
-  return enqueueGraphRefresh(job, { foreground: options.background !== true });
 }
 
 // "Both" Mode: Provider Cards
@@ -7896,16 +7977,7 @@ function setPlatformCostRangeControlsLoading(range, loading) {
 }
 
 function setPlatformCostChartLoading(loading, message = 'Loading cost history') {
-  const overlay = document.getElementById('platform-cost-chart-loading');
-  const canvas = document.getElementById('platform-cost-chart');
-  if (loading) setChartEmptyState('platform-cost-chart', false);
-  if (overlay) {
-    overlay.hidden = !loading;
-    if (loading) {
-      overlay.innerHTML = `<span class="loading-spinner" aria-hidden="true"></span><span>${escapeHTML(message)}</span>`;
-    }
-  }
-  if (canvas) canvas.classList.toggle('is-loading', Boolean(loading));
+  setHistoryChartLoading('platform-cost-chart', loading ? message : '');
 }
 
 function renderPlatformCostLoadingPanel(range = State.platformCostRange || DEFAULT_CHART_RANGE) {
@@ -7945,7 +8017,6 @@ function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
   const coverage = document.getElementById('platform-cost-coverage');
   if (coverage) coverage.hidden = true;
   const summaryEl = document.getElementById('platform-cost-summary');
-  const refreshStatus = document.getElementById('platform-cost-refresh-status');
   const tableHead = document.getElementById('platform-cost-models-thead');
   const tbody = document.getElementById('platform-cost-models-tbody');
   if (summaryEl) {
@@ -7972,8 +8043,7 @@ function renderPlatformCostEmptyPanel(message = 'No cost telemetry yet.') {
       </div>
     `;
   }
-  if (refreshStatus) refreshStatus.hidden = true;
-  setPlatformCostChartLoading(false);
+  if (!State.graphPlotLoads.platformCost) setPlatformCostChartLoading(false);
   setChartEmptyState('platform-cost-chart', true, message);
   setPlatformCostRangeControlsLoading(State.platformCostRange || DEFAULT_CHART_RANGE, false);
   if (State.platformCostChart) {
@@ -8162,7 +8232,6 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   }
   bindPlatformCostRangeControls(range);
   if (range === 'all' && hasLoadedSelectedRange) syncGraphHistoryRangeControl('platformCost');
-  const refreshStatus = document.getElementById('platform-cost-refresh-status');
   const title = document.getElementById('platform-cost-chart-title');
   const gapNote = document.getElementById('platform-cost-chart-gap-note');
   const graphMode = normalizeGraphMode(State.platformCostGraphMode);
@@ -8214,7 +8283,6 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const plottedPoints = showTokens
     ? (periodMode ? bucketed.tokens : cumulative.tokens)
     : (periodMode ? bucketed.cost : cumulative.cost);
-  if (refreshStatus) refreshStatus.hidden = true;
   setPlatformCostChartLoading(false);
   setPlatformCostRangeControlsLoading(range, false);
   updatePlatformCostSummaryForRange(provider, range, rows);
@@ -8812,29 +8880,11 @@ async function fetchPlatformCostHistory(range, provider, options = {}) {
       renderPlatformCostPanel(provider);
       setDashboardFreshness({ stale: !freshCached, ts: cached.ts });
     }
-    if (!options.force && freshCached) {
-      return;
-    }
   }
 
   const job = createPlatformCostRefreshJob(range, provider, 'platformCost');
   bindPlatformCostRangeControls(range);
-  if (range === 'custom') {
-    setPlatformCostChartLoading(true, `Loading ${platformCostRangeLabel(range)} cost history`);
-    setPlatformCostRangeControlsLoading(range, true);
-    try {
-      await runCustomGraphRefresh(job);
-    } finally {
-      if (!State.customGraphRefreshControllers.platformCost) {
-        setPlatformCostChartLoading(false);
-        setPlatformCostRangeControlsLoading(range, false);
-      }
-    }
-    return;
-  }
-
-  setPlatformCostChartLoading(false);
-  return enqueueGraphRefresh(job, { foreground: options.background !== true });
+  return loadSelectedGraphHistory(job, Boolean(cached), { ...options, fresh: Boolean(freshCached) });
 }
 
 function renderAPIIntegrationsHealth() {
@@ -10966,11 +11016,6 @@ async function reloadGraphHistoryRange(scope) {
   const range = normalizeChartRange(historyScopeWindow(scope).range);
   const provider = getCurrentProvider();
   if (scope === 'platformCost') {
-    const refreshStatus = document.getElementById('platform-cost-refresh-status');
-    if (refreshStatus && State.platformCostHistoryRange && State.platformCostChart) {
-      refreshStatus.textContent = `Showing ${platformCostRangeLabel(State.platformCostHistoryRange)} while ${platformCostRangeLabel(range)} loads.`;
-      refreshStatus.hidden = false;
-    }
     await fetchPlatformCostHistory(range, provider);
     return;
   }
@@ -10978,11 +11023,7 @@ async function reloadGraphHistoryRange(scope) {
     await fetchPlatformCostBreakdownRange(range, provider);
     return;
   }
-  if (State.currentChartRange && State.chart) {
-    const shownRange = platformCostRangeLabel(State.currentChartRange);
-    setUsageChartRefreshMessage(`Showing saved ${shownRange} data while history loads.`);
-  }
-  await fetchHistory(range, { force: true });
+  await fetchHistory(range);
 }
 
 function applyCustomHistoryDates(scope, startDate, endDate) {
@@ -11091,7 +11132,15 @@ function setupAPIIntegrationsMetricSelector() {
   });
 }
 
-function setupChartModeSelector(render = () => fetchHistory(selectedChartRange())) {
+function redrawSelectedUsageGraph() {
+  const history = State.currentUsageHistory;
+  if (!history || !usageGraphJobIsSelected(history.job)) return fetchHistory(selectedChartRange());
+  if (history.job.provider === 'both') return renderAllQuotaHistory();
+  if (history.job.provider === 'api-integrations') return renderAPIIntegrationsChart(history.job.range);
+  drawUsageGraph(history.job, history.payload, history.options);
+}
+
+function setupChartModeSelector(render = redrawSelectedUsageGraph) {
   const group = document.getElementById('chart-mode-select');
   if (!group) return;
   const setActive = () => {
@@ -11848,8 +11897,10 @@ function startAutoRefresh() {
   State.refreshInterval = setInterval(() => {
     setDashboardRefreshState(true, 'Checking for newer data...');
     const tasks = [fetchCurrent(), fetchHistory(), ...fetchOpenDashboardDetails()];
-    if (getCurrentProvider() === 'both') {
-      tasks.push(fetchDeepInsights(), fetchPlatformCostHistory(selectedPlatformCostRange(), 'both', { background: true }));
+    const provider = getCurrentProvider();
+    if (provider === 'both') tasks.push(fetchDeepInsights());
+    if (supportsPlatformCost(provider) && document.getElementById('platform-cost-chart')) {
+      tasks.push(fetchPlatformCostHistory(selectedPlatformCostRange(), provider, { background: true }));
     }
     Promise.allSettled(tasks).finally(() => setDashboardRefreshState(false));
   }, REFRESH_INTERVAL);
@@ -14557,10 +14608,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     initChart();
 
     setDashboardRefreshState(true, 'Updating saved data...');
-    const tasks = [loadHiddenInsights(), fetchCurrent({ force: true }), fetchHistory(selectedChartRange(), { force: true })];
+    const historyTasks = [fetchHistory()];
+    const tasks = [loadHiddenInsights(), fetchCurrent({ force: true }), ...historyTasks];
     if (getCurrentProvider() === 'both') {
-      tasks.push(fetchDeepInsights({ force: true }), fetchPlatformCostHistory(selectedPlatformCostRange(), 'both', { background: true }));
+      const costHistory = fetchPlatformCostHistory(selectedPlatformCostRange(), 'both', { background: true });
+      historyTasks.push(costHistory);
+      tasks.push(fetchDeepInsights({ force: true }), costHistory);
     }
+    Promise.allSettled(historyTasks).then(preloadDashboardHistory);
     Promise.allSettled(tasks).finally(() => setDashboardRefreshState(false));
 
     const overviewSection = document.querySelector('.cycle-overview-section');

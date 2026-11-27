@@ -122,6 +122,17 @@ func (s *Store) QueryOpenRouterRange(start, end time.Time, limit ...int) ([]*api
 			ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC`
 		args = append(args, limit[0])
 	}
+	return s.queryOpenRouterRangeRows(query, args...)
+}
+
+// QueryOpenRouterRangeSampled selects chart observations before reading snapshot details.
+func (s *Store) QueryOpenRouterRangeSampled(start, end time.Time, maxPoints int) ([]*api.OpenRouterSnapshot, error) {
+	query := stridedQuotaHistory("openrouter_snapshots", `id, captured_at, label, usage, usage_daily, usage_weekly, usage_monthly,
+		 credit_limit, limit_remaining, is_free_tier, rate_limit_requests, rate_limit_interval`, "")
+	return s.queryOpenRouterRangeRows(query, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), maxPoints, maxPoints)
+}
+
+func (s *Store) queryOpenRouterRangeRows(query string, args ...any) ([]*api.OpenRouterSnapshot, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query openrouter range: %w", err)

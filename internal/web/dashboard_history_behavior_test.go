@@ -288,7 +288,7 @@ assert(storage.get(scopedRangeStorageKey(CHART_RANGE_STORAGE_KEY, 'codex')) === 
 func TestCustomHistoryCachesStayBounded(t *testing.T) {
 	t.Parallel()
 	source := dashboardAppSource(t)
-	providerCache := dashboardJavaScriptBetween(t, source, "function providerDataCacheKey(", "function updateCachedProviderData(")
+	providerCache := dashboardJavaScriptBetween(t, source, "function providerDataCacheKey(", "function formatCacheTime(")
 	platformCache := dashboardJavaScriptBetween(t, source, "function platformCostCacheKey(", "function applyPlatformCostHistoryPayload(")
 
 	script := fmt.Sprintf(`

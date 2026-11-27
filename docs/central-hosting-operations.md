@@ -157,6 +157,17 @@ Graphs use the timestamps of recorded observations. Quota history draws dashed l
 
 All shows weekly quota history for the Anthropic, Antigravity (Gemini Pro), and Codex cards. Switching a card's account updates its quota line. Combined cost adds the recorded API estimates for those three providers across all accounts.
 
+The All range spans retained history at a resolution suitable for a wide
+chart. Presets and custom dates use the same stored observations, with
+sampling and totals calculated for the selected window. Quota history
+selects chart points before loading snapshot details. Cost and token history
+reuse saved totals for complete hours at hourly and wider resolutions.
+
+The dashboard prepares 7d and 30d usage and cost history for the current view
+after loading the selected charts. Saved results appear immediately while
+older results refresh. If a range still needs data, the plot shows a loading
+card and the range controls stay available.
+
 Codex and Antigravity cards show the age of their last successful quota snapshot
 and mark it stale after 30 minutes. The last measured percentage remains visible;
 it is not reset to zero or presented as a newly measured value. Central Codex

@@ -184,6 +184,8 @@ Every normalized usage event stores a timestamp in `ts`. onWatch persists that t
 
 Long ranges combine adjacent time buckets so chart totals include all recorded usage in the selected range. The platform cost chart starts its vertical scale at zero and rounds the top to a gridline above the highest plotted value.
 
+Cost and token charts reuse saved totals for complete hours when the chart uses hourly or wider buckets. Detailed events supply partial hours and finer charts. New, corrected, or removed events refresh only the hours they affect when one of those hours is next requested. Existing detailed history gets its initial hourly totals during the database upgrade.
+
 ## Event Format
 
 Write one JSON object per line.

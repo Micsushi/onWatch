@@ -434,19 +434,10 @@ func TestDashboardRefreshHeaderDescribesSelectedGraphQueueState(t *testing.T) {
 
 func TestDashboardPresetRefreshNeverDimsAnExistingGraph(t *testing.T) {
 	t.Parallel()
-	source := dashboardAppSource(t)
-
-	start := strings.Index(source, "async function fetchPlatformCostHistory(range, provider")
-	end := strings.Index(source[start:], "\nfunction renderAPIIntegrationsHealth")
-	if start < 0 || end < 0 {
-		t.Fatal("could not isolate platform cost history refresh")
-	}
-	refreshLogic := source[start : start+end]
-	if strings.Contains(refreshLogic, "setPlatformCostChartLoading(\n        true") {
-		t.Fatal("preset cost refresh still paints the full-chart loading overlay")
-	}
-	if !strings.Contains(refreshLogic, "range === 'custom'") {
-		t.Fatal("cost refresh does not isolate Custom loading behavior")
+	style := dashboardStyleSource(t)
+	overlay := dashboardJavaScriptBetween(t, style, ".chart-loading-overlay {", ".chart-loading-card {")
+	if strings.Contains(overlay, "background") || !strings.Contains(overlay, "pointer-events: none") {
+		t.Fatal("the loading card must leave the surrounding plot visible and interactive")
 	}
 }
 

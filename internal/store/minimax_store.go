@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -163,6 +164,16 @@ func (s *Store) QueryMiniMaxRange(start, end time.Time, accountID int64, limit .
 		args = []interface{}{accountID, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), limit[0]}
 	}
 
+	return s.queryMiniMaxRangeRows(query, args...)
+}
+
+// QueryMiniMaxRangeSampled selects chart observations before reading snapshot details.
+func (s *Store) QueryMiniMaxRangeSampled(start, end time.Time, accountID int64, maxPoints int) ([]*api.MiniMaxSnapshot, error) {
+	query := stridedQuotaHistory("minimax_snapshots", `id, captured_at, raw_json, model_count`, "account_id = ? AND")
+	return s.queryMiniMaxRangeRows(query, accountID, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), maxPoints, maxPoints)
+}
+
+func (s *Store) queryMiniMaxRangeRows(query string, args ...any) ([]*api.MiniMaxSnapshot, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query minimax range: %w", err)
@@ -187,37 +198,50 @@ func (s *Store) QueryMiniMaxRange(start, end time.Time, accountID int64, limit .
 		return nil, err
 	}
 
-	for _, snap := range snapshots {
-		models, err := s.queryMiniMaxModelValues(snap.ID)
-		if err != nil {
+	for batch := range slices.Chunk(snapshots, historyDetailBatchSize) {
+		ids := make([]any, 0, len(batch))
+		byID := make(map[int64]*api.MiniMaxSnapshot, len(batch))
+		for _, snap := range batch {
+			ids = append(ids, snap.ID)
+			byID[snap.ID] = snap
+			snap.Models = []api.MiniMaxModelQuota{}
+		}
+		if err := s.loadMiniMaxRangeModels(byID, ids); err != nil {
 			return nil, err
 		}
-		snap.Models = models
 	}
 
 	return snapshots, nil
 }
 
 func (s *Store) queryMiniMaxModelValues(snapshotID int64) ([]api.MiniMaxModelQuota, error) {
+	snap := &api.MiniMaxSnapshot{Models: []api.MiniMaxModelQuota{}}
+	if err := s.loadMiniMaxRangeModels(map[int64]*api.MiniMaxSnapshot{snapshotID: snap}, []any{snapshotID}); err != nil {
+		return nil, err
+	}
+	return snap.Models, nil
+}
+
+func (s *Store) loadMiniMaxRangeModels(byID map[int64]*api.MiniMaxSnapshot, ids []any) error {
 	rows, err := s.db.Query(
-		`SELECT model_name, total, remain, used, used_percent, reset_at, window_start, window_end,
+		`SELECT snapshot_id, model_name, total, remain, used, used_percent, reset_at, window_start, window_end,
 		 weekly_total, weekly_remain, weekly_used, weekly_used_percent, weekly_reset_at, weekly_window_start, weekly_window_end
-		FROM minimax_model_values WHERE snapshot_id = ? ORDER BY model_name`,
-		snapshotID,
+		FROM minimax_model_values WHERE snapshot_id IN (`+historyPlaceholders(len(ids))+`) ORDER BY snapshot_id, model_name`,
+		ids...,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query minimax model values: %w", err)
+		return fmt.Errorf("failed to query minimax model values: %w", err)
 	}
 	defer rows.Close()
 
-	models := make([]api.MiniMaxModelQuota, 0)
 	for rows.Next() {
+		var id int64
 		var m api.MiniMaxModelQuota
 		var resetAt, windowStart, windowEnd sql.NullString
 		var weeklyResetAt, weeklyWindowStart, weeklyWindowEnd sql.NullString
-		if err := rows.Scan(&m.ModelName, &m.Total, &m.Remain, &m.Used, &m.UsedPercent, &resetAt, &windowStart, &windowEnd,
+		if err := rows.Scan(&id, &m.ModelName, &m.Total, &m.Remain, &m.Used, &m.UsedPercent, &resetAt, &windowStart, &windowEnd,
 			&m.WeeklyTotal, &m.WeeklyRemain, &m.WeeklyUsed, &m.WeeklyUsedPercent, &weeklyResetAt, &weeklyWindowStart, &weeklyWindowEnd); err != nil {
-			return nil, fmt.Errorf("failed to scan minimax model value: %w", err)
+			return fmt.Errorf("failed to scan minimax model value: %w", err)
 		}
 		if resetAt.Valid {
 			t, _ := time.Parse(time.RFC3339Nano, resetAt.String)
@@ -255,9 +279,10 @@ func (s *Store) queryMiniMaxModelValues(snapshotID int64) ([]api.MiniMaxModelQuo
 			t, _ := time.Parse(time.RFC3339Nano, weeklyWindowEnd.String)
 			m.WeeklyWindowEnd = &t
 		}
-		models = append(models, m)
+		snap := byID[id]
+		snap.Models = append(snap.Models, m)
 	}
-	return models, rows.Err()
+	return rows.Err()
 }
 
 // CreateMiniMaxCycle creates a new active cycle for a model.

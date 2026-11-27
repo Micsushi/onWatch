@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/api"
@@ -147,6 +148,16 @@ func (s *Store) QueryCopilotRange(start, end time.Time, limit ...int) ([]*api.Co
 		args = append(args, limit[0])
 	}
 
+	return s.queryCopilotRangeRows(query, args...)
+}
+
+// QueryCopilotRangeSampled selects chart observations before reading snapshot details.
+func (s *Store) QueryCopilotRangeSampled(start, end time.Time, maxPoints int) ([]*api.CopilotSnapshot, error) {
+	query := stridedQuotaHistory("copilot_snapshots", `id, captured_at, copilot_plan, reset_date, quota_count`, "")
+	return s.queryCopilotRangeRows(query, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), maxPoints, maxPoints)
+}
+
+func (s *Store) queryCopilotRangeRows(query string, args ...any) ([]*api.CopilotSnapshot, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query copilot range: %w", err)
@@ -176,30 +187,40 @@ func (s *Store) QueryCopilotRange(start, end time.Time, limit ...int) ([]*api.Co
 		return nil, err
 	}
 
-	// Load quota values for each snapshot
-	for _, snap := range snapshots {
-		qRows, err := s.db.Query(
-			`SELECT quota_name, entitlement, remaining, percent_remaining, unlimited, overage_count
-			FROM copilot_quota_values WHERE snapshot_id = ? ORDER BY quota_name`,
-			snap.ID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query copilot quota values for snapshot %d: %w", snap.ID, err)
+	for batch := range slices.Chunk(snapshots, historyDetailBatchSize) {
+		ids := make([]any, 0, len(batch))
+		byID := make(map[int64]*api.CopilotSnapshot, len(batch))
+		for _, snap := range batch {
+			ids = append(ids, snap.ID)
+			byID[snap.ID] = snap
 		}
-		for qRows.Next() {
-			var q api.CopilotQuota
-			var unlimited int
-			if err := qRows.Scan(&q.Name, &q.Entitlement, &q.Remaining, &q.PercentRemaining, &unlimited, &q.OverageCount); err != nil {
-				qRows.Close()
-				return nil, fmt.Errorf("failed to scan copilot quota value: %w", err)
-			}
-			q.Unlimited = unlimited == 1
-			snap.Quotas = append(snap.Quotas, q)
+		if err := s.loadCopilotRangeQuotas(byID, ids); err != nil {
+			return nil, err
 		}
-		qRows.Close()
 	}
 
 	return snapshots, nil
+}
+
+func (s *Store) loadCopilotRangeQuotas(byID map[int64]*api.CopilotSnapshot, ids []any) error {
+	rows, err := s.db.Query(`SELECT snapshot_id, quota_name, entitlement, remaining, percent_remaining, unlimited, overage_count
+		FROM copilot_quota_values WHERE snapshot_id IN (`+historyPlaceholders(len(ids))+`) ORDER BY snapshot_id, quota_name`, ids...)
+	if err != nil {
+		return fmt.Errorf("failed to query copilot quota values: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var quota api.CopilotQuota
+		var unlimited int
+		if err := rows.Scan(&id, &quota.Name, &quota.Entitlement, &quota.Remaining, &quota.PercentRemaining, &unlimited, &quota.OverageCount); err != nil {
+			return fmt.Errorf("failed to scan copilot quota value: %w", err)
+		}
+		quota.Unlimited = unlimited == 1
+		snap := byID[id]
+		snap.Quotas = append(snap.Quotas, quota)
+	}
+	return rows.Err()
 }
 
 // CreateCopilotCycle creates a new Copilot reset cycle.

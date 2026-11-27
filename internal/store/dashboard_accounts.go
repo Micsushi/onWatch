@@ -167,7 +167,7 @@ func (s *Store) QueryAntigravityAccountRangeSampled(account AntigravityAccount, 
 		WHERE c.provider='antigravity' AND c.external_account_id=? AND c.external_account_id<>''
 		AND c.captured_at COLLATE ONWATCH_RFC3339>=? AND c.captured_at COLLATE ONWATCH_RFC3339<?`
 	rows, err := s.db.Query(`SELECT points.id, points.captured_at, receipt.payload_json
-		FROM (`+sampleAntigravityRange(query, "source ASC, id ASC")+`) AS points
+		FROM (`+sampleStridedHistory(query, "source ASC, id ASC")+`) AS points
 		LEFT JOIN ingest_receipts receipt ON receipt.device_id=points.device_id AND receipt.event_id=points.event_id
 		ORDER BY points.position`, account.Local && account.Email != "", account.Email, lower, upper,
 		account.ExternalID, lower, upper, maxPoints, maxPoints)

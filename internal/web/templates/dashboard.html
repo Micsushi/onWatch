@@ -499,10 +499,15 @@
             </div>
             {{end}}
             <p class="sr-only" id="usage-chart-coverage-note" hidden></p>
-            <p class="chart-coverage-note chart-refresh-message" id="usage-chart-refresh-message" role="alert" hidden></p>
             <div class="chart-container history-chart-plot">
+                <div class="chart-loading-overlay" id="usage-chart-loading" role="status">
+                    <div class="chart-loading-card" hidden>
+                        <span class="loading-spinner" aria-hidden="true"></span>
+                        <div><strong data-history-loading-title></strong><span data-history-loading-detail></span></div>
+                    </div>
+                </div>
                 <p class="sr-only" id="usage-chart-accessible-summary" aria-live="polite"></p>
-                <canvas id="usage-chart" role="img" aria-label="Usage history chart" aria-describedby="usage-summary usage-chart-coverage-note usage-chart-refresh-message usage-chart-accessible-summary"></canvas>
+                <canvas id="usage-chart" role="img" aria-label="Usage history chart" aria-describedby="usage-summary usage-chart-coverage-note usage-chart-accessible-summary"></canvas>
                 <div class="chart-empty-state" id="usage-chart-empty" hidden aria-live="polite"></div>
             </div>
         </section>
@@ -925,7 +930,6 @@
                 <header class="history-chart-heading">
                     <h4 class="history-chart-title" id="platform-cost-chart-title">{{if eq .CurrentProvider "both"}}Cost history{{else}}Cost &amp; token history{{end}}</h4>
                 </header>
-                <p class="chart-coverage-note chart-refresh-message" id="platform-cost-refresh-status" role="status" hidden></p>
                 <div class="history-chart-toolbar">
                     <div class="history-chart-controls">
                         {{if ne .CurrentProvider "both"}}
@@ -960,9 +964,11 @@
                 </div>
                 <p class="sr-only" id="platform-cost-chart-gap-note" hidden></p>
                 <div class="platform-cost-chart-wrap history-chart-plot">
-                    <div class="chart-loading-overlay" id="platform-cost-chart-loading" aria-live="polite" hidden>
-                        <span class="loading-spinner" aria-hidden="true"></span>
-                        <span>Loading cost history</span>
+                    <div class="chart-loading-overlay" id="platform-cost-chart-loading" role="status">
+                        <div class="chart-loading-card" hidden>
+                            <span class="loading-spinner" aria-hidden="true"></span>
+                            <div><strong data-history-loading-title></strong><span data-history-loading-detail></span></div>
+                        </div>
                     </div>
                     <p class="sr-only" id="platform-cost-chart-accessible-summary" aria-live="polite"></p>
                     <canvas id="platform-cost-chart" role="img" aria-label="Cost and token history chart" aria-describedby="platform-cost-summary platform-cost-chart-gap-note platform-cost-chart-accessible-summary"></canvas>

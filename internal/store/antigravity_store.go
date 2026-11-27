@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -216,22 +217,11 @@ func (s *Store) queryAntigravityRange(start, end time.Time, email string, limit,
 	}
 	if maxPoints > 0 {
 		query = `SELECT id, captured_at, email, plan_name, prompt_credits, monthly_credits, model_count FROM (` +
-			sampleAntigravityRange(query, "id ASC") + `)`
+			sampleStridedHistory(query, "id ASC") + `)`
 		args = append(args, maxPoints, maxPoints)
 	}
 	query += ` ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC,id ASC`
 	return s.queryAntigravitySnapshots(query, args...)
-}
-
-// Keep the first, last, and every ceil(count/maxPoints)-th observation.
-func sampleAntigravityRange(query, tieOrder string) string {
-	return `WITH ranked AS (
-		SELECT *, ROW_NUMBER() OVER (ORDER BY captured_at COLLATE ONWATCH_RFC3339 ASC,` + tieOrder + `) AS position,
-			COUNT(*) OVER () AS total
-		FROM (` + query + `)
-	)
-	SELECT * FROM ranked
-	WHERE position = total OR (position - 1) % ((total + ? - 1) / ?) = 0`
 }
 
 func (s *Store) queryAntigravitySnapshots(query string, args ...any) ([]*api.AntigravitySnapshot, error) {
@@ -272,40 +262,51 @@ func (s *Store) queryAntigravitySnapshots(query string, args ...any) ([]*api.Ant
 		return nil, err
 	}
 
-	// Load model values for each snapshot
-	for _, snap := range snapshots {
-		mRows, err := s.db.Query(
-			`SELECT model_id, label, remaining_fraction, remaining_percent, is_exhausted, reset_time
-			FROM antigravity_model_values WHERE snapshot_id = ? ORDER BY model_id`,
-			snap.ID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query antigravity model values for snapshot %d: %w", snap.ID, err)
+	for batch := range slices.Chunk(snapshots, historyDetailBatchSize) {
+		ids := make([]any, 0, len(batch))
+		byID := make(map[int64]*api.AntigravitySnapshot, len(batch))
+		for _, snap := range batch {
+			ids = append(ids, snap.ID)
+			byID[snap.ID] = snap
 		}
-		for mRows.Next() {
-			var m api.AntigravityModelQuota
-			var exhausted int
-			var resetTime sql.NullString
-			if err := mRows.Scan(&m.ModelID, &m.Label, &m.RemainingFraction, &m.RemainingPercent, &exhausted, &resetTime); err != nil {
-				mRows.Close()
-				return nil, fmt.Errorf("failed to scan antigravity model value: %w", err)
-			}
-			m.IsExhausted = exhausted == 1
-			if resetTime.Valid && resetTime.String != "" {
-				t, _ := time.Parse(time.RFC3339Nano, resetTime.String)
-				m.ResetTime = &t
-			}
-			m.WindowKind = api.AntigravityQuotaWindowKind(m.ResetTime, snap.CapturedAt)
-			m.WindowLabel = api.AntigravityQuotaWindowLabel(m.WindowKind)
-			snap.Models = append(snap.Models, m)
+		if err := s.loadAntigravityRangeModels(byID, ids); err != nil {
+			return nil, err
 		}
-		mRows.Close()
-		if err := s.loadAntigravitySummaryBuckets(snap); err != nil {
+		if err := s.loadAntigravitySummaryBatch(byID, ids); err != nil {
 			return nil, err
 		}
 	}
 
 	return snapshots, nil
+}
+
+func (s *Store) loadAntigravityRangeModels(byID map[int64]*api.AntigravitySnapshot, ids []any) error {
+	rows, err := s.db.Query(`SELECT snapshot_id, model_id, label, remaining_fraction, remaining_percent,
+		is_exhausted, reset_time FROM antigravity_model_values
+		WHERE snapshot_id IN (`+historyPlaceholders(len(ids))+`) ORDER BY snapshot_id, model_id`, ids...)
+	if err != nil {
+		return fmt.Errorf("failed to query antigravity model values: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var model api.AntigravityModelQuota
+		var exhausted int
+		var resetTime sql.NullString
+		if err := rows.Scan(&id, &model.ModelID, &model.Label, &model.RemainingFraction, &model.RemainingPercent, &exhausted, &resetTime); err != nil {
+			return fmt.Errorf("failed to scan antigravity model value: %w", err)
+		}
+		snap := byID[id]
+		model.IsExhausted = exhausted == 1
+		if resetTime.Valid && resetTime.String != "" {
+			t, _ := time.Parse(time.RFC3339Nano, resetTime.String)
+			model.ResetTime = &t
+		}
+		model.WindowKind = api.AntigravityQuotaWindowKind(model.ResetTime, snap.CapturedAt)
+		model.WindowLabel = api.AntigravityQuotaWindowLabel(model.WindowKind)
+		snap.Models = append(snap.Models, model)
+	}
+	return rows.Err()
 }
 
 // CreateAntigravityCycle creates a new Antigravity reset cycle.
@@ -721,12 +722,16 @@ func (s *Store) QueryAntigravitySnapshotAtOrBefore(t time.Time) (*api.Antigravit
 }
 
 func (s *Store) loadAntigravitySummaryBuckets(snapshot *api.AntigravitySnapshot) error {
+	return s.loadAntigravitySummaryBatch(map[int64]*api.AntigravitySnapshot{snapshot.ID: snapshot}, []any{snapshot.ID})
+}
+
+func (s *Store) loadAntigravitySummaryBatch(byID map[int64]*api.AntigravitySnapshot, ids []any) error {
 	rows, err := s.db.Query(
-		`SELECT group_key, group_display_name, group_description, bucket_id, bucket_display_name, bucket_description, window_kind, remaining_fraction, remaining_percent, reset_time
+		`SELECT snapshot_id, group_key, group_display_name, group_description, bucket_id, bucket_display_name, bucket_description, window_kind, remaining_fraction, remaining_percent, reset_time
 		 FROM antigravity_quota_summary_buckets
-		 WHERE snapshot_id = ?
-		 ORDER BY group_key, window_kind`,
-		snapshot.ID,
+		 WHERE snapshot_id IN (`+historyPlaceholders(len(ids))+`)
+		 ORDER BY snapshot_id, group_key, window_kind`,
+		ids...,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "no such table") {
@@ -737,14 +742,21 @@ func (s *Store) loadAntigravitySummaryBuckets(snapshot *api.AntigravitySnapshot)
 	defer rows.Close()
 
 	groupIndex := map[string]int{}
+	var lastID int64
 	for rows.Next() {
+		var id int64
 		var groupKey, groupName, bucketID, bucketName, windowKind string
 		var groupDesc, bucketDesc sql.NullString
 		var remainingFraction, remainingPercent float64
 		var resetTime sql.NullString
-		if err := rows.Scan(&groupKey, &groupName, &groupDesc, &bucketID, &bucketName, &bucketDesc, &windowKind, &remainingFraction, &remainingPercent, &resetTime); err != nil {
+		if err := rows.Scan(&id, &groupKey, &groupName, &groupDesc, &bucketID, &bucketName, &bucketDesc, &windowKind, &remainingFraction, &remainingPercent, &resetTime); err != nil {
 			return fmt.Errorf("failed to scan antigravity summary bucket: %w", err)
 		}
+		if id != lastID {
+			clear(groupIndex)
+			lastID = id
+		}
+		snapshot := byID[id]
 		idx, ok := groupIndex[groupKey]
 		if !ok {
 			idx = len(snapshot.SummaryGroups)
