@@ -372,7 +372,10 @@ button, input, select { font-family: inherit; }
 }
 .provider-tab {
   flex: 0 0 auto;
-  padding: 6px 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
@@ -388,13 +391,53 @@ button, input, select { font-family: inherit; }
   background: var(--surface-card);
 }
 .provider-tab.active {
-  background: var(--surface-card);
-  color: var(--accent-teal);
+  color: var(--provider-accent-text, var(--accent-teal-text));
+  background: color-mix(in srgb, currentColor 8%, var(--surface-card));
   box-shadow: var(--shadow-xs);
+  font-weight: 700;
 }
-.provider-tab.active[data-provider="anthropic"] {
-  color: var(--accent-anthropic);
+.provider-tab:focus-visible { outline-offset: -2px; }
+.provider-tab-icon { flex: none; width: 16px; height: 16px; }
+.provider-tab-icon-mask {
+  background: currentColor;
+  mask: var(--provider-tab-icon) center / contain no-repeat;
 }
+.provider-tab[data-provider="anthropic"] {
+  --provider-tab-icon: url("icons/anthropic.svg");
+  --provider-accent-text: var(--accent-anthropic-text);
+}
+.provider-tab[data-provider="codex"] {
+  --provider-tab-icon: url("icons/openai.svg");
+  --provider-accent-text: var(--accent-blue-text);
+}
+.provider-tab[data-provider="antigravity"] {
+  --provider-tab-icon: url("icons/antigravity.svg");
+  --provider-accent-text: color-mix(in srgb, #8b5cf6 55%, var(--text-primary));
+}
+.provider-tab[data-provider="copilot"] {
+  --provider-tab-icon: url("icons/copilot.svg");
+  --provider-accent-text: color-mix(in srgb, #ec4899 55%, var(--text-primary));
+}
+.provider-tab[data-provider="gemini"] {
+  --provider-tab-icon: url("icons/gemini.svg");
+  --provider-accent-text: color-mix(in srgb, #426cf5 58%, var(--text-primary));
+}
+.provider-tab[data-provider="minimax"] {
+  --provider-tab-icon: url("icons/minimax.svg");
+  --provider-accent-text: color-mix(in srgb, #f43f5e 55%, var(--text-primary));
+}
+.provider-tab[data-provider="synthetic"] {
+  --provider-tab-icon: url("icons/synthetic.svg");
+  --provider-accent-text: color-mix(in srgb, #0891b2 55%, var(--text-primary));
+}
+.provider-tab[data-provider="zai"] {
+  --provider-tab-icon: url("icons/zai.svg");
+  --provider-accent-text: color-mix(in srgb, #6366f1 55%, var(--text-primary));
+}
+.provider-tab[data-provider="cursor"] { --provider-accent-text: var(--text-primary); }
+.provider-tab[data-provider="openrouter"] { --provider-accent-text: color-mix(in srgb, #777fa5 55%, var(--text-primary)); }
+.provider-tab[data-provider="api-integrations"] { --provider-accent-text: var(--accent-peach-text); }
+.provider-tab[data-provider="subscription-value"] { --provider-accent-text: var(--status-healthy-text); }
 
 .header-actions {
   display: flex;
@@ -810,6 +853,37 @@ button, input, select { font-family: inherit; }
 
 #platform-cost-section[data-provider="both"] .platform-cost-summary {
   grid-template-columns: minmax(0, 265px);
+}
+
+#platform-cost-section[data-provider="both"] > .section-header {
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.combined-cost-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.combined-cost-providers label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.combined-cost-providers input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-teal-text);
+}
+
+@media (pointer: coarse) {
+  .combined-cost-providers label { min-height: 44px; }
 }
 
 .provider-card-badge {
@@ -4660,13 +4734,17 @@ select.settings-input {
 
 .antigravity-primary-quotas, .antigravity-quota-details { grid-column: 1 / -1; }
 .antigravity-primary-quotas { display: grid; gap: inherit; }
-#quota-grid-antigravity > .antigravity-primary-quotas {
+#quota-grid-antigravity .antigravity-quota-cards {
+  display: grid;
+  gap: var(--layout-gap);
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--layout-card-min)), 1fr));
 }
+#quota-grid-antigravity .card-header { gap: 8px; }
+#quota-grid-antigravity .countdown { white-space: nowrap; }
 .antigravity-quota-details > summary { color: var(--text-secondary); }
 .antigravity-quota-details[open] > summary { margin-bottom: 8px; }
 @media (max-width: 768px) {
- #quota-grid-antigravity > .antigravity-primary-quotas { grid-template-columns: minmax(0, 1fr); }
+ #quota-grid-antigravity, #quota-grid-antigravity .antigravity-quota-cards { grid-template-columns: minmax(0, 1fr); }
  .app-header .provider-tabs { grid-column: 1 / -1; grid-row: 2; max-width: 100%; }
  .app-header .header-controls { grid-column: 2; grid-row: 1; }
  .provider-tab, .header-btn, .theme-toggle, .notification-bell { min-height: 44px; }

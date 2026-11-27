@@ -155,7 +155,7 @@ Verify history, settings, devices, receipts, revocations, ownership, export, and
 
 Graphs use the timestamps of recorded observations. Quota history draws dashed links across missing readings and shows observed resets as drops. It carries the last reading to the right edge and can extend a flat series to the left edge. Cumulative token and cost charts connect recorded totals with solid lines. In a bounded date range, they start at zero and carry the final total to the right edge. Per-period charts use dashed links across missing periods. Edge extensions do not count as observations.
 
-All shows weekly quota history for the Anthropic, Antigravity (Gemini Pro), and Codex cards. Switching a card's account updates its quota line. Combined cost adds the recorded API estimates for those three providers across all accounts.
+All shows weekly quota history for the Anthropic, Antigravity (Gemini Pro), and Codex cards. Switching a card's account updates its quota line. Combined Token Cost defaults to all three providers. Use its checkboxes to choose which providers contribute to the subtotal and chart. The selection is saved in the browser, and each selected provider includes all of its accounts.
 
 The All range spans retained history at a resolution suitable for a wide
 chart. Presets and custom dates use the same stored observations, with

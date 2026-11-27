@@ -26,6 +26,9 @@
                 <p role="status" id="dashboard-account-email-status" hidden></p>
             </form>
         </details>
+        {{if .AntigravityAccount}}
+        <a class="dashboard-account-provider-link" href="{{.BasePath}}/?provider=antigravity&amp;account=provider">Provider-wide cost and history</a>
+        {{end}}
     </div>
 </details>
 {{end}}

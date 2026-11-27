@@ -2256,7 +2256,10 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		data["DashboardAccounts"] = accounts
 		data["SelectedDashboardAccounts"] = selected
-		data["AccountOverview"] = len(selected) > 1 || (currentProvider == "antigravity" && len(selected) > 0 && r.URL.Query().Get("account") != "provider")
+		data["AccountOverview"] = len(selected) > 1
+		if currentProvider == "antigravity" && len(selected) == 1 && r.URL.Query().Get("account") != "provider" {
+			data["AntigravityAccount"] = selected[0].ID
+		}
 	}
 	if currentProvider == "subscription-value" {
 		data["Title"] = "Subscription Value"

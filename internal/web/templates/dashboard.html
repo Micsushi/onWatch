@@ -1,5 +1,5 @@
 {{define "content"}}
-<div class="app" data-poll-interval="{{.PollIntervalSec}}" data-provider="{{.CurrentProvider}}">
+<div class="app" data-poll-interval="{{.PollIntervalSec}}" data-provider="{{.CurrentProvider}}"{{with .AntigravityAccount}} data-antigravity-account="{{.}}"{{end}}>
     <header class="app-header">
         <div class="header-identity">
             <a href="#" class="header-brand" id="scroll-top" aria-label="Scroll to top">
@@ -26,7 +26,18 @@
             {{range .Providers}}
             <button class="provider-tab {{if eq . $.CurrentProvider}}active{{end}}"
                     data-provider="{{.}}" role="tab" aria-selected="{{if eq . $.CurrentProvider}}true{{else}}false{{end}}">
-                {{if eq . "synthetic"}}Synthetic{{else if eq . "zai"}}Z.ai{{else if eq . "anthropic"}}Anthropic{{else if eq . "copilot"}}Copilot{{else if eq . "codex"}}Codex{{else if eq . "antigravity"}}Antigravity{{else if eq . "minimax"}}MiniMax{{else if eq . "gemini"}}Gemini{{else if eq . "cursor"}}Cursor{{else if eq . "api-integrations"}}Cost{{else if eq . "both"}}All{{else if eq . "subscription-value"}}Subscription Value{{else}}{{.}}{{end}}
+                {{if or (eq . "both") (eq . "api-integrations") (eq . "subscription-value") (eq . "cursor") (eq . "openrouter")}}
+                <svg class="provider-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    {{if eq . "both"}}<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/>
+                    {{else if eq . "api-integrations"}}<path d="M3 3v18h18M8 16v-3m5 3V9m5 7V5"/>
+                    {{else if eq . "subscription-value"}}<path d="M20 12.5 12.5 20a2 2 0 0 1-2.8 0L4 14.3V4h10.3l5.7 5.7a2 2 0 0 1 0 2.8Z"/><circle cx="8.5" cy="8.5" r="1"/>
+                    {{else if eq . "cursor"}}<path d="m4 4 6 16 2.5-7.5L20 10 4 4z"/>
+                    {{else}}<path d="M3 12h5m0 0 5-6h8m-13 6 5 6h8m-3-15 3 3-3 3m0 6 3 3-3 3"/>{{end}}
+                </svg>
+                {{else}}
+                <span class="provider-tab-icon provider-tab-icon-mask" aria-hidden="true"></span>
+                {{end}}
+                {{if eq . "synthetic"}}Synthetic{{else if eq . "zai"}}Z.ai{{else if eq . "anthropic"}}Anthropic{{else if eq . "copilot"}}Copilot{{else if eq . "codex"}}Codex{{else if eq . "antigravity"}}Antigravity{{else if eq . "minimax"}}MiniMax{{else if eq . "gemini"}}Gemini{{else if eq . "cursor"}}Cursor{{else if eq . "openrouter"}}OpenRouter{{else if eq . "api-integrations"}}Cost{{else if eq . "both"}}All{{else if eq . "subscription-value"}}Subscription Value{{else}}{{.}}{{end}}
             </button>
             {{end}}
         </div>
@@ -92,7 +103,7 @@
         {{template "dashboard-account-overview" .}}
         {{else}}
         <div class="welcome-banner">
-            <h1 class="welcome-title">{{if and .DashboardAccounts (eq .CurrentProvider "antigravity")}}Antigravity provider dashboard{{else}}Dashboard{{end}}</h1>
+            <h1 class="welcome-title">Dashboard</h1>
             {{if .DashboardAccounts}}{{template "dashboard-account-picker" .}}{{end}}
             {{if eq .CurrentProvider "minimax"}}
             <select class="dashboard-minimax-picker" id="minimax-profile-select" aria-label="MiniMax account" hidden></select>
@@ -447,7 +458,7 @@
                         <path d="M3 3v18h18"/>
                         <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
                     </svg>
-                    {{if eq .CurrentProvider "api-integrations"}}API activity history{{else if eq .CurrentProvider "both"}}Weekly quota history{{else if eq .CurrentProvider "antigravity"}}Quota history{{else}}Usage history{{end}}
+                    {{if eq .CurrentProvider "api-integrations"}}API activity history{{else if eq .CurrentProvider "both"}}Weekly quota history{{else}}Usage history{{end}}
                 </h3>
             </header>
             <div class="history-chart-toolbar">
@@ -616,7 +627,7 @@
         </details>
         {{else if ne .CurrentProvider "both"}}
         <details class="dashboard-detail dashboard-secondary insights-panel" id="usage-insights">
-            <summary>Usage Insights</summary>
+            <summary>{{if .AntigravityAccount}}Provider-wide usage insights{{else}}Usage Insights{{end}}</summary>
             <header class="section-header"></header>
             <div class="insights-stats" id="insights-stats"></div>
             <div class="insights-cards" id="insights-cards">
@@ -685,7 +696,7 @@
 
         {{if and (ne .CurrentProvider "both") (ne .CurrentProvider "api-integrations") (ne .CurrentProvider "cursor")}}
         <details class="dashboard-detail dashboard-secondary sessions-section" id="sessions-section">
-            <summary>Session History</summary>
+            <summary>{{if .AntigravityAccount}}Provider-wide session history{{else}}Session History{{end}}</summary>
             <header class="section-header">
                 <div class="table-controls">
                     <select class="page-size-select" id="sessions-page-size" aria-label="Rows per page">
@@ -767,7 +778,7 @@
 
         {{if and (ne .CurrentProvider "both") (ne .CurrentProvider "api-integrations")}}
         <details class="dashboard-detail dashboard-secondary cycles-section" id="cycles-section">
-            <summary>{{if eq .CurrentProvider "cursor"}}Usage Samples{{else}}Logging History{{end}}</summary>
+            <summary>{{if eq .CurrentProvider "cursor"}}Usage Samples{{else if .AntigravityAccount}}Provider-wide logging history{{else}}Logging History{{end}}</summary>
             <header class="section-header">
                 <div class="cycles-filters-inline">
                     <div class="filter-group">
@@ -819,7 +830,7 @@
         </details>
 
         <details class="dashboard-detail dashboard-secondary cycle-overview-section">
-            <summary>{{if eq .CurrentProvider "cursor"}}Billing Cycle Overview{{else}}Cycle Overview{{end}}</summary>
+            <summary>{{if eq .CurrentProvider "cursor"}}Billing Cycle Overview{{else if .AntigravityAccount}}Provider-wide cycle overview{{else}}Cycle Overview{{end}}</summary>
             <header class="section-header">
                 <div class="cycles-filters-inline">
                     <div class="filter-group">
@@ -901,6 +912,13 @@
                     </svg>
                     {{if eq .CurrentProvider "both"}}Combined Token Cost{{else}}Estimated Token Cost{{end}}
                 </h3>
+                {{if eq .CurrentProvider "both"}}
+                <div class="combined-cost-providers" id="combined-cost-providers" role="group" aria-label="Providers included in combined cost">
+                    <label><input type="checkbox" value="anthropic" checked> Anthropic</label>
+                    <label><input type="checkbox" value="antigravity" checked> Antigravity</label>
+                    <label><input type="checkbox" value="codex" checked> Codex</label>
+                </div>
+                {{end}}
             </header>
             <div class="platform-cost-summary" id="platform-cost-summary">
                 <div class="platform-cost-metric primary">
@@ -977,7 +995,7 @@
             </section>
             <details class="pricing-details" id="platform-cost-coverage" hidden>
                 <summary>Pricing details</summary>
-                <p>API list-price estimate from local token logs.{{if eq .CurrentProvider "both"}} Includes Anthropic, Antigravity, and Codex across all accounts.{{else if or (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}} Includes all provider accounts.{{end}}</p>
+                <p>API list-price estimate from local token logs.{{if eq .CurrentProvider "both"}} Includes all accounts for the selected providers.{{else if or (eq .CurrentProvider "codex") (eq .CurrentProvider "antigravity")}} Includes all provider accounts.{{end}}</p>
                 <p id="platform-cost-coverage-notes" hidden></p>
             </details>
         </section>

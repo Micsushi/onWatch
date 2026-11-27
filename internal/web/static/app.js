@@ -111,6 +111,8 @@ function providerParamFor(provider, accountKey = '') {
   } else if (provider === 'minimax') {
     const account = String(accountKey || '').replace(/^minimax:/, '');
     if (account) param += `&account=${encodeURIComponent(account)}`;
+  } else if (provider === 'antigravity' && accountKey) {
+    param += `&account=${encodeURIComponent(accountKey)}`;
   }
   return param;
 }
@@ -196,6 +198,7 @@ const State = {
   overviewPageSize: 10,
   // Codex profile selection (multi-account beta)
   codexAccount: 1,
+  antigravityAccount: '',
   codexProfiles: [],
   codexPlanType: '',
   codexQuotaNames: [],
@@ -224,6 +227,7 @@ const State = {
   apiIntegrationsHistory: null,
   apiIntegrationsHistoryWindow: null,
   platformCostBucketHistory: null,
+  combinedCostProviders: null,
   apiIntegrationsHealth: null,
   apiIntegrationsCurrentCacheTs: 0,
   apiIntegrationsCurrentLoaded: false,
@@ -299,6 +303,7 @@ function updateChartWhenChanged(signatureKey, renderState, update) {
 
 const API_INTEGRATIONS_CURRENT_CACHE_KEY = 'onwatch-api-integrations-current-v1';
 const PLATFORM_COST_HISTORY_CACHE_KEY = 'onwatch-platform-cost-history-v4';
+const COMBINED_COST_PROVIDERS_KEY = 'onwatch-combined-cost-providers';
 const PROVIDER_DATA_CACHE_KEY = 'onwatch-provider-data-cache-v4';
 const API_INTEGRATIONS_CURRENT_CACHE_TTL_MS = 120000;
 const PLATFORM_COST_HISTORY_CACHE_TTL_MS = 120000;
@@ -380,7 +385,9 @@ function providerDataCacheKey(kind, provider, extra = '', accountOverride) {
     ? accountOverride
     : (provider === 'codex'
       ? `codex:${State.codexAccount || 1}`
-      : (provider === 'minimax' ? `minimax:${State.minimaxAccount || ''}` : ''));
+      : provider === 'minimax'
+        ? `minimax:${State.minimaxAccount || ''}`
+        : provider === 'antigravity' ? State.antigravityAccount : '');
   return [kind, provider || '', account, extra || ''].join(':');
 }
 
@@ -880,6 +887,12 @@ function applyAPIIntegrationsCurrentData(current, health, options = {}) {
 function loadPlatformCostHistoryCache() {
   const cached = readJSONStorage(localStorage, PLATFORM_COST_HISTORY_CACHE_KEY);
   State.platformCostHistoryCache = cached && typeof cached === 'object' ? cached : {};
+  // Older combined entries cannot be filtered because their provider buckets were merged.
+  for (const [key, payload] of Object.entries(State.platformCostHistoryCache)) {
+    if (key.startsWith('both:') && Array.isArray(payload?.apiHistory?.Combined)) {
+      delete State.platformCostHistoryCache[key];
+    }
+  }
 }
 
 function platformCostCacheKey(provider, range, scope = 'platformCost') {
@@ -976,7 +989,7 @@ async function fetchPlatformCostPayload(provider, range, signal, scope = 'platfo
       if (!response.ok) return null;
       const rows = await response.json();
       const payload = {
-        apiHistory: isCombined ? { [integration]: combineProviderCostBuckets(rows) } : rows,
+        apiHistory: isCombined ? combinedCostHistoryByProvider(rows) : rows,
         usesArchivedData: response.headers.get('X-OnWatch-Archived-Data') === 'true',
       };
       if (!signal.aborted) onHistory?.(payload);
@@ -2597,7 +2610,8 @@ async function loadQuotaModalChart(provider, readSeries) {
   const query = saved
     ? new URLSearchParams({ start: saved.windowStart || loaded.job.windowStart, end: saved.windowEnd || loaded.job.windowEnd })
     : historyRequestQuery(range);
-  const account = provider === 'codex' ? codexAccountParam() : '';
+  const account = provider === 'codex' ? codexAccountParam()
+    : provider === 'antigravity' && State.antigravityAccount ? `&account=${encodeURIComponent(State.antigravityAccount)}` : '';
   try {
     let data = saved?.data;
     if (!data) {
@@ -3136,10 +3150,8 @@ function antigravityWindowsForQuota(q) {
   }];
 }
 
-// Renders stacked window rows (5-hour limit + weekly limit) for one shared-usage
-// pool. keyPrefix yields element ids percent-/progress-/status-/reset-/countdown-<keyPrefix>-<kind>
-// and registers each window in State.currentQuotas so the countdown ticker updates it.
-function antigravityWindowsHTML(keyPrefix, windows) {
+// The provider page shows one quota card per window. All uses compact rows inside the shared pool card.
+function antigravityWindowsHTML(keyPrefix, windows, quota) {
   return windows.map((w, idx) => {
     const kind = w.kind || ('w' + idx);
     const stateKey = `${keyPrefix}-${kind}`;
@@ -3150,12 +3162,9 @@ function antigravityWindowsHTML(keyPrefix, windows) {
     const timeUntil = w.timeUntilResetSeconds || 0;
     State.currentQuotas[stateKey] = { timeUntilResetSeconds: timeUntil, status, percent: disp.pct };
     const countdown = timeUntil > 0 ? formatDuration(timeUntil) : '--:--';
-    return `<div class="antigravity-window" data-window-kind="${kind}">
-      <div class="aw-window-head">
-        <span class="aw-window-label">${escapeHTML(w.label || 'Limit')}</span>
-        <span class="countdown" id="countdown-${stateKey}">${countdown}</span>
-      </div>
-      <div class="progress-stats">
+    const label = w.label || 'Quota limit';
+    const countdownHTML = `<span class="countdown" id="countdown-${stateKey}">${countdown}</span>`;
+    const progressHTML = `<div class="progress-stats">
         <span class="usage-percent" id="percent-${stateKey}">${pctStr}%</span>
         <span class="usage-fraction" id="label-${stateKey}">${escapeHTML(disp.label)}</span>
       </div>
@@ -3163,19 +3172,40 @@ function antigravityWindowsHTML(keyPrefix, windows) {
         <div class="progress-bar" role="progressbar" aria-valuenow="${Math.round(disp.pct)}" aria-valuemin="0" aria-valuemax="100">
           <div class="progress-fill" id="progress-${stateKey}" style="width: ${pctStr}%" data-status="${status}"></div>
         </div>
-      </div>
-      <div class="aw-window-foot">
-        <span class="status-badge" id="status-${stateKey}" data-status="${status}">
+      </div>`;
+    const footerHTML = `<span class="status-badge" id="status-${stateKey}" data-status="${status}">
           <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${statusCfg.icon}"/></svg>
           ${escapeHTML(statusLabelFor(w))}
         </span>
-        <span class="reset-time" id="reset-${stateKey}">${w.resetTime ? 'Resets: ' + escapeHTML(formatDateTime(w.resetTime)) : ''}</span>
+        <span class="reset-time" id="reset-${stateKey}">${w.resetTime ? 'Resets: ' + escapeHTML(formatDateTime(w.resetTime)) : ''}</span>`;
+    if (quota) {
+      const model = quota.displayName || quota.label || quota.modelId;
+      const title = escapeHTML(`${model} · ${label}`);
+      return `<article class="quota-card antigravity-card${quota.isStale ? ' stale-card' : ''}" id="card-${escapeHTML(stateKey)}" data-quota="${escapeHTML(quota.modelId)}" data-window-kind="${escapeHTML(kind)}" data-provider="antigravity" role="button" tabindex="0" aria-label="View ${title} details">
+        <header class="card-header">
+          <h2 class="quota-title">
+            <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">${getAntigravityIcon(quota.modelId)}</svg>
+            <span>${title}</span>
+          </h2>
+          ${countdownHTML}
+        </header>
+        ${progressHTML}
+        <div class="card-freshness${quota.isStale ? ' stale' : ''}" id="freshness-${escapeHTML(stateKey)}">${escapeHTML(cardFreshnessLabel(quota))}</div>
+        <footer class="card-footer">${footerHTML}</footer>
+      </article>`;
+    }
+    return `<div class="antigravity-window" data-window-kind="${kind}">
+      <div class="aw-window-head">
+        <span class="aw-window-label">${escapeHTML(label)}</span>
+        ${countdownHTML}
       </div>
+      ${progressHTML}
+      <div class="aw-window-foot">${footerHTML}</div>
     </div>`;
   }).join('');
 }
 
-// Patches stacked window rows in place using the same id scheme as antigravityWindowsHTML.
+// Patches window readings in place using the same IDs as antigravityWindowsHTML.
 function antigravityUpdateWindows(keyPrefix, windows) {
   windows.forEach((w, idx) => {
     const kind = w.kind || ('w' + idx);
@@ -3236,10 +3266,10 @@ function renderAntigravityQuotaGroups(quotas, renderCards, detailsOpen) {
   const ordered = sortItemsByPreference(primary, ['antigravity_gemini_pro'], antigravityQuotaKey);
   if (!secondary.length) return renderCards(ordered);
 
-  return `${ordered.length ? `<div class="antigravity-primary-quotas">${renderCards(ordered)}</div>` : ''}
+  return `${ordered.length ? `<div class="antigravity-primary-quotas antigravity-quota-cards">${renderCards(ordered)}</div>` : ''}
     <details class="dashboard-detail antigravity-quota-details"${detailsOpen ? ' open' : ''}>
       <summary>Claude + GPT quota details</summary>
-      ${renderCards(secondary)}
+      <div class="antigravity-quota-cards">${renderCards(secondary)}</div>
     </details>`;
 }
 
@@ -3248,36 +3278,18 @@ function renderAntigravityQuotaCards(quotas, containerId) {
   if (!container) return;
   const details = container.querySelector('.antigravity-quota-details');
   const summaryHadFocus = details?.firstElementChild === document.activeElement;
-
-  const renderCards = (items) => items.map((q, i) => {
-    const icon = getAntigravityIcon(q.modelId);
-    const displayName = escapeHTML(q.displayName || q.label || q.modelId);
-    const windows = antigravityWindowsForQuota(q);
-    const windowsHTML = antigravityWindowsHTML(`antigravity-${q.modelId}`, windows);
-
-    return `<article class="quota-card antigravity-card multi-window${q.isStale ? ' stale-card' : ''}" id="card-antigravity-${escapeHTML(q.modelId)}" data-quota="${escapeHTML(q.modelId)}" data-provider="antigravity" role="button" tabindex="0" aria-label="View ${displayName} details" style="animation-delay: ${i * 60}ms">
-      <header class="card-header">
-        <h2 class="quota-title">
-          <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icon}</svg>
-          ${displayName}
-          ${q.isExhausted ? '<span class="exhausted-badge">Exhausted</span>' : ''}
-        </h2>
-      </header>
-      <div class="antigravity-windows">${windowsHTML}</div>
-      <div class="card-freshness${q.isStale ? ' stale' : ''}" id="freshness-antigravity-${escapeHTML(q.modelId)}">${q.ageSeconds != null ? escapeHTML(cardFreshnessLabel(q)) : ''}</div>
-    </article>`;
-  }).join('');
-
-  container.innerHTML = renderAntigravityQuotaGroups(quotas, renderCards, details?.open);
+  const focusedCard = document.activeElement?.closest('.antigravity-card')?.id;
+  const renderCards = (items) => items.map(q =>
+    antigravityWindowsHTML(`antigravity-${q.modelId}`, antigravityWindowsForQuota(q), q)).join('');
+  container.innerHTML = quotas.length
+    ? renderAntigravityQuotaGroups(quotas, renderCards, details?.open)
+    : '<p class="empty-state">No Antigravity quota data available yet.</p>';
   if (summaryHadFocus) container.querySelector('.antigravity-quota-details > summary')?.focus();
+  if (focusedCard) document.getElementById(focusedCard)?.focus();
 
   // Re-attach modal click handlers for new cards
   container.querySelectorAll('.quota-card[role="button"]').forEach(card => {
-    const handler = () => {
-      const providerCol = card.closest('.provider-column');
-      const providerOverride = providerCol ? providerCol.dataset.provider : 'antigravity';
-      openAntigravityModal(card.dataset.quota, providerOverride);
-    };
+    const handler = () => openAntigravityModal(card.dataset.quota, 'antigravity', card.dataset.windowKind);
     card.addEventListener('click', handler);
     card.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); }
@@ -3287,7 +3299,6 @@ function renderAntigravityQuotaCards(quotas, containerId) {
 
 function updateAntigravityCard(quota) {
   const key = `antigravity-${quota.modelId}`;
-  const prev = State.currentQuotas[key];
   State.currentQuotas[key] = {
     percent: quota.usagePercent || 0,
     remainingFraction: quota.remainingFraction,
@@ -3307,12 +3318,11 @@ function updateAntigravityCard(quota) {
   };
 
   const windows = antigravityWindowsForQuota(quota);
-  const firstKind = (windows[0] && (windows[0].kind || 'w0')) || 'w0';
-  // If the per-window DOM is not present yet (first paint / structure change),
-  // skip the in-place patch; the next full render rebuilds the card.
-  if (!document.getElementById(`progress-antigravity-${quota.modelId}-${firstKind}`)) return;
-  antigravityUpdateWindows(`antigravity-${quota.modelId}`, windows);
-  updateQuotaFreshness(`card-antigravity-${quota.modelId}`, `freshness-antigravity-${quota.modelId}`, quota);
+  antigravityUpdateWindows(key, windows);
+  windows.forEach((w, index) => {
+    const windowKey = `${key}-${w.kind || 'w' + index}`;
+    updateQuotaFreshness(`card-${windowKey}`, `freshness-${windowKey}`, quota);
+  });
 }
 
 // Gemini Quota Cards
@@ -3580,7 +3590,7 @@ function getQuotaStatus(percent) {
 }
 
 // Antigravity quota detail modal
-function openAntigravityModal(groupKey, providerOverride) {
+function openAntigravityModal(groupKey, providerOverride, windowKind) {
   const isGemini = providerOverride === 'gemini';
   const provider = isGemini ? 'gemini' : 'antigravity';
   const data = State.currentQuotas[`${provider}-${groupKey}`];
@@ -3594,9 +3604,10 @@ function openAntigravityModal(groupKey, providerOverride) {
   const displayName = data.displayName || data.label || groupKey;
   titleEl.textContent = displayName;
 
-  const usagePct = (data.percent || 0).toFixed(1);
-  const remainingPct = (data.remainingPercent || 0).toFixed(1);
-  const windowLabel = data.windowLabel || 'Quota limit';
+  const activeWindow = data.windows?.find(w => w.kind === windowKind) || data;
+  const usagePct = (activeWindow.usagePercent ?? data.percent ?? 0).toFixed(1);
+  const remainingPct = (activeWindow.remainingPercent || 0).toFixed(1);
+  const windowLabel = (activeWindow === data ? data.windowLabel : activeWindow.label) || 'Quota limit';
   const windowRows = Array.isArray(data.windows) && data.windows.length
     ? `<h4 class="modal-section-title">Limit Windows</h4>
       <table class="modal-cycles-table">
@@ -3615,7 +3626,7 @@ function openAntigravityModal(groupKey, providerOverride) {
     <div class="modal-stats-grid">
       <div class="modal-stat">
         <span class="modal-stat-label">Active Limit</span>
-        <span class="modal-stat-value">${windowLabel}</span>
+        <span class="modal-stat-value">${escapeHTML(windowLabel)}</span>
       </div>
       <div class="modal-stat">
         <span class="modal-stat-label">Usage</span>
@@ -3627,16 +3638,16 @@ function openAntigravityModal(groupKey, providerOverride) {
       </div>
       <div class="modal-stat">
         <span class="modal-stat-label">Status</span>
-        <span class="modal-stat-value" data-status="${data.status}">${statusLabelFor(data)}</span>
+        <span class="modal-stat-value" data-status="${activeWindow.status}">${statusLabelFor(activeWindow)}</span>
       </div>
       <div class="modal-stat">
         <span class="modal-stat-label">Resets In</span>
-        <span class="modal-stat-value">${data.timeUntilResetSeconds > 0 ? formatDuration(data.timeUntilResetSeconds) : '--'}</span>
+        <span class="modal-stat-value">${activeWindow.timeUntilResetSeconds > 0 ? formatDuration(activeWindow.timeUntilResetSeconds) : '--'}</span>
       </div>
     </div>
     ${modalChartMarkup()}
     ${windowRows}
-    ${isGemini ? '' : `<h4 class="modal-section-title">Recent Cycles</h4>
+    ${isGemini || State.antigravityAccount ? '' : `<h4 class="modal-section-title">Recent Cycles</h4>
     <table class="modal-cycles-table">
       <thead><tr><th>Cycle</th><th>Duration</th><th>Peak Used</th><th>Total Delta</th></tr></thead>
       <tbody id="modal-cycles-tbody"><tr><td colspan="4">Loading...</td></tr></tbody>
@@ -3650,8 +3661,8 @@ function openAntigravityModal(groupKey, providerOverride) {
   if (isGemini) {
     loadQuotaModalChart(provider, records => modalQuotaSeries(records, record => record[groupKey], '#6e40c9'));
   } else {
-    loadAntigravityModalChart(groupKey, data.windowKind || State.antigravityQuotaWindow);
-    loadAntigravityModalCycles(groupKey);
+    loadAntigravityModalChart(groupKey, windowKind || data.windowKind || State.antigravityQuotaWindow);
+    if (!State.antigravityAccount) loadAntigravityModalCycles(groupKey);
   }
 }
 
@@ -4608,7 +4619,7 @@ function applyProviderCurrentPayload(provider, data, apiIntegrationsCurrentData 
   } else if (provider === 'antigravity') {
     if (data.quotas) {
       const container = document.getElementById('quota-grid-antigravity');
-      if (container && !antigravityQuotaCardsMatch(container, data.quotas)) {
+      if (container && (!container.childElementCount || !antigravityQuotaCardsMatch(container, data.quotas, true))) {
         renderAntigravityQuotaCards(data.quotas, 'quota-grid-antigravity');
       }
       data.quotas.forEach(q => updateAntigravityCard(q));
@@ -4766,7 +4777,10 @@ async function fetchCurrent(options = {}) {
     }
 
     const dashboard = requestProvider === 'both' ? '&weeklyDashboard=1' : '';
-    const res = await authFetchWithTimeout(`${API_BASE}/api/current?${providerParam()}${dashboard}`);
+    const query = requestProvider === 'antigravity'
+      ? providerParamFor(requestProvider, State.antigravityAccount)
+      : providerParam();
+    const res = await authFetchWithTimeout(`${API_BASE}/api/current?${query}${dashboard}`);
     if (!res.ok) throw new Error('Failed to fetch');
     const data = await res.json();
 
@@ -6708,6 +6722,7 @@ function usageGraphAccountKey(provider) {
   if (provider === 'both') return 'weekly-dashboard';
   if (provider === 'codex') return `codex:${State.codexAccount || 1}`;
   if (provider === 'minimax') return `minimax:${State.minimaxAccount || ''}`;
+  if (provider === 'antigravity') return State.antigravityAccount || '';
   return '';
 }
 
@@ -7758,9 +7773,21 @@ const platformCostIntegrationNames = {
   cursor: 'Cursor',
 };
 
-function combineProviderCostBuckets(history) {
+const combinedCostProviders = ['anthropic', 'antigravity', 'codex'];
+
+function combinedCostHistoryByProvider(history) {
+  return Object.fromEntries(combinedCostProviders.map(provider => {
+    const integration = platformCostIntegrationNames[provider];
+    const rows = (history[integration] || []).map(({
+      capturedAt, bucketSeconds, firstCapturedAt, lastCapturedAt, totalCostUsd, totalTokens, requestCount,
+    }) => ({ capturedAt, bucketSeconds, firstCapturedAt, lastCapturedAt, totalCostUsd, totalTokens, requestCount }));
+    return [integration, rows];
+  }));
+}
+
+function combineProviderCostBuckets(history, providers) {
   const buckets = new Map();
-  for (const provider of ['anthropic', 'antigravity', 'codex']) {
+  for (const provider of providers) {
     for (const row of history[platformCostIntegrationNames[provider]] || []) {
       const bucket = buckets.get(row.capturedAt) || {
         capturedAt: row.capturedAt, bucketSeconds: row.bucketSeconds,
@@ -8216,7 +8243,7 @@ function renderPlatformCostAccessibleSummary(costPoints, tokenPoints, range, mod
     + `minimum ${format(Math.min(...values))}, maximum ${format(Math.max(...values))}.`;
 }
 
-function renderPlatformCostChart(provider = getCurrentProvider(), range = State.platformCostRange || DEFAULT_CHART_RANGE) {
+function renderPlatformCostChart(provider = getCurrentProvider(), range = State.platformCostRange || DEFAULT_CHART_RANGE, providersChanged = false) {
   const canvas = document.getElementById('platform-cost-chart');
   if (!canvas || !supportsPlatformCost(provider)) return;
   range = normalizePlatformCostRange(range);
@@ -8225,6 +8252,16 @@ function renderPlatformCostChart(provider = getCurrentProvider(), range = State.
   const hasLoadedSelectedRange = State.platformCostHistoryRange === range
     && (range !== 'custom' || (State.platformCostHistoryWindowStart === State.platformCostWindowStart
       && State.platformCostHistoryWindowEnd === State.platformCostWindowEnd));
+  const noProviders = provider === 'both' && State.combinedCostProviders?.length === 0;
+  if (noProviders || (providersChanged && !hasLoadedSelectedRange)) {
+    updatePlatformCostSummaryForRange(provider, range, []);
+    document.getElementById('platform-cost-chart-accessible-summary').textContent = '';
+    setChartEmptyState('platform-cost-chart', true, noProviders ? 'Select a provider to see combined cost.' : 'Loading cost history…');
+    if (noProviders) {
+      setHistoryChartLoading('platform-cost-chart');
+      return;
+    }
+  }
   const rows = hasLoadedSelectedRange ? getPlatformCostHistoryRows(integration) : [];
   const rangeTotals = getPlatformCostRangeTotals(provider, range, rows);
   if (!hasLoadedSelectedRange && !State.customGraphRefreshControllers.platformCost) {
@@ -8661,10 +8698,11 @@ function updatePlatformCostSummaryForRange(provider, range, rows) {
   }
   const label = platformCostRangeLabel(range);
   if (provider === 'both') {
+    const total = State.combinedCostProviders?.length === 0 ? 0 : totals.cost;
     summaryEl.innerHTML = `
       <div class="platform-cost-metric primary">
         <span class="platform-cost-label">Priced subtotal · ${escapeHTML(label)} · All accounts</span>
-        <strong>${totals.cost != null ? formatCurrencyUSD(totals.cost) : '--'}</strong>
+        <strong>${total != null ? formatCurrencyUSD(total) : '--'}</strong>
       </div>`;
     return;
   }
@@ -8696,6 +8734,9 @@ function getPlatformCostHistoryRows(integration) {
   const sessionHistory = State.platformCostSessionHistory || {};
   const sessionRows = getPlatformCostIntegrationValue(sessionHistory, integration);
   const history = State.platformCostBucketHistory || {};
+  if (integration === 'Combined') {
+    return combineProviderCostBuckets(history, State.combinedCostProviders || combinedCostProviders);
+  }
   const archivedRows = getPlatformCostIntegrationValue(history, integration);
   if (State.platformCostUsesArchivedData && Array.isArray(archivedRows)) return archivedRows;
   if (Array.isArray(sessionRows)) return sessionRows;
@@ -8723,7 +8764,7 @@ function getPlatformCostRangeTotals(provider, range, rows) {
   const hasLoadedSelectedRange = State.platformCostHistoryRange === selectedRange
     && (selectedRange !== 'custom' || (State.platformCostHistoryWindowStart === State.platformCostWindowStart
       && State.platformCostHistoryWindowEnd === State.platformCostWindowEnd));
-  const rangeTotals = hasLoadedSelectedRange
+  const rangeTotals = hasLoadedSelectedRange && provider !== 'both'
     ? getPlatformCostIntegrationValue(State.platformCostSessionTotals || {}, integration)
     : null;
   if (rangeTotals) {
@@ -8737,7 +8778,7 @@ function getPlatformCostRangeTotals(provider, range, rows) {
       lastSeen: rangeTotals.lastCapturedAt || null,
     };
   }
-  const entry = getPlatformCostEntry(provider);
+  const entry = provider === 'both' ? null : getPlatformCostEntry(provider);
   if (selectedRange === 'all' && entry && !rows?.length) {
     return {
       cost: entry.totalCostUsd == null ? null : Number(entry.totalCostUsd),
@@ -8791,7 +8832,7 @@ async function runPlatformCostRefreshJob(job, signal) {
   payload.windowEnd = job.windowEnd;
 
   setCachedPlatformCostHistory(job.provider, job.range, payload, job.scope);
-  if (job.range !== 'custom') {
+  if (job.provider !== 'both' && job.range !== 'custom') {
     const alternateScope = job.scope === 'platformCost' ? 'platformCostBreakdown' : 'platformCost';
     setCachedPlatformCostHistory(job.provider, job.range, payload, alternateScope);
   }
@@ -8871,6 +8912,11 @@ async function fetchPlatformCostBreakdownRange(range, provider, options = {}) {
 
 async function fetchPlatformCostHistory(range, provider, options = {}) {
   range = normalizePlatformCostRange(range);
+  if (provider === 'both' && State.combinedCostProviders?.length === 0) {
+    bindPlatformCostRangeControls(range);
+    renderPlatformCostChart(provider, range);
+    return;
+  }
   const cached = getStalePlatformCostHistory(provider, range, 'platformCost');
   const freshCached = getCachedPlatformCostHistory(provider, range, PLATFORM_COST_HISTORY_CACHE_TTL_MS, 'platformCost');
   if (cached) {
@@ -9163,8 +9209,14 @@ function destroyProviderCardCharts() {
   State.providerCharts = {};
 }
 
-function antigravityQuotaCardsMatch(container, quotas) {
+function antigravityQuotaCardsMatch(container, quotas, perWindow = false) {
   const cards = container.querySelectorAll('.quota-card[data-quota]');
+  if (perWindow) {
+    const expected = quotas.flatMap(q => antigravityWindowsForQuota(q)
+      .map((w, index) => `card-antigravity-${q.modelId}-${w.kind || 'w' + index}`));
+    const rendered = new Set(Array.from(cards, card => card.id));
+    return cards.length === expected.length && expected.every(id => rendered.has(id));
+  }
   if (cards.length !== quotas.length) return false;
   const renderedKeys = new Set(Array.from(cards, card => card.dataset.quota));
   return quotas.every(quota => renderedKeys.has(antigravityQuotaKey(quota)));
@@ -11198,6 +11250,23 @@ function setupPlatformCostChartModeSelector() {
   group.dataset.bound = 'true';
 }
 
+function setupCombinedCostProviderFilters() {
+  const group = document.getElementById('combined-cost-providers');
+  if (!group) return;
+  const key = COMBINED_COST_PROVIDERS_KEY;
+  const saved = readJSONStorage(localStorage, key);
+  const inputs = [...group.querySelectorAll('input')];
+  State.combinedCostProviders = Array.isArray(saved)
+    ? combinedCostProviders.filter(provider => saved.includes(provider))
+    : combinedCostProviders;
+  for (const input of inputs) input.checked = State.combinedCostProviders.includes(input.value);
+  group.addEventListener('change', () => {
+    State.combinedCostProviders = inputs.filter(input => input.checked).map(input => input.value);
+    writeJSONStorage(localStorage, key, State.combinedCostProviders);
+    renderPlatformCostChart('both', selectedPlatformCostRange(), true);
+  });
+}
+
 function setupCycleFilters() {
   // Range pills
   const rangePills = document.getElementById('cycle-range-pills');
@@ -11670,13 +11739,16 @@ function setupTableControls() {
 function setupProviderSelector() {
   const tabs = document.getElementById('provider-tabs');
   if (!tabs) return;
-  // Reveal the current tab only when it falls outside the horizontal viewport.
   const active = tabs.querySelector('.active');
   if (active) {
-    const bounds = tabs.getBoundingClientRect();
-    const activeBounds = active.getBoundingClientRect();
-    if (activeBounds.right > bounds.right) tabs.scrollLeft += activeBounds.right - bounds.right;
-    else if (activeBounds.left < bounds.left) tabs.scrollLeft -= bounds.left - activeBounds.left;
+    const revealActive = () => {
+      const bounds = tabs.getBoundingClientRect();
+      const activeBounds = active.getBoundingClientRect();
+      if (activeBounds.right > bounds.right) tabs.scrollLeft += activeBounds.right - bounds.right;
+      else if (activeBounds.left < bounds.left) tabs.scrollLeft -= bounds.left - activeBounds.left;
+    };
+    revealActive();
+    new ResizeObserver(revealActive).observe(tabs);
   }
   tabs.querySelectorAll('.provider-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -14570,6 +14642,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadHiddenQuotas();
   loadCodexAccount();
   loadCodexProfiles();
+  State.antigravityAccount = document.querySelector('.app')?.dataset.antigravityAccount || '';
   if (initDashboardAccountPicker()) return;
 
   loadMiniMaxAccount();
@@ -14591,6 +14664,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupAPIIntegrationsMetricSelector();
   setupChartModeSelector();
   setupPlatformCostChartModeSelector();
+  setupCombinedCostProviderFilters();
   setupCycleFilters();
   setupPasswordToggle();
   setupTableControls();
